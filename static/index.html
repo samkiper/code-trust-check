@@ -279,6 +279,26 @@
       border: 1px solid #fca5a5;
     }
 
+    .export-row {
+      margin-top: 16px;
+      display: none;
+    }
+
+    .export-btn {
+      background: white;
+      color: #5b21b6;
+      border: 1px solid #ddd6fe;
+      padding: 12px 16px;
+      font-size: 14px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    .export-btn:hover {
+      background: #f5f3ff;
+    }
+
     .footer {
       color: #777;
       font-size: 14px;
@@ -336,112 +356,178 @@
       font-size: 14px;
       line-height: 1.5;
     }
+
+    @media print {
+      body {
+        background: white !important;
+      }
+
+      .topbar,
+      .how-to,
+      .example-row,
+      .plan-note,
+      #intent,
+      #code,
+      #fileUpload,
+      label[for="intent"],
+      label[for="code"],
+      label[for="fileUpload"],
+      button,
+      .footer,
+      .nav,
+      .export-row {
+        display: none !important;
+      }
+
+      .container {
+        box-shadow: none !important;
+        border-radius: 0 !important;
+        padding: 0 !important;
+        max-width: 100% !important;
+        margin: 0 !important;
+      }
+
+      .hero-logo img {
+        width: 240px !important;
+      }
+
+      #result-section,
+      #result,
+      #codeViewer {
+        display: block !important;
+      }
+
+      .code-viewer {
+        background: white !important;
+        color: black !important;
+        border: 1px solid #ddd !important;
+        overflow: visible !important;
+      }
+
+      .line-number {
+        color: #666 !important;
+      }
+
+      .flagged-line {
+        background: #fde2e2 !important;
+      }
+    }
   </style>
 </head>
 
 <body>
-<div class="topbar">
-  <div class="topbar-inner">
-    <div class="brand">
-      <img src="/static/favicon.png" alt="AI Code Audit icon" class="logo-small" />
-      <span>Verify AI Code Before You Trust It</span>
+  <div class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <img src="/static/favicon.png" alt="AI Code Audit icon" class="logo-small" />
+        <span>Verify AI Code Before You Trust It</span>
+      </div>
+
+      <div class="nav">
+        <a href="#how-it-works">How it Works</a>
+        <a href="#pricing">Pricing</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="hero-logo">
+      <img src="/static/logo.png" alt="AI Code Audit logo" />
     </div>
 
-    <div class="nav">
-      <a href="#how-it-works">How it Works</a>
-      <a href="#pricing">Pricing</a>
+    <p class="subtitle">
+      Detects suspicious behavior, exposed secrets, and actions that don't match the original request.
+    </p>
+
+    <div class="how-to" id="how-it-works">
+      <strong>How it works:</strong>
+      <ol style="margin-top: 10px;">
+        <li>Describe what the AI-generated code was supposed to do.</li>
+        <li>Paste the full AI code file, or upload a file.</li>
+        <li>Click “Verify AI Code.”</li>
+        <li>Review the findings before you run or use the code.</li>
+      </ol>
+    </div>
+
+    <div class="example-row">
+      <button type="button" class="example-btn" onclick="loadSafeExample()">🟢 Safe Example</button>
+      <button type="button" class="example-btn" onclick="loadSuspiciousExample()">🟡 Suspicious Example</button>
+      <button type="button" class="example-btn" onclick="loadSecretExample()">🔴 Secret Leak Example</button>
+    </div>
+
+    <label for="intent">What was the AI code supposed to do?</label>
+    <input id="intent" type="text" placeholder="Example: make a simple calculator" />
+
+    <label for="code">Paste the full AI-generated code file</label>
+    <textarea id="code" placeholder="Paste code here..."></textarea>
+
+    <label for="fileUpload">Or upload a code file</label>
+    <input type="file" id="fileUpload" accept=".py,.js,.ts,.go,.java,.rb,.php,.cs,.cpp,.c,.rs,.sh,.txt" />
+
+    <div class="plan-note" id="pricing">
+      <strong>Free plan:</strong> up to 200 lines per scan.<br>
+      <strong>Pro plan:</strong> larger files, expanded analysis, future saved scan history, and PDF exports.
+    </div>
+
+    <button onclick="scanCode()">Verify AI Code</button>
+
+    <h2 id="result-section">Result</h2>
+
+    <div id="exportReport">
+      <div id="result" class="result">
+        No scan yet.
+      </div>
+
+      <div class="export-row" id="exportRow">
+        <button type="button" class="export-btn" onclick="exportReportAsPDF()">Export PDF Report</button>
+      </div>
+
+      <div id="codeViewer" class="code-viewer"></div>
+    </div>
+
+    <div class="footer">
+      Early prototype — built to help users understand AI-generated code before running it.
     </div>
   </div>
-</div>
 
-<div class="container">
-  <div class="hero-logo">
-    <img src="/static/logo.png" alt="AI Code Audit logo" />
-  </div>
+  <script>
+    if ("scrollRestoration" in history) {
+      history.scrollRestoration = "manual";
+    }
 
-  <p class="subtitle">
-    Detects suspicious behavior, exposed secrets, and actions that don't match the original request.
-  </p>
+    document.addEventListener("DOMContentLoaded", function () {
+      window.scrollTo(0, 0);
+      setTimeout(() => window.scrollTo(0, 0), 10);
+    });
 
-  <div class="how-to" id="how-it-works">
-    <strong>How it works:</strong>
-    <ol style="margin-top: 10px;">
-      <li>Describe what the AI-generated code was supposed to do.</li>
-      <li>Paste the full AI code file, or upload a file.</li>
-      <li>Click “Verify AI Code.”</li>
-      <li>Review the findings before you run or use the code.</li>
-    </ol>
-  </div>
+    function exportReportAsPDF() {
+      window.print();
+    }
 
-  <div class="example-row">
-    <button type="button" class="example-btn" onclick="loadSafeExample()">🟢 Safe Example</button>
-    <button type="button" class="example-btn" onclick="loadSuspiciousExample()">🟡 Suspicious Example</button>
-    <button type="button" class="example-btn" onclick="loadSecretExample()">🔴 Secret Leak Example</button>
-  </div>
-
-  <label for="intent">What was the AI code supposed to do?</label>
-  <input id="intent" type="text" placeholder="Example: make a simple calculator" />
-
-  <label for="code">Paste the full AI-generated code file</label>
-  <textarea id="code" placeholder="Paste code here..."></textarea>
-
-  <label for="fileUpload">Or upload a code file</label>
-  <input type="file" id="fileUpload" accept=".py,.js,.ts,.go,.java,.rb,.php,.cs,.cpp,.c,.rs,.sh,.txt" />
-
-  <div class="plan-note" id="pricing">
-    <strong>Free plan:</strong> up to 200 lines per scan.<br>
-    <strong>Pro plan:</strong> larger files, expanded analysis, and future saved scan history.
-  </div>
-
-  <button onclick="scanCode()">Verify AI Code</button>
-
-  <h2 id="result-section">Result</h2>
-
-  <div id="result" class="result">
-    No scan yet.
-  </div>
-
-  <div id="codeViewer" class="code-viewer"></div>
-
-  <div class="footer">
-    Early prototype — built to help users understand AI-generated code before running it.
-  </div>
-</div>
-
-<script>
-if ("scrollRestoration" in history) {
-  history.scrollRestoration = "manual";
-}
-
-document.addEventListener("DOMContentLoaded", function () {
-  window.scrollTo(0, 0);
-  setTimeout(() => window.scrollTo(0, 0), 10);
-});
-
-function loadSafeExample() {
-  document.getElementById("intent").value = "make a simple calculator";
-  document.getElementById("code").value = `def add(a, b):
+    function loadSafeExample() {
+      document.getElementById("intent").value = "make a simple calculator";
+      document.getElementById("code").value = `def add(a, b):
     return a + b
 
 print(add(2, 3))`;
-  document.getElementById("fileUpload").value = "";
-}
+      document.getElementById("fileUpload").value = "";
+    }
 
-function loadSuspiciousExample() {
-  document.getElementById("intent").value = "make a simple calculator";
-  document.getElementById("code").value = `import os
+    function loadSuspiciousExample() {
+      document.getElementById("intent").value = "make a simple calculator";
+      document.getElementById("code").value = `import os
 
 def add(a, b):
     return a + b
 
 os.system("echo suspicious command")
 print(add(2, 3))`;
-  document.getElementById("fileUpload").value = "";
-}
+      document.getElementById("fileUpload").value = "";
+    }
 
-function loadSecretExample() {
-  document.getElementById("intent").value = "build a simple config helper";
-  document.getElementById("code").value = `api_key = "sk-1234567890123456789012345"
+    function loadSecretExample() {
+      document.getElementById("intent").value = "build a simple config helper";
+      document.getElementById("code").value = `api_key = "sk-1234567890123456789012345"
 import os
 
 def show_status():
@@ -449,172 +535,181 @@ def show_status():
 
 os.system("echo using secret")
 print(show_status())`;
-  document.getElementById("fileUpload").value = "";
-}
-
-async function scanCode() {
-  const intent = document.getElementById("intent").value;
-  let code = document.getElementById("code").value;
-
-  const fileInput = document.getElementById("fileUpload");
-  const resultBox = document.getElementById("result");
-  const codeViewer = document.getElementById("codeViewer");
-
-  if (fileInput.files.length > 0) {
-    const file = fileInput.files[0];
-    code = await file.text();
-  }
-
-  resultBox.innerHTML = "Scanning...";
-  codeViewer.style.display = "none";
-  codeViewer.innerHTML = "";
-
-  try {
-    const response = await fetch("/scan", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ intent, code })
-    });
-
-    const data = await response.json();
-
-    document.getElementById("result-section").scrollIntoView({
-      behavior: "smooth",
-      block: "start"
-    });
-
-    if (data.risk === "limit") {
-      resultBox.innerHTML = `
-        <div class="limit-box">
-          <strong>Free plan limit reached</strong><br><br>
-          ${data.summary}
-        </div>
-      `;
-      return;
+      document.getElementById("fileUpload").value = "";
     }
 
-    let riskBadgeClass = "";
-    let riskBadgeText = "";
+    async function scanCode() {
+      const intent = document.getElementById("intent").value;
+      let code = document.getElementById("code").value;
 
-    if (data.risk === "green") {
-      riskBadgeClass = "risk-safe";
-      riskBadgeText = "🟢 Safe";
-    } else if (data.risk === "yellow") {
-      riskBadgeClass = "risk-review";
-      riskBadgeText = "🟡 Review Carefully";
-    } else if (data.risk === "red") {
-      riskBadgeClass = "risk-high";
-      riskBadgeText = "🔴 High Risk";
-    } else {
-      riskBadgeClass = "risk-review";
-      riskBadgeText = data.risk.toUpperCase();
-    }
+      const fileInput = document.getElementById("fileUpload");
+      const resultBox = document.getElementById("result");
+      const codeViewer = document.getElementById("codeViewer");
+      const exportRow = document.getElementById("exportRow");
 
-    let trustScore = 100;
-    trustScore -= data.flags.length * 12;
-    trustScore -= data.intent_mismatches.length * 10;
-
-    if (data.risk === "yellow") trustScore -= 8;
-    if (data.risk === "red") trustScore -= 18;
-
-    if (trustScore < 0) trustScore = 0;
-    if (trustScore > 100) trustScore = 100;
-
-    let trustColor = "#16a34a";
-    let trustLabel = "Looks relatively safe based on this scan.";
-
-    if (trustScore <= 40) {
-      trustColor = "#dc2626";
-      trustLabel = "This code needs careful review before running.";
-    } else if (trustScore <= 70) {
-      trustColor = "#d97706";
-      trustLabel = "Some caution is warranted before trusting this code.";
-    }
-
-    resultBox.innerHTML = `
-      <div class="trust-box">
-        <div class="trust-score-row">
-          <span class="trust-score-label">AI Trust Score</span>
-          <span class="trust-score-number">${trustScore} / 100</span>
-        </div>
-        <div class="trust-meter">
-          <div class="trust-meter-fill" style="width: ${trustScore}%; background: ${trustColor};"></div>
-        </div>
-        <div class="trust-caption">${trustLabel}</div>
-      </div>
-
-      ${
-        data.behavior_summary && data.behavior_summary.length
-          ? `
-            <div class="behavior-box">
-              <h3>Behavior Summary</h3>
-              <ul>
-                ${data.behavior_summary.map(item => `<li>${item}</li>`).join("")}
-              </ul>
-            </div>
-          `
-          : ""
+      if (fileInput.files.length > 0) {
+        const file = fileInput.files[0];
+        code = await file.text();
       }
 
-      <div class="risk-row">
-        <span class="risk-label">Risk Assessment:</span>
-        <span class="risk-badge ${riskBadgeClass}">${riskBadgeText}</span>
-      </div>
+      resultBox.innerHTML = "Scanning...";
+      codeViewer.style.display = "none";
+      codeViewer.innerHTML = "";
+      exportRow.style.display = "none";
 
-      <strong>Touches:</strong> ${data.touches.length ? data.touches.join(", ") : "None"}<br><br>
+      try {
+        const response = await fetch("/scan", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ intent, code })
+        });
 
-      <strong>Security Findings:</strong>
-      <ul>
-        ${
-          data.flags.length
-            ? data.flags.map(flag => `<li>Line ${flag.line}: ${flag.message}</li>`).join("")
-            : "<li>No flags</li>"
+        const data = await response.json();
+
+        document.getElementById("result-section").scrollIntoView({
+          behavior: "smooth",
+          block: "start"
+        });
+
+        if (data.risk === "limit") {
+          resultBox.innerHTML = `
+            <div class="limit-box">
+              <strong>Free plan limit reached</strong><br><br>
+              ${data.summary}
+            </div>
+          `;
+          return;
         }
-      </ul>
 
-      <strong>Intent Mismatch Warnings:</strong>
-      <ul>
-        ${
-          data.intent_mismatches.length
-            ? data.intent_mismatches.map(item => `<li>${item}</li>`).join("")
-            : "<li>No intent mismatches</li>"
+        let riskBadgeClass = "";
+        let riskBadgeText = "";
+
+        if (data.risk === "green") {
+          riskBadgeClass = "risk-safe";
+          riskBadgeText = "🟢 Safe";
+        } else if (data.risk === "yellow") {
+          riskBadgeClass = "risk-review";
+          riskBadgeText = "🟡 Review Carefully";
+        } else if (data.risk === "red") {
+          riskBadgeClass = "risk-high";
+          riskBadgeText = "🔴 High Risk";
+        } else {
+          riskBadgeClass = "risk-review";
+          riskBadgeText = data.risk.toUpperCase();
         }
-      </ul>
 
-      <strong>Summary:</strong> ${data.summary}
-    `;
+        let trustScore = 100;
+        trustScore -= data.flags.length * 12;
+        trustScore -= data.intent_mismatches.length * 10;
 
-    if (data.code) {
-      const flaggedLines = new Set(data.flags.map(flag => flag.line));
-      const codeLines = data.code.split("\n");
+        if (data.risk === "yellow") {
+          trustScore -= 8;
+        }
 
-      codeViewer.innerHTML = codeLines.map((line, index) => {
-        const lineNumber = index + 1;
-        const isFlagged = flaggedLines.has(lineNumber);
+        if (data.risk === "red") {
+          trustScore -= 18;
+        }
 
-        const safeLine = line
-          .replace(/&/g, "&amp;")
-          .replace(/</g, "&lt;")
-          .replace(/>/g, "&gt;");
+        if (trustScore < 0) trustScore = 0;
+        if (trustScore > 100) trustScore = 100;
 
-        return `
-          <span class="code-line ${isFlagged ? "flagged-line" : ""}">
-            <span class="line-number">${lineNumber}</span>${safeLine}
-          </span>
+        let trustColor = "#16a34a";
+        let trustLabel = "Looks relatively safe based on this scan.";
+
+        if (trustScore <= 40) {
+          trustColor = "#dc2626";
+          trustLabel = "This code needs careful review before running.";
+        } else if (trustScore <= 70) {
+          trustColor = "#d97706";
+          trustLabel = "Some caution is warranted before trusting this code.";
+        }
+
+        resultBox.innerHTML = `
+          <div class="trust-box">
+            <div class="trust-score-row">
+              <span class="trust-score-label">AI Trust Score</span>
+              <span class="trust-score-number">${trustScore} / 100</span>
+            </div>
+            <div class="trust-meter">
+              <div class="trust-meter-fill" style="width: ${trustScore}%; background: ${trustColor};"></div>
+            </div>
+            <div class="trust-caption">${trustLabel}</div>
+          </div>
+
+          ${
+            data.behavior_summary && data.behavior_summary.length
+              ? `
+                <div class="behavior-box">
+                  <h3>Behavior Summary</h3>
+                  <ul>
+                    ${data.behavior_summary.map(item => `<li>${item}</li>`).join("")}
+                  </ul>
+                </div>
+              `
+              : ""
+          }
+
+          <div class="risk-row">
+            <span class="risk-label">Risk Assessment:</span>
+            <span class="risk-badge ${riskBadgeClass}">${riskBadgeText}</span>
+          </div>
+
+          <strong>Touches:</strong> ${data.touches.length ? data.touches.join(", ") : "None"}<br><br>
+
+          <strong>Security Findings:</strong>
+          <ul>
+            ${
+              data.flags.length
+                ? data.flags.map(flag => `<li>Line ${flag.line}: ${flag.message}</li>`).join("")
+                : "<li>No flags</li>"
+            }
+          </ul>
+
+          <strong>Intent Mismatch Warnings:</strong>
+          <ul>
+            ${
+              data.intent_mismatches.length
+                ? data.intent_mismatches.map(item => `<li>${item}</li>`).join("")
+                : "<li>No intent mismatches</li>"
+            }
+          </ul>
+
+          <strong>Summary:</strong> ${data.summary}
         `;
-      }).join("");
 
-      codeViewer.style.display = "block";
+        exportRow.style.display = "block";
+
+        if (data.code) {
+          const flaggedLines = new Set(data.flags.map(flag => flag.line));
+          const codeLines = data.code.split("\n");
+
+          codeViewer.innerHTML = codeLines.map((line, index) => {
+            const lineNumber = index + 1;
+            const isFlagged = flaggedLines.has(lineNumber);
+
+            const safeLine = line
+              .replace(/&/g, "&amp;")
+              .replace(/</g, "&lt;")
+              .replace(/>/g, "&gt;");
+
+            return `
+              <span class="code-line ${isFlagged ? "flagged-line" : ""}">
+                <span class="line-number">${lineNumber}</span>${safeLine}
+              </span>
+            `;
+          }).join("");
+
+          codeViewer.style.display = "block";
+        }
+
+      } catch (error) {
+        resultBox.textContent = "Error: " + error;
+        codeViewer.style.display = "none";
+        exportRow.style.display = "none";
+      }
     }
-
-  } catch (error) {
-    resultBox.textContent = "Error: " + error;
-    codeViewer.style.display = "none";
-  }
-}
-</script>
-
+  </script>
 </body>
 </html>

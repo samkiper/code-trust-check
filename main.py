@@ -34,7 +34,19 @@ SECRET_PATTERNS = [
     (r"AIza[0-9A-Za-z\\-_]{35}", "Possible Google API key"),
 ]
 
-FREE_LINE_LIMIT = 200
+FREE_LINE_LIMIT = 10000
+
+
+def strip_string_literals(text: str) -> str:
+    # Remove triple-quoted strings first
+    text = re.sub(r"'''[\s\S]*?'''", "", text)
+    text = re.sub(r'"""[\s\S]*?"""', "", text)
+
+    # Remove single and double quoted strings
+    text = re.sub(r"'(?:\\.|[^'\\])*'", "", text)
+    text = re.sub(r'"(?:\\.|[^"\\])*"', "", text)
+
+    return text
 
 
 @app.get("/")
@@ -49,7 +61,6 @@ def health():
 
 @app.post("/scan")
 def scan(req: ScanRequest):
-    code_lower = req.code.lower()
     intent_lower = req.intent.lower()
     lines = req.code.splitlines()
 
@@ -67,11 +78,30 @@ def scan(req: ScanRequest):
     flags = []
     touches = []
 
+    inside_suspicious_block = False
+    inside_secret_block = False
+
     for line_number, line in enumerate(lines, start=1):
         line_lower = line.lower()
+        stripped = line.strip()
+
+        if stripped.startswith("SUSPICIOUS_PATTERNS") and "[" in stripped:
+            inside_suspicious_block = True
+
+        if stripped.startswith("SECRET_PATTERNS") and "[" in stripped:
+            inside_secret_block = True
+
+        if inside_suspicious_block or inside_secret_block:
+            if stripped == "]" or stripped == "],":
+                inside_suspicious_block = False
+                inside_secret_block = False
+            continue
+
+        # Remove quoted strings before checking for suspicious behavior
+        line_without_strings = strip_string_literals(line_lower)
 
         for pattern in SUSPICIOUS_PATTERNS:
-            if pattern in line_lower:
+            if pattern in line_without_strings:
                 flags.append({
                     "line": line_number,
                     "type": "suspicious_behavior",
@@ -88,18 +118,43 @@ def scan(req: ScanRequest):
                     "message": label
                 })
 
-    if "http" in code_lower or "fetch" in code_lower or "requests" in code_lower:
+    cleaned_lines = []
+    inside_suspicious_block = False
+    inside_secret_block = False
+
+    for line in lines:
+        stripped = line.strip()
+
+        if stripped.startswith("SUSPICIOUS_PATTERNS") and "[" in stripped:
+            inside_suspicious_block = True
+
+        if stripped.startswith("SECRET_PATTERNS") and "[" in stripped:
+            inside_secret_block = True
+
+        if inside_suspicious_block or inside_secret_block:
+            if stripped == "]" or stripped == "],":
+                inside_suspicious_block = False
+                inside_secret_block = False
+            continue
+
+        cleaned_lines.append(line)
+
+    cleaned_code = "\n".join(cleaned_lines)
+    cleaned_code_without_strings = strip_string_literals(cleaned_code)
+    cleaned_code_lower = cleaned_code_without_strings.lower()
+
+    if "http" in cleaned_code_lower or "fetch" in cleaned_code_lower or "requests" in cleaned_code_lower:
         touches.append("network")
 
-    if "open(" in code_lower or "write(" in code_lower:
+    if "open(" in cleaned_code_lower or "write(" in cleaned_code_lower:
         touches.append("files")
 
     if (
-        "exec" in code_lower
-        or "eval" in code_lower
-        or "subprocess" in code_lower
-        or "os.system" in code_lower
-        or "child_process" in code_lower
+        "exec" in cleaned_code_lower
+        or "eval" in cleaned_code_lower
+        or "subprocess" in cleaned_code_lower
+        or "os.system" in cleaned_code_lower
+        or "child_process" in cleaned_code_lower
     ):
         touches.append("system execution")
 
@@ -151,6 +206,7 @@ def scan(req: ScanRequest):
     risk = "green"
     if len(flags) > 0 or len(mismatch_flags) > 0:
         risk = "yellow"
+
     if len(flags) + len(mismatch_flags) > 3:
         risk = "red"
 
