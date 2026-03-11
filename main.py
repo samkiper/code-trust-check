@@ -348,8 +348,13 @@ def scan(req: ScanRequest):
 
 @app.post("/scan-repo")
 def scan_repo(req: RepoScanRequest):
-    owner, repo = parse_github_repo(req.repo_url)
-    zip_bytes = download_repo_zip(owner, repo)
+    try:
+        owner, repo = parse_github_repo(req.repo_url)
+        zip_bytes = download_repo_zip(owner, repo)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    except Exception:
+        return {"error": "Something went wrong while scanning this repository."}
 
     files_scanned = []
     weighted_points_total = 0.0

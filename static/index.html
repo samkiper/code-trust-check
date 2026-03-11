@@ -100,6 +100,64 @@
       margin-right: auto;
     }
 
+    .mode-toggle {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 24px;
+      background: #f5f3ff;
+      padding: 8px;
+      border-radius: 14px;
+      border: 1px solid #ddd6fe;
+    }
+
+    .toggle-btn {
+      flex: 1;
+      background: transparent;
+      color: #5b21b6;
+      border: none;
+      padding: 14px 18px;
+      border-radius: 10px;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .toggle-btn:hover {
+      background: #ede9fe;
+      transform: none;
+    }
+
+    .toggle-btn.active {
+      background: white;
+      color: #111827;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
+    }
+
+    .section-card {
+      background: #fafafa;
+      border: 1px solid #e5e7eb;
+      border-radius: 14px;
+      padding: 20px;
+      margin-bottom: 24px;
+    }
+
+    .section-title {
+      font-size: 18px;
+      font-weight: 700;
+      margin-top: 0;
+      margin-bottom: 8px;
+      color: #111827;
+    }
+
+    .section-subtitle {
+      font-size: 14px;
+      color: #6b7280;
+      margin-top: 0;
+      margin-bottom: 18px;
+      line-height: 1.5;
+    }
+
     label {
       font-weight: 600;
     }
@@ -138,6 +196,12 @@
       transform: translateY(-1px);
     }
 
+    .button-row {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
     .example-row {
       display: flex;
       gap: 10px;
@@ -145,7 +209,8 @@
       margin-bottom: 20px;
     }
 
-    .example-btn {
+    .example-btn,
+    .secondary-btn {
       background: #ffffff;
       color: #5b21b6;
       border: 1px solid #ddd6fe;
@@ -157,7 +222,8 @@
       transition: all 0.15s ease;
     }
 
-    .example-btn:hover {
+    .example-btn:hover,
+    .secondary-btn:hover {
       background: #f5f3ff;
       transform: translateY(-1px);
     }
@@ -279,6 +345,73 @@
       border: 1px solid #fca5a5;
     }
 
+    .badge-card {
+      background: linear-gradient(135deg, #ffffff 0%, #f8f7ff 100%);
+      border: 1px solid #e5e7eb;
+      border-radius: 14px;
+      padding: 18px;
+      margin-bottom: 18px;
+    }
+
+    .badge-title {
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #6b7280;
+      margin-bottom: 10px;
+    }
+
+    .badge-main {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      font-size: 20px;
+      font-weight: 800;
+      color: #111827;
+      margin-bottom: 8px;
+    }
+
+    .badge-sub {
+      color: #6b7280;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .repo-file-list {
+      margin-top: 18px;
+      border-top: 1px solid #e5e7eb;
+      padding-top: 18px;
+    }
+
+    .repo-file-item {
+      background: white;
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      padding: 14px;
+      margin-bottom: 12px;
+    }
+
+    .repo-file-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 8px;
+      flex-wrap: wrap;
+    }
+
+    .repo-file-name {
+      font-weight: 700;
+      word-break: break-word;
+    }
+
+    .repo-file-meta {
+      font-size: 14px;
+      color: #6b7280;
+    }
+
     .export-row {
       margin-top: 16px;
       display: none;
@@ -336,13 +469,23 @@
       user-select: none;
     }
 
+    .limit-box,
+    .error-box {
+      padding: 14px;
+      border-radius: 8px;
+      margin-top: 10px;
+    }
+
     .limit-box {
       background: #fff7ed;
       border: 1px solid #fdba74;
       color: #9a3412;
-      padding: 14px;
-      border-radius: 8px;
-      margin-top: 10px;
+    }
+
+    .error-box {
+      background: #fef2f2;
+      border: 1px solid #fca5a5;
+      color: #991b1b;
     }
 
     .plan-note {
@@ -366,12 +509,16 @@
       .how-to,
       .example-row,
       .plan-note,
+      .section-card,
+      .mode-toggle,
       #intent,
       #code,
       #fileUpload,
+      #repoUrl,
       label[for="intent"],
       label[for="code"],
       label[for="fileUpload"],
+      label[for="repoUrl"],
       button,
       .footer,
       .nav,
@@ -436,40 +583,71 @@
     </div>
 
     <p class="subtitle">
-      Detects suspicious behavior, exposed secrets, and actions that don't match the original request.
+      Detect suspicious behavior, exposed secrets, and risky repo patterns before you trust AI-generated code.
     </p>
 
     <div class="how-to" id="how-it-works">
       <strong>How it works:</strong>
       <ol style="margin-top: 10px;">
-        <li>Describe what the AI-generated code was supposed to do.</li>
-        <li>Paste the full AI code file, or upload a file.</li>
-        <li>Click “Verify AI Code.”</li>
-        <li>Review the findings before you run or use the code.</li>
+        <li>Describe what the code or repo was supposed to do.</li>
+        <li>Choose scan mode below.</li>
+        <li>Paste code, upload a file, or enter a public GitHub repo URL.</li>
+        <li>Review the trust score, risk badge, and findings before running or using the code.</li>
       </ol>
     </div>
 
-    <div class="example-row">
-      <button type="button" class="example-btn" onclick="loadSafeExample()">🟢 Safe Example</button>
-      <button type="button" class="example-btn" onclick="loadSuspiciousExample()">🟡 Suspicious Example</button>
-      <button type="button" class="example-btn" onclick="loadSecretExample()">🔴 Secret Leak Example</button>
+    <div class="mode-toggle">
+      <button type="button" id="modeCodeBtn" class="toggle-btn active" onclick="setScanMode('code')">Code File Scan</button>
+      <button type="button" id="modeRepoBtn" class="toggle-btn" onclick="setScanMode('repo')">GitHub Repo Scan</button>
     </div>
 
-    <label for="intent">What was the AI code supposed to do?</label>
-    <input id="intent" type="text" placeholder="Example: make a simple calculator" />
+    <div class="section-card" id="codeScanCard">
+      <h3 class="section-title">Scan a code file</h3>
+      <p class="section-subtitle">
+        Paste AI-generated code or upload a file to review its behavior, risk level, and trust score.
+      </p>
 
-    <label for="code">Paste the full AI-generated code file</label>
-    <textarea id="code" placeholder="Paste code here..."></textarea>
+      <div class="example-row">
+        <button type="button" class="example-btn" onclick="loadSafeExample()">🟢 Safe Example</button>
+        <button type="button" class="example-btn" onclick="loadSuspiciousExample()">🟡 Suspicious Example</button>
+        <button type="button" class="example-btn" onclick="loadSecretExample()">🔴 Secret Leak Example</button>
+      </div>
 
-    <label for="fileUpload">Or upload a code file</label>
-    <input type="file" id="fileUpload" accept=".py,.js,.ts,.go,.java,.rb,.php,.cs,.cpp,.c,.rs,.sh,.txt" />
+      <label for="intent">What was the AI code supposed to do?</label>
+      <input id="intent" type="text" placeholder="Example: make a simple calculator" />
+
+      <label for="code">Paste the full AI-generated code file</label>
+      <textarea id="code" placeholder="Paste code here..."></textarea>
+
+      <label for="fileUpload">Or upload a code file</label>
+      <input type="file" id="fileUpload" accept=".py,.js,.ts,.go,.java,.rb,.php,.cs,.cpp,.c,.rs,.sh,.txt" />
+
+      <div class="button-row">
+        <button type="button" onclick="scanCode()">Verify AI Code</button>
+      </div>
+    </div>
+
+    <div class="section-card" id="repoScanCard" style="display: none;">
+      <h3 class="section-title">Scan a GitHub repository</h3>
+      <p class="section-subtitle">
+        Paste a public GitHub repo URL to scan supported files and generate a repo-level trust score and badge.
+      </p>
+
+      <label for="repoIntent">What was this repo supposed to do?</label>
+      <input id="repoIntent" type="text" placeholder="Example: simple Flask web app" />
+
+      <label for="repoUrl">GitHub repo URL</label>
+      <input id="repoUrl" type="text" placeholder="Example: https://github.com/pallets/flask" />
+
+      <div class="button-row">
+        <button type="button" onclick="scanRepo()">Scan GitHub Repo</button>
+      </div>
+    </div>
 
     <div class="plan-note" id="pricing">
-      <strong>Free plan:</strong> up to 200 lines per scan.<br>
-      <strong>Pro plan:</strong> larger files, expanded analysis, future saved scan history, and PDF exports.
+      <strong>Free plan:</strong> single-file scans, repo scans, trust scores, and PDF exports.<br>
+      <strong>Pro plan idea:</strong> larger repos, more files scanned, saved history, and advanced analysis.
     </div>
-
-    <button onclick="scanCode()">Verify AI Code</button>
 
     <h2 id="result-section">Result</h2>
 
@@ -486,7 +664,7 @@
     </div>
 
     <div class="footer">
-      Early prototype — built to help users understand AI-generated code before running it.
+      Early prototype — built to help users understand AI-generated code and public repos before trusting them.
     </div>
   </div>
 
@@ -498,10 +676,63 @@
     document.addEventListener("DOMContentLoaded", function () {
       window.scrollTo(0, 0);
       setTimeout(() => window.scrollTo(0, 0), 10);
+      setScanMode("code");
     });
+
+    function setScanMode(mode) {
+      const codeCard = document.getElementById("codeScanCard");
+      const repoCard = document.getElementById("repoScanCard");
+      const codeBtn = document.getElementById("modeCodeBtn");
+      const repoBtn = document.getElementById("modeRepoBtn");
+
+      if (mode === "repo") {
+        codeCard.style.display = "none";
+        repoCard.style.display = "block";
+        codeBtn.classList.remove("active");
+        repoBtn.classList.add("active");
+      } else {
+        codeCard.style.display = "block";
+        repoCard.style.display = "none";
+        codeBtn.classList.add("active");
+        repoBtn.classList.remove("active");
+      }
+    }
 
     function exportReportAsPDF() {
       window.print();
+    }
+
+    function escapeHtml(text) {
+      return text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    }
+
+    function riskBadgeClass(risk) {
+      if (risk === "green") return "risk-safe";
+      if (risk === "yellow") return "risk-review";
+      if (risk === "red") return "risk-high";
+      return "risk-review";
+    }
+
+    function riskBadgeText(risk) {
+      if (risk === "green") return "🟢 Safe";
+      if (risk === "yellow") return "🟡 Review Carefully";
+      if (risk === "red") return "🔴 High Risk";
+      return String(risk || "").toUpperCase();
+    }
+
+    function trustColorFromScore(score) {
+      if (score <= 40) return "#dc2626";
+      if (score <= 70) return "#d97706";
+      return "#16a34a";
+    }
+
+    function trustLabelFromScore(score) {
+      if (score <= 40) return "This code needs careful review before running.";
+      if (score <= 70) return "Some caution is warranted before trusting this result.";
+      return "Looks relatively safe based on this scan.";
     }
 
     function loadSafeExample() {
@@ -511,6 +742,7 @@
 
 print(add(2, 3))`;
       document.getElementById("fileUpload").value = "";
+      setScanMode("code");
     }
 
     function loadSuspiciousExample() {
@@ -523,6 +755,7 @@ def add(a, b):
 os.system("echo suspicious command")
 print(add(2, 3))`;
       document.getElementById("fileUpload").value = "";
+      setScanMode("code");
     }
 
     function loadSecretExample() {
@@ -536,10 +769,44 @@ def show_status():
 os.system("echo using secret")
 print(show_status())`;
       document.getElementById("fileUpload").value = "";
+      setScanMode("code");
+    }
+
+    function renderTrustBox(score) {
+      const trustColor = trustColorFromScore(score);
+      const trustLabel = trustLabelFromScore(score);
+
+      return `
+        <div class="trust-box">
+          <div class="trust-score-row">
+            <span class="trust-score-label">AI Trust Score</span>
+            <span class="trust-score-number">${score} / 100</span>
+          </div>
+          <div class="trust-meter">
+            <div class="trust-meter-fill" style="width: ${score}%; background: ${trustColor};"></div>
+          </div>
+          <div class="trust-caption">${trustLabel}</div>
+        </div>
+      `;
+    }
+
+    function renderBadgeCard(title, badge, score, subtitle) {
+      return `
+        <div class="badge-card">
+          <div class="badge-title">${title}</div>
+          <div class="badge-main">
+            <span>${badge.emoji}</span>
+            <span>${badge.label}</span>
+            <span>•</span>
+            <span>${score} / 100</span>
+          </div>
+          <div class="badge-sub">${subtitle}</div>
+        </div>
+      `;
     }
 
     async function scanCode() {
-      const intent = document.getElementById("intent").value;
+      const intent = document.getElementById("intent").value.trim();
       let code = document.getElementById("code").value;
 
       const fileInput = document.getElementById("fileUpload");
@@ -550,6 +817,14 @@ print(show_status())`;
       if (fileInput.files.length > 0) {
         const file = fileInput.files[0];
         code = await file.text();
+      }
+
+      if (!code.trim()) {
+        resultBox.innerHTML = `<div class="error-box">Please paste code or upload a file before scanning.</div>`;
+        codeViewer.style.display = "none";
+        codeViewer.innerHTML = "";
+        exportRow.style.display = "none";
+        return;
       }
 
       resultBox.innerHTML = "Scanning...";
@@ -583,60 +858,11 @@ print(show_status())`;
           return;
         }
 
-        let riskBadgeClass = "";
-        let riskBadgeText = "";
-
-        if (data.risk === "green") {
-          riskBadgeClass = "risk-safe";
-          riskBadgeText = "🟢 Safe";
-        } else if (data.risk === "yellow") {
-          riskBadgeClass = "risk-review";
-          riskBadgeText = "🟡 Review Carefully";
-        } else if (data.risk === "red") {
-          riskBadgeClass = "risk-high";
-          riskBadgeText = "🔴 High Risk";
-        } else {
-          riskBadgeClass = "risk-review";
-          riskBadgeText = data.risk.toUpperCase();
-        }
-
-        let trustScore = 100;
-        trustScore -= data.flags.length * 12;
-        trustScore -= data.intent_mismatches.length * 10;
-
-        if (data.risk === "yellow") {
-          trustScore -= 8;
-        }
-
-        if (data.risk === "red") {
-          trustScore -= 18;
-        }
-
-        if (trustScore < 0) trustScore = 0;
-        if (trustScore > 100) trustScore = 100;
-
-        let trustColor = "#16a34a";
-        let trustLabel = "Looks relatively safe based on this scan.";
-
-        if (trustScore <= 40) {
-          trustColor = "#dc2626";
-          trustLabel = "This code needs careful review before running.";
-        } else if (trustScore <= 70) {
-          trustColor = "#d97706";
-          trustLabel = "Some caution is warranted before trusting this code.";
-        }
+        const score = typeof data.trust_score === "number" ? data.trust_score : 100;
 
         resultBox.innerHTML = `
-          <div class="trust-box">
-            <div class="trust-score-row">
-              <span class="trust-score-label">AI Trust Score</span>
-              <span class="trust-score-number">${trustScore} / 100</span>
-            </div>
-            <div class="trust-meter">
-              <div class="trust-meter-fill" style="width: ${trustScore}%; background: ${trustColor};"></div>
-            </div>
-            <div class="trust-caption">${trustLabel}</div>
-          </div>
+          ${renderBadgeCard("Trust Badge", data.trust_badge, score, data.trust_badge.message)}
+          ${renderTrustBox(score)}
 
           ${
             data.behavior_summary && data.behavior_summary.length
@@ -653,7 +879,7 @@ print(show_status())`;
 
           <div class="risk-row">
             <span class="risk-label">Risk Assessment:</span>
-            <span class="risk-badge ${riskBadgeClass}">${riskBadgeText}</span>
+            <span class="risk-badge ${riskBadgeClass(data.risk)}">${riskBadgeText(data.risk)}</span>
           </div>
 
           <strong>Touches:</strong> ${data.touches.length ? data.touches.join(", ") : "None"}<br><br>
@@ -688,11 +914,7 @@ print(show_status())`;
           codeViewer.innerHTML = codeLines.map((line, index) => {
             const lineNumber = index + 1;
             const isFlagged = flaggedLines.has(lineNumber);
-
-            const safeLine = line
-              .replace(/&/g, "&amp;")
-              .replace(/</g, "&lt;")
-              .replace(/>/g, "&gt;");
+            const safeLine = escapeHtml(line);
 
             return `
               <span class="code-line ${isFlagged ? "flagged-line" : ""}">
@@ -705,7 +927,123 @@ print(show_status())`;
         }
 
       } catch (error) {
-        resultBox.textContent = "Error: " + error;
+        resultBox.innerHTML = `<div class="error-box">Error: ${error}</div>`;
+        codeViewer.style.display = "none";
+        exportRow.style.display = "none";
+      }
+    }
+
+    async function scanRepo() {
+      const intent = document.getElementById("repoIntent").value.trim() || "scan this public github repo";
+      const repoUrl = document.getElementById("repoUrl").value.trim();
+
+      const resultBox = document.getElementById("result");
+      const codeViewer = document.getElementById("codeViewer");
+      const exportRow = document.getElementById("exportRow");
+
+      if (!repoUrl) {
+        resultBox.innerHTML = `<div class="error-box">Please enter a GitHub repository URL.</div>`;
+        codeViewer.style.display = "none";
+        codeViewer.innerHTML = "";
+        exportRow.style.display = "none";
+        return;
+      }
+
+      resultBox.innerHTML = "Scanning GitHub repo...";
+      codeViewer.style.display = "none";
+      codeViewer.innerHTML = "";
+      exportRow.style.display = "none";
+
+      try {
+        const response = await fetch("/scan-repo", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ intent, repo_url: repoUrl })
+        });
+
+        const data = await response.json();
+
+        document.getElementById("result-section").scrollIntoView({
+          behavior: "smooth",
+          block: "start"
+        });
+
+        if (data.error) {
+          resultBox.innerHTML = `<div class="error-box">${data.error}</div>`;
+          return;
+        }
+
+        const topFiles = (data.files || [])
+          .slice()
+          .sort((a, b) => {
+            const aPoints = typeof a.weighted_risk_points === "number" ? a.weighted_risk_points : 0;
+            const bPoints = typeof b.weighted_risk_points === "number" ? b.weighted_risk_points : 0;
+
+            if (bPoints !== aPoints) return bPoints - aPoints;
+            return a.trust_score - b.trust_score;
+          })
+          .slice(0, 10);
+
+        resultBox.innerHTML = `
+          ${renderBadgeCard(
+            "Repo Trust Badge",
+            data.trust_badge,
+            data.trust_score,
+            `${data.repo_name} • ${data.trust_badge.message}`
+          )}
+
+          ${renderTrustBox(data.trust_score)}
+
+          <div class="risk-row">
+            <span class="risk-label">Repo Risk Assessment:</span>
+            <span class="risk-badge ${riskBadgeClass(data.risk)}">${riskBadgeText(data.risk)}</span>
+          </div>
+
+          <strong>Repository:</strong> ${data.repo_name}<br><br>
+          <strong>Files scanned:</strong> ${data.files_scanned_count} / ${data.files_scanned_limit}<br><br>
+          <strong>Touches:</strong> ${data.touches.length ? data.touches.join(", ") : "None"}<br><br>
+
+          ${
+            data.behavior_summary && data.behavior_summary.length
+              ? `
+                <div class="behavior-box">
+                  <h3>Repo Behavior Summary</h3>
+                  <ul>
+                    ${data.behavior_summary.map(item => `<li>${item}</li>`).join("")}
+                  </ul>
+                </div>
+              `
+              : ""
+          }
+
+          <strong>Summary:</strong> ${data.summary}
+
+          <div class="repo-file-list">
+            <h3 style="margin-top:0;">Top flagged files</h3>
+            ${
+              topFiles.length
+                ? topFiles.map(file => `
+                  <div class="repo-file-item">
+                    <div class="repo-file-top">
+                      <div class="repo-file-name">${file.file}</div>
+                      <span class="risk-badge ${riskBadgeClass(file.risk)}">${riskBadgeText(file.risk)}</span>
+                    </div>
+                    <div class="repo-file-meta">Trust Score: ${file.trust_score} / 100</div>
+                    <div class="repo-file-meta">Weighted Risk Points: ${file.weighted_risk_points ?? 0}</div>
+                    <div class="repo-file-meta" style="margin-top:6px;">${file.summary}</div>
+                  </div>
+                `).join("")
+                : "<p>No files were scanned.</p>"
+            }
+          </div>
+        `;
+
+        exportRow.style.display = "block";
+
+      } catch (error) {
+        resultBox.innerHTML = `<div class="error-box">Error: ${error}</div>`;
         codeViewer.style.display = "none";
         exportRow.style.display = "none";
       }
