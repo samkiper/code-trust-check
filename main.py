@@ -3,6 +3,12 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import re
+import io
+import zipfile
+import urllib.request
+import ssl
+import certifi
+from urllib.parse import urlparse
 
 app = FastAPI()
 
@@ -12,6 +18,11 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 class ScanRequest(BaseModel):
     intent: str
     code: str
+
+
+class RepoScanRequest(BaseModel):
+    intent: str
+    repo_url: str
 
 
 SUSPICIOUS_PATTERNS = [
@@ -34,35 +45,64 @@ SECRET_PATTERNS = [
     (r"AIza[0-9A-Za-z\\-_]{35}", "Possible Google API key"),
 ]
 
+SUPPORTED_CODE_EXTENSIONS = {
+    ".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".java", ".rb",
+    ".php", ".cs", ".cpp", ".c", ".rs", ".sh", ".swift", ".kt",
+    ".sql", ".html", ".css", ".json", ".yaml", ".yml", ".xml"
+}
+
 FREE_LINE_LIMIT = 10000
+FREE_REPO_FILE_LIMIT = 50
 
 
 def strip_string_literals(text: str) -> str:
-    # Remove triple-quoted strings first
     text = re.sub(r"'''[\s\S]*?'''", "", text)
     text = re.sub(r'"""[\s\S]*?"""', "", text)
-
-    # Remove single and double quoted strings
     text = re.sub(r"'(?:\\.|[^'\\])*'", "", text)
     text = re.sub(r'"(?:\\.|[^"\\])*"', "", text)
-
     return text
 
 
-@app.get("/")
-def home():
-    return FileResponse("static/index.html")
+def calculate_trust_score(flag_count: int, mismatch_count: int, risk: str) -> int:
+    trust_score = 100
+    trust_score -= flag_count * 12
+    trust_score -= mismatch_count * 10
+
+    if risk == "yellow":
+        trust_score -= 8
+    elif risk == "red":
+        trust_score -= 18
+
+    return max(0, min(100, trust_score))
 
 
-@app.get("/health")
-def health():
-    return {"ok": True}
+def build_trust_badge(trust_score: int, risk: str) -> dict:
+    if risk == "red" or trust_score <= 40:
+        return {
+            "label": "High Risk",
+            "emoji": "🔴",
+            "color": "red",
+            "message": "This code needs careful review before running."
+        }
+    elif risk == "yellow" or trust_score <= 70:
+        return {
+            "label": "Review Carefully",
+            "emoji": "🟡",
+            "color": "goldenrod",
+            "message": "Some caution is warranted before trusting this code."
+        }
+    else:
+        return {
+            "label": "Safe",
+            "emoji": "🟢",
+            "color": "green",
+            "message": "Looks relatively safe based on this scan."
+        }
 
 
-@app.post("/scan")
-def scan(req: ScanRequest):
-    intent_lower = req.intent.lower()
-    lines = req.code.splitlines()
+def analyze_code(intent: str, code: str) -> dict:
+    intent_lower = intent.lower()
+    lines = code.splitlines()
 
     if len(lines) > FREE_LINE_LIMIT:
         return {
@@ -72,7 +112,9 @@ def scan(req: ScanRequest):
             "intent_mismatches": [],
             "behavior_summary": [],
             "summary": f"Free scans are limited to {FREE_LINE_LIMIT} lines. Pro unlocks larger file scanning.",
-            "code": req.code,
+            "code": code,
+            "trust_score": 0,
+            "trust_badge": build_trust_badge(0, "red"),
         }
 
     flags = []
@@ -97,7 +139,6 @@ def scan(req: ScanRequest):
                 inside_secret_block = False
             continue
 
-        # Remove quoted strings before checking for suspicious behavior
         line_without_strings = strip_string_literals(line_lower)
 
         for pattern in SUSPICIOUS_PATTERNS:
@@ -206,9 +247,11 @@ def scan(req: ScanRequest):
     risk = "green"
     if len(flags) > 0 or len(mismatch_flags) > 0:
         risk = "yellow"
-
     if len(flags) + len(mismatch_flags) > 3:
         risk = "red"
+
+    trust_score = calculate_trust_score(len(flags), len(mismatch_flags), risk)
+    trust_badge = build_trust_badge(trust_score, risk)
 
     return {
         "risk": risk,
@@ -217,5 +260,130 @@ def scan(req: ScanRequest):
         "intent_mismatches": mismatch_flags,
         "behavior_summary": behavior_summary,
         "summary": f"{len(flags)} suspicious patterns detected and {len(mismatch_flags)} intent mismatch warnings",
-        "code": req.code,
+        "code": code,
+        "trust_score": trust_score,
+        "trust_badge": trust_badge,
+    }
+
+
+def parse_github_repo(repo_url: str) -> tuple[str, str]:
+    parsed = urlparse(repo_url)
+    parts = [p for p in parsed.path.split("/") if p]
+
+    if parsed.netloc not in {"github.com", "www.github.com"} or len(parts) < 2:
+        raise ValueError("Please provide a valid public GitHub repository URL.")
+
+    owner = parts[0]
+    repo = parts[1].replace(".git", "")
+    return owner, repo
+
+
+def download_repo_zip(owner: str, repo: str) -> bytes:
+    urls = [
+        f"https://codeload.github.com/{owner}/{repo}/zip/refs/heads/main",
+        f"https://codeload.github.com/{owner}/{repo}/zip/refs/heads/master",
+    ]
+
+    ssl_context = ssl.create_default_context(cafile=certifi.where())
+    last_error = None
+
+    for url in urls:
+        try:
+            with urllib.request.urlopen(url, context=ssl_context) as response:
+                return response.read()
+        except Exception as exc:
+            last_error = exc
+
+    raise ValueError(f"Could not download repository zip. {last_error}")
+
+
+def is_supported_code_file(filename: str) -> bool:
+    filename_lower = filename.lower()
+    return any(filename_lower.endswith(ext) for ext in SUPPORTED_CODE_EXTENSIONS)
+
+
+@app.get("/")
+def home():
+    return FileResponse("static/index.html")
+
+
+@app.get("/health")
+def health():
+    return {"ok": True}
+
+
+@app.post("/scan")
+def scan(req: ScanRequest):
+    return analyze_code(req.intent, req.code)
+
+
+@app.post("/scan-repo")
+def scan_repo(req: RepoScanRequest):
+    owner, repo = parse_github_repo(req.repo_url)
+    zip_bytes = download_repo_zip(owner, repo)
+
+    files_scanned = []
+    total_flags = 0
+    total_mismatches = 0
+    all_touches = set()
+    all_behavior_summary = []
+    overall_risk = "green"
+
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        code_files = [
+            name for name in zf.namelist()
+            if not name.endswith("/") and is_supported_code_file(name)
+        ]
+
+        code_files = code_files[:FREE_REPO_FILE_LIMIT]
+
+        for file_name in code_files:
+            try:
+                with zf.open(file_name) as file:
+                    raw = file.read()
+                    code_text = raw.decode("utf-8", errors="ignore")
+            except Exception:
+                continue
+
+            result = analyze_code(req.intent, code_text)
+
+            files_scanned.append({
+                "file": file_name,
+                "risk": result["risk"],
+                "trust_score": result["trust_score"],
+                "summary": result["summary"],
+                "touches": result["touches"],
+                "flags": result["flags"],
+                "intent_mismatches": result["intent_mismatches"],
+                "behavior_summary": result["behavior_summary"],
+            })
+
+            total_flags += len(result["flags"])
+            total_mismatches += len(result["intent_mismatches"])
+            all_touches.update(result["touches"])
+
+            for item in result["behavior_summary"]:
+                if item not in all_behavior_summary:
+                    all_behavior_summary.append(item)
+
+            if result["risk"] == "red":
+                overall_risk = "red"
+            elif result["risk"] == "yellow" and overall_risk != "red":
+                overall_risk = "yellow"
+
+    trust_score = calculate_trust_score(total_flags, total_mismatches, overall_risk)
+    trust_badge = build_trust_badge(trust_score, overall_risk)
+
+    return {
+        "repo_url": req.repo_url,
+        "repo_name": f"{owner}/{repo}",
+        "risk": overall_risk,
+        "trust_score": trust_score,
+        "trust_badge": trust_badge,
+        "files_scanned_count": len(files_scanned),
+        "files_scanned_limit": FREE_REPO_FILE_LIMIT,
+        "touches": sorted(list(all_touches)),
+        "behavior_summary": all_behavior_summary or ["No obvious risky behavior was detected in this repo scan."],
+        "summary": f"{total_flags} suspicious patterns detected and {total_mismatches} intent mismatch warnings across {len(files_scanned)} files.",
+        "files": files_scanned,
     }
