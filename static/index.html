@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" type="image/png" href="/static/favicon.png" />
+  <title>AI Code Audit</title>
+
+  <style>
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: linear-gradient(180deg, #f8f7ff 0%, #f3f4f6 100%);
+      margin: 0;
+      padding: 0;
+      color: #111827;
+    }
+
+    .topbar {
+      background: transparent;
+      border-bottom: none;
+      padding: 20px 40px 0;
+      margin-bottom: 10px;
+    }
+
+    .topbar-inner {
+      max-width: 900px;
+      margin: auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-weight: 700;
+      font-size: 18px;
+      color: #111827;
+    }
+
+    .logo-small {
+      width: 50px;
+      height: 50px;
+      object-fit: contain;
+      border-radius: 8px;
+    }
+
+    .nav {
+      display: flex;
+      align-items: center;
+      gap: 22px;
+    }
+
+    .nav a {
+      color: #6b7280;
+      text-decoration: none;
+      font-size: 14px;
+    }
+
+    .nav a:hover {
+      color: #5b21b6;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: auto;
+      background: white;
+      padding: 48px 40px 40px;
+      border-radius: 18px;
+      box-shadow:
+        0 20px 60px rgba(0, 0, 0, 0.08),
+        0 8px 20px rgba(0, 0, 0, 0.05);
+    }
+
+    .hero-logo {
+      display: flex;
+      justify-content: center;
+      margin-bottom: 20px;
+    }
+
+    .hero-logo img {
+      width: 400px;
+      height: auto;
+      object-fit: contain;
+    }
+
+    p.subtitle {
+      color: #666;
+      margin-bottom: 36px;
+      font-size: 18px;
+      text-align: center;
+      line-height: 1.6;
+      max-width: 680px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    label {
+      font-weight: 600;
+    }
+
+    textarea,
+    input {
+      width: 100%;
+      margin-top: 8px;
+      margin-bottom: 20px;
+      padding: 12px;
+      font-size: 15px;
+      border-radius: 8px;
+      border: 1px solid #ddd;
+      box-sizing: border-box;
+    }
+
+    textarea {
+      font-family: monospace;
+      min-height: 350px;
+    }
+
+    button {
+      background: #6d28d9;
+      color: white;
+      border: none;
+      padding: 16px 24px;
+      font-size: 16px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: all 0.15s ease;
+    }
+
+    button:hover {
+      background: #5b21b6;
+      transform: translateY(-1px);
+    }
+
+    .example-row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 20px;
+    }
+
+    .example-btn {
+      background: #ffffff;
+      color: #5b21b6;
+      border: 1px solid #ddd6fe;
+      padding: 10px 14px;
+      font-size: 14px;
+      border-radius: 999px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: all 0.15s ease;
+    }
+
+    .example-btn:hover {
+      background: #f5f3ff;
+      transform: translateY(-1px);
+    }
+
+    .result {
+      margin-top: 30px;
+      padding: 20px;
+      border-radius: 10px;
+      background: #f3f4f6;
+    }
+
+    .how-to {
+      background: #f5f3ff;
+      padding: 16px;
+      border-radius: 10px;
+      margin-bottom: 30px;
+      border: 1px solid #ddd6fe;
+    }
+
+    .behavior-box {
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      padding: 16px;
+      border-radius: 10px;
+      margin-bottom: 18px;
+    }
+
+    .behavior-box h3 {
+      margin-top: 0;
+      margin-bottom: 12px;
+      font-size: 16px;
+    }
+
+    .trust-box {
+      background: white;
+      border: 1px solid #e5e7eb;
+      padding: 16px;
+      border-radius: 10px;
+      margin-bottom: 18px;
+    }
+
+    .trust-score-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 10px;
+      flex-wrap: wrap;
+    }
+
+    .trust-score-label {
+      font-weight: 700;
+      font-size: 16px;
+    }
+
+    .trust-score-number {
+      font-weight: 800;
+      font-size: 20px;
+      color: #111827;
+    }
+
+    .trust-meter {
+      width: 100%;
+      height: 12px;
+      background: #e5e7eb;
+      border-radius: 999px;
+      overflow: hidden;
+    }
+
+    .trust-meter-fill {
+      height: 100%;
+      border-radius: 999px;
+      transition: width 0.25s ease;
+    }
+
+    .trust-caption {
+      margin-top: 10px;
+      font-size: 14px;
+      color: #6b7280;
+    }
+
+    .risk-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 18px;
+      flex-wrap: wrap;
+    }
+
+    .risk-label {
+      font-weight: 700;
+    }
+
+    .risk-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 8px 14px;
+      border-radius: 999px;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.2px;
+    }
+
+    .risk-safe {
+      background: #dcfce7;
+      color: #166534;
+      border: 1px solid #86efac;
+    }
+
+    .risk-review {
+      background: #fef3c7;
+      color: #92400e;
+      border: 1px solid #fcd34d;
+    }
+
+    .risk-high {
+      background: #fee2e2;
+      color: #991b1b;
+      border: 1px solid #fca5a5;
+    }
+
+    .footer {
+      color: #777;
+      font-size: 14px;
+      margin-top: 40px;
+      border-top: 1px solid #ddd;
+      padding-top: 20px;
+    }
+
+    .code-viewer {
+      margin-top: 20px;
+      background: #111827;
+      color: #f9fafb;
+      padding: 16px;
+      border-radius: 10px;
+      overflow-x: auto;
+      font-family: monospace;
+      font-size: 14px;
+      line-height: 1.6;
+      display: none;
+    }
+
+    .code-line {
+      display: block;
+      white-space: pre;
+    }
+
+    .flagged-line {
+      background: rgba(239, 68, 68, 0.25);
+    }
+
+    .line-number {
+      display: inline-block;
+      width: 40px;
+      color: #9ca3af;
+      user-select: none;
+    }
+
+    .limit-box {
+      background: #fff7ed;
+      border: 1px solid #fdba74;
+      color: #9a3412;
+      padding: 14px;
+      border-radius: 8px;
+      margin-top: 10px;
+    }
+
+    .plan-note {
+      background: #f5f3ff;
+      border: 1px solid #ddd6fe;
+      color: #5b21b6;
+      padding: 14px;
+      border-radius: 8px;
+      margin-top: -5px;
+      margin-bottom: 20px;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+
+<body>
+<div class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <img src="/static/favicon.png" alt="AI Code Audit icon" class="logo-small" />
+      <span>Verify AI Code Before You Trust It</span>
+    </div>
+
+    <div class="nav">
+      <a href="#how-it-works">How it Works</a>
+      <a href="#pricing">Pricing</a>
+    </div>
+  </div>
+</div>
+
+<div class="container">
+  <div class="hero-logo">
+    <img src="/static/logo.png" alt="AI Code Audit logo" />
+  </div>
+
+  <p class="subtitle">
+    Detects suspicious behavior, exposed secrets, and actions that don't match the original request.
+  </p>
+
+  <div class="how-to" id="how-it-works">
+    <strong>How it works:</strong>
+    <ol style="margin-top: 10px;">
+      <li>Describe what the AI-generated code was supposed to do.</li>
+      <li>Paste the full AI code file, or upload a file.</li>
+      <li>Click “Verify AI Code.”</li>
+      <li>Review the findings before you run or use the code.</li>
+    </ol>
+  </div>
+
+  <div class="example-row">
+    <button type="button" class="example-btn" onclick="loadSafeExample()">🟢 Safe Example</button>
+    <button type="button" class="example-btn" onclick="loadSuspiciousExample()">🟡 Suspicious Example</button>
+    <button type="button" class="example-btn" onclick="loadSecretExample()">🔴 Secret Leak Example</button>
+  </div>
+
+  <label for="intent">What was the AI code supposed to do?</label>
+  <input id="intent" type="text" placeholder="Example: make a simple calculator" />
+
+  <label for="code">Paste the full AI-generated code file</label>
+  <textarea id="code" placeholder="Paste code here..."></textarea>
+
+  <label for="fileUpload">Or upload a code file</label>
+  <input type="file" id="fileUpload" accept=".py,.js,.ts,.go,.java,.rb,.php,.cs,.cpp,.c,.rs,.sh,.txt" />
+
+  <div class="plan-note" id="pricing">
+    <strong>Free plan:</strong> up to 200 lines per scan.<br>
+    <strong>Pro plan:</strong> larger files, expanded analysis, and future saved scan history.
+  </div>
+
+  <button onclick="scanCode()">Verify AI Code</button>
+
+  <h2 id="result-section">Result</h2>
+
+  <div id="result" class="result">
+    No scan yet.
+  </div>
+
+  <div id="codeViewer" class="code-viewer"></div>
+
+  <div class="footer">
+    Early prototype — built to help users understand AI-generated code before running it.
+  </div>
+</div>
+
+<script>
+if ("scrollRestoration" in history) {
+  history.scrollRestoration = "manual";
+}
+
+document.addEventListener("DOMContentLoaded", function () {
+  window.scrollTo(0, 0);
+  setTimeout(() => window.scrollTo(0, 0), 10);
+});
+
+function loadSafeExample() {
+  document.getElementById("intent").value = "make a simple calculator";
+  document.getElementById("code").value = `def add(a, b):
+    return a + b
+
+print(add(2, 3))`;
+  document.getElementById("fileUpload").value = "";
+}
+
+function loadSuspiciousExample() {
+  document.getElementById("intent").value = "make a simple calculator";
+  document.getElementById("code").value = `import os
+
+def add(a, b):
+    return a + b
+
+os.system("echo suspicious command")
+print(add(2, 3))`;
+  document.getElementById("fileUpload").value = "";
+}
+
+function loadSecretExample() {
+  document.getElementById("intent").value = "build a simple config helper";
+  document.getElementById("code").value = `api_key = "sk-1234567890123456789012345"
+import os
+
+def show_status():
+    return "ok"
+
+os.system("echo using secret")
+print(show_status())`;
+  document.getElementById("fileUpload").value = "";
+}
+
+async function scanCode() {
+  const intent = document.getElementById("intent").value;
+  let code = document.getElementById("code").value;
+
+  const fileInput = document.getElementById("fileUpload");
+  const resultBox = document.getElementById("result");
+  const codeViewer = document.getElementById("codeViewer");
+
+  if (fileInput.files.length > 0) {
+    const file = fileInput.files[0];
+    code = await file.text();
+  }
+
+  resultBox.innerHTML = "Scanning...";
+  codeViewer.style.display = "none";
+  codeViewer.innerHTML = "";
+
+  try {
+    const response = await fetch("/scan", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ intent, code })
+    });
+
+    const data = await response.json();
+
+    document.getElementById("result-section").scrollIntoView({
+      behavior: "smooth",
+      block: "start"
+    });
+
+    if (data.risk === "limit") {
+      resultBox.innerHTML = `
+        <div class="limit-box">
+          <strong>Free plan limit reached</strong><br><br>
+          ${data.summary}
+        </div>
+      `;
+      return;
+    }
+
+    let riskBadgeClass = "";
+    let riskBadgeText = "";
+
+    if (data.risk === "green") {
+      riskBadgeClass = "risk-safe";
+      riskBadgeText = "🟢 Safe";
+    } else if (data.risk === "yellow") {
+      riskBadgeClass = "risk-review";
+      riskBadgeText = "🟡 Review Carefully";
+    } else if (data.risk === "red") {
+      riskBadgeClass = "risk-high";
+      riskBadgeText = "🔴 High Risk";
+    } else {
+      riskBadgeClass = "risk-review";
+      riskBadgeText = data.risk.toUpperCase();
+    }
+
+    let trustScore = 100;
+    trustScore -= data.flags.length * 12;
+    trustScore -= data.intent_mismatches.length * 10;
+
+    if (data.risk === "yellow") trustScore -= 8;
+    if (data.risk === "red") trustScore -= 18;
+
+    if (trustScore < 0) trustScore = 0;
+    if (trustScore > 100) trustScore = 100;
+
+    let trustColor = "#16a34a";
+    let trustLabel = "Looks relatively safe based on this scan.";
+
+    if (trustScore <= 40) {
+      trustColor = "#dc2626";
+      trustLabel = "This code needs careful review before running.";
+    } else if (trustScore <= 70) {
+      trustColor = "#d97706";
+      trustLabel = "Some caution is warranted before trusting this code.";
+    }
+
+    resultBox.innerHTML = `
+      <div class="trust-box">
+        <div class="trust-score-row">
+          <span class="trust-score-label">AI Trust Score</span>
+          <span class="trust-score-number">${trustScore} / 100</span>
+        </div>
+        <div class="trust-meter">
+          <div class="trust-meter-fill" style="width: ${trustScore}%; background: ${trustColor};"></div>
+        </div>
+        <div class="trust-caption">${trustLabel}</div>
+      </div>
+
+      ${
+        data.behavior_summary && data.behavior_summary.length
+          ? `
+            <div class="behavior-box">
+              <h3>Behavior Summary</h3>
+              <ul>
+                ${data.behavior_summary.map(item => `<li>${item}</li>`).join("")}
+              </ul>
+            </div>
+          `
+          : ""
+      }
+
+      <div class="risk-row">
+        <span class="risk-label">Risk Assessment:</span>
+        <span class="risk-badge ${riskBadgeClass}">${riskBadgeText}</span>
+      </div>
+
+      <strong>Touches:</strong> ${data.touches.length ? data.touches.join(", ") : "None"}<br><br>
+
+      <strong>Security Findings:</strong>
+      <ul>
+        ${
+          data.flags.length
+            ? data.flags.map(flag => `<li>Line ${flag.line}: ${flag.message}</li>`).join("")
+            : "<li>No flags</li>"
+        }
+      </ul>
+
+      <strong>Intent Mismatch Warnings:</strong>
+      <ul>
+        ${
+          data.intent_mismatches.length
+            ? data.intent_mismatches.map(item => `<li>${item}</li>`).join("")
+            : "<li>No intent mismatches</li>"
+        }
+      </ul>
+
+      <strong>Summary:</strong> ${data.summary}
+    `;
+
+    if (data.code) {
+      const flaggedLines = new Set(data.flags.map(flag => flag.line));
+      const codeLines = data.code.split("\n");
+
+      codeViewer.innerHTML = codeLines.map((line, index) => {
+        const lineNumber = index + 1;
+        const isFlagged = flaggedLines.has(lineNumber);
+
+        const safeLine = line
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+
+        return `
+          <span class="code-line ${isFlagged ? "flagged-line" : ""}">
+            <span class="line-number">${lineNumber}</span>${safeLine}
+          </span>
+        `;
+      }).join("");
+
+      codeViewer.style.display = "block";
+    }
+
+  } catch (error) {
+    resultBox.textContent = "Error: " + error;
+    codeViewer.style.display = "none";
+  }
+}
+</script>
+
+</body>
+</html>
