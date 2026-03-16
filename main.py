@@ -1,8 +1,9 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import re
+import os
 import io
 import ast
 import json
@@ -72,6 +73,12 @@ SUPPORTED_CODE_EXTENSIONS = {
 
 FREE_LINE_LIMIT = 10000
 FREE_REPO_FILE_LIMIT = 50
+PRO_LINE_LIMIT = 50000
+PRO_REPO_FILE_LIMIT = 200
+
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
+SUPABASE_SECRET_KEY = os.getenv("SUPABASE_SECRET_KEY", "")
+
 
 JS_EXAMPLE_FUNCTIONS = {
     "loadSafeExample",
@@ -130,8 +137,6 @@ GENERIC_INTENTS = {
 DEPENDENCY_MANIFEST_FILES = {
     "requirements.txt": "PyPI",
     "package.json": "npm",
-    "cargo.toml": "crates.io",
-    "go.mod": "Go",
 }
 
 OSV_API_BATCH_URL = "https://api.osv.dev/v1/querybatch"
@@ -161,6 +166,87 @@ TRUSTED_INTERNAL_NETWORK_HINTS = (
     "github.com",
     "certifi.where",
 )
+
+
+def get_plan_limits(plan: str) -> dict:
+    normalized = str(plan or "free").lower()
+
+    if normalized == "admin":
+        return {
+            "line_limit": None,
+            "repo_file_limit": None,
+        }
+
+    if normalized == "pro":
+        return {
+            "line_limit": PRO_LINE_LIMIT,
+            "repo_file_limit": PRO_REPO_FILE_LIMIT,
+        }
+
+    return {
+        "line_limit": FREE_LINE_LIMIT,
+        "repo_file_limit": FREE_REPO_FILE_LIMIT,
+    }
+
+
+def get_bearer_token(request: Request) -> str | None:
+    auth_header = request.headers.get("Authorization", "").strip()
+
+    if not auth_header.lower().startswith("bearer "):
+        return None
+
+    token = auth_header.split(" ", 1)[1].strip()
+    return token or None
+
+
+def fetch_supabase_user(access_token: str) -> dict | None:
+    if not SUPABASE_URL or not SUPABASE_SECRET_KEY or not access_token:
+        return None
+
+    auth_request = urllib.request.Request(
+        f"{SUPABASE_URL}/auth/v1/user",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "apikey": SUPABASE_SECRET_KEY,
+        },
+    )
+
+    try:
+        context = ssl.create_default_context(cafile=certifi.where())
+        with urllib.request.urlopen(auth_request, timeout=10, context=context) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+def get_request_access_context(request: Request) -> dict:
+    access = {
+        "authenticated": False,
+        "email": None,
+        "role": "user",
+        "plan": "free",
+        "limits": get_plan_limits("free"),
+    }
+
+    access_token = get_bearer_token(request)
+    user = fetch_supabase_user(access_token)
+
+    if not user:
+        return access
+
+    app_metadata = user.get("app_metadata") or {}
+    role = str(app_metadata.get("role") or "user").lower()
+    plan = str(app_metadata.get("plan") or ("admin" if role == "admin" else "free")).lower()
+
+    access.update({
+        "authenticated": True,
+        "email": user.get("email"),
+        "role": role,
+        "plan": plan,
+        "limits": get_plan_limits(plan),
+    })
+
+    return access
 
 
 def strip_string_literals(text: str) -> str:
@@ -1290,165 +1376,6 @@ def parse_package_json_manifest(file_name: str, content: str) -> tuple[list[dict
     return dependencies, skipped
 
 
-def parse_cargo_toml_manifest(file_name: str, content: str) -> tuple[list[dict], list[dict]]:
-    dependencies: list[dict] = []
-    skipped: list[dict] = []
-    current_section = ""
-
-    supported_sections = {
-        "dependencies",
-        "dev-dependencies",
-        "build-dependencies",
-        "target",
-        "workspace.dependencies",
-    }
-
-    for line_number, raw_line in enumerate(content.splitlines(), start=1):
-        stripped = raw_line.strip()
-
-        if not stripped or stripped.startswith("#"):
-            continue
-
-        section_match = re.match(r"^\[([^\]]+)\]$", stripped)
-        if section_match:
-            current_section = section_match.group(1).strip()
-            continue
-
-        if not current_section:
-            continue
-
-        if not any(
-            current_section == section
-            or current_section.startswith(f"target.")
-            or current_section.endswith(".dependencies")
-            for section in supported_sections
-        ):
-            continue
-
-        if "=" not in stripped:
-            continue
-
-        package_name, raw_value = [part.strip() for part in stripped.split("=", 1)]
-        package_name = package_name.strip("\"'")
-
-        if not package_name:
-            continue
-
-        inline_table_match = re.search(r"version\s*=\s*['\"]([^'\"]+)['\"]", raw_value)
-        if inline_table_match:
-            declared_version = inline_table_match.group(1).strip()
-        elif raw_value.startswith('"') or raw_value.startswith("'"):
-            declared_version = raw_value.strip().strip(',').strip("\"'")
-        else:
-            skipped.append({
-                "file": file_name,
-                "line": line_number,
-                "raw": raw_line.strip(),
-                "reason": "Cargo dependency entry does not expose a simple version string.",
-            })
-            continue
-
-        normalized_version, version_kind = normalize_manifest_version(str(declared_version))
-
-        if not normalized_version:
-            skipped.append({
-                "file": file_name,
-                "line": line_number,
-                "raw": raw_line.strip(),
-                "reason": "Cargo dependency entry uses a complex or unsupported version specifier.",
-            })
-            continue
-
-        dependencies.append({
-            "file": file_name,
-            "manifest_type": "Cargo.toml",
-            "line": line_number,
-            "package": package_name,
-            "ecosystem": "crates.io",
-            "declared_version": str(declared_version).strip(),
-            "version": normalized_version,
-            "version_kind": version_kind,
-            "dependency_section": current_section,
-        })
-
-    return dependencies, skipped
-
-
-def parse_go_mod_manifest(file_name: str, content: str) -> tuple[list[dict], list[dict]]:
-    dependencies: list[dict] = []
-    skipped: list[dict] = []
-    inside_require_block = False
-
-    for line_number, raw_line in enumerate(content.splitlines(), start=1):
-        stripped = raw_line.strip()
-
-        if not stripped or stripped.startswith("//"):
-            continue
-
-        if stripped == "require (":
-            inside_require_block = True
-            continue
-
-        if inside_require_block and stripped == ")":
-            inside_require_block = False
-            continue
-
-        if inside_require_block:
-            entry = stripped.split("//", 1)[0].strip()
-            parts = entry.split()
-            if len(parts) < 2:
-                skipped.append({
-                    "file": file_name,
-                    "line": line_number,
-                    "raw": raw_line.strip(),
-                    "reason": "Could not confidently parse this go.mod requirement entry.",
-                })
-                continue
-
-            package_name = parts[0].strip()
-            declared_version = parts[1].strip()
-        elif stripped.startswith("require "):
-            entry = stripped[len("require "):].split("//", 1)[0].strip()
-            parts = entry.split()
-            if len(parts) < 2:
-                skipped.append({
-                    "file": file_name,
-                    "line": line_number,
-                    "raw": raw_line.strip(),
-                    "reason": "Could not confidently parse this go.mod requirement entry.",
-                })
-                continue
-
-            package_name = parts[0].strip()
-            declared_version = parts[1].strip()
-        else:
-            continue
-
-        normalized_version, version_kind = normalize_manifest_version(str(declared_version))
-
-        if not normalized_version:
-            skipped.append({
-                "file": file_name,
-                "line": line_number,
-                "raw": raw_line.strip(),
-                "reason": "go.mod entry uses a complex or unsupported version specifier.",
-            })
-            continue
-
-        dependencies.append({
-            "file": file_name,
-            "manifest_type": "go.mod",
-            "line": line_number,
-            "package": package_name,
-            "ecosystem": "Go",
-            "declared_version": str(declared_version).strip(),
-            "version": normalized_version,
-            "version_kind": version_kind,
-        })
-
-    return dependencies, skipped
-
-
 def dedupe_dependencies(dependencies: list[dict]) -> list[dict]:
     deduped: list[dict] = []
     seen: set[tuple] = set()
@@ -1699,10 +1626,6 @@ def analyze_dependency_manifests(zip_file: zipfile.ZipFile) -> dict:
             deps, skipped = parse_requirements_manifest(file_name, content)
         elif lower_name.endswith("package.json"):
             deps, skipped = parse_package_json_manifest(file_name, content)
-        elif lower_name.endswith("cargo.toml"):
-            deps, skipped = parse_cargo_toml_manifest(file_name, content)
-        elif lower_name.endswith("go.mod"):
-            deps, skipped = parse_go_mod_manifest(file_name, content)
         else:
             deps, skipped = [], []
 
@@ -1834,23 +1757,33 @@ def build_focused_code_blocks(code: str, flags: list[dict], context_lines: int =
     return blocks
 
 
-def analyze_code(intent: str, code: str) -> dict:
+def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
     intent_lower = intent.lower()
     original_lines = code.splitlines()
 
-    if len(original_lines) > FREE_LINE_LIMIT:
+    line_limit = get_plan_limits(plan).get("line_limit")
+
+    if line_limit is not None and len(original_lines) > line_limit:
+        plan_name = str(plan or "free").lower()
+        if plan_name == "pro":
+            limit_message = f"Pro scans are limited to {line_limit} lines right now."
+        else:
+            limit_message = f"Free scans are limited to {line_limit} lines. Pro unlocks larger file scanning."
+
         return {
             "risk": "limit",
             "touches": [],
             "flags": [],
             "intent_mismatches": [],
             "behavior_summary": [],
-            "summary": f"Free scans are limited to {FREE_LINE_LIMIT} lines. Pro unlocks larger file scanning.",
+            "summary": limit_message,
             "code": code,
             "trust_score": 0,
             "trust_badge": build_trust_badge(0, "red"),
             "risk_points": 100,
             "focused_code_blocks": [],
+            "plan_applied": plan_name,
+            "line_limit_applied": line_limit,
         }
 
     scannable_lines = extract_scannable_lines(code)
@@ -2060,29 +1993,6 @@ def analyze_code(intent: str, code: str) -> dict:
     }
 
 
-def build_repo_badge_payload(repo_name: str, trust_badge: dict, trust_score: int, repo_url: str) -> dict:
-    label_text = trust_badge.get("label", "Review")
-    badge_label = f"AI Code Audit • {label_text} • {trust_score}/100"
-    alt_text = f"{repo_name} AI Code Audit snapshot: {label_text} ({trust_score}/100)"
-    color = trust_badge.get("color", "goldenrod")
-    badge_message = f"{label_text} {trust_score}/100"
-    badge_url = (
-        "https://img.shields.io/badge/"
-        f"{quote('AI Code Audit')}"
-        f"-{quote(badge_message)}"
-        f"-{quote(color)}?style=for-the-badge"
-    )
-
-    return {
-        "label": badge_label,
-        "alt_text": alt_text,
-        "badge_url": badge_url,
-        "markdown": f"[![{alt_text}]({badge_url})]({repo_url})",
-        "html": f'<a href="{repo_url}" target="_blank" rel="noopener noreferrer"><img src="{badge_url}" alt="{alt_text}" /></a>',
-        "image_markdown": f"![{alt_text}]({badge_url})",
-        "snapshot_note": "This badge is a snapshot from this scan, not a continuously updating badge.",
-    }
-
 @app.get("/")
 def home():
     return FileResponse("static/index.html")
@@ -2094,12 +2004,15 @@ def health():
 
 
 @app.post("/scan")
-def scan(req: ScanRequest):
-    return analyze_code(req.intent, req.code)
+def scan(req: ScanRequest, request: Request):
+    access = get_request_access_context(request)
+    result = analyze_code(req.intent, req.code, plan=access["plan"])
+    result["access"] = access
+    return result
 
 
 @app.post("/scan-repo")
-def scan_repo(req: RepoScanRequest):
+def scan_repo(req: RepoScanRequest, request: Request):
     try:
         owner, repo = parse_github_repo(req.repo_url)
         zip_bytes = download_repo_zip(owner, repo)
@@ -2107,6 +2020,9 @@ def scan_repo(req: RepoScanRequest):
         return {"error": str(exc)}
     except Exception:
         return {"error": "Something went wrong while scanning this repository."}
+
+    access = get_request_access_context(request)
+    repo_file_limit = access["limits"].get("repo_file_limit")
 
     files_scanned = []
     weighted_points_total = 0.0
@@ -2130,7 +2046,8 @@ def scan_repo(req: RepoScanRequest):
             if not name.endswith("/") and is_supported_code_file(name)
         ]
 
-        code_files = code_files[:FREE_REPO_FILE_LIMIT]
+        if repo_file_limit is not None:
+            code_files = code_files[:repo_file_limit]
 
         for file_name in code_files:
             try:
@@ -2140,7 +2057,7 @@ def scan_repo(req: RepoScanRequest):
             except Exception:
                 continue
 
-            result = analyze_code(req.intent, code_text)
+            result = analyze_code(req.intent, code_text, plan=access["plan"])
             weight = file_weight_for_repo(file_name)
             weighted_file_points = result["risk_points"] * weight
             weighted_points_total += weighted_file_points
@@ -2212,7 +2129,7 @@ def scan_repo(req: RepoScanRequest):
         "trust_score": trust_score,
         "trust_badge": trust_badge,
         "files_scanned_count": len(files_scanned),
-        "files_scanned_limit": FREE_REPO_FILE_LIMIT,
+        "files_scanned_limit": repo_file_limit if repo_file_limit is not None else "Unlimited",
         "touches": sorted(list(all_touches)),
         "behavior_summary": all_behavior_summary or ["No obvious risky behavior was detected in this repo scan."],
         "summary": f"Weighted repo scan completed across {len(files_scanned)} files.",

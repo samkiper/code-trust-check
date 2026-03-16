@@ -1444,6 +1444,23 @@
 
     const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
 
+    async function buildApiHeaders() {
+      const headers = {
+        "Content-Type": "application/json"
+      };
+
+      try {
+        const { data } = await supabaseClient.auth.getSession();
+        const accessToken = data && data.session ? data.session.access_token : null;
+        if (accessToken) {
+          headers["Authorization"] = `Bearer ${accessToken}`;
+        }
+      } catch (_error) {
+      }
+
+      return headers;
+    }
+
     function setAuthMessage(message, type = "") {
       const authMessage = document.getElementById("authMessage");
       if (!authMessage) return;
@@ -2333,11 +2350,10 @@ exec(decoded)`;
       exportRow.style.display = "none";
 
       try {
+        const headers = await buildApiHeaders();
         const response = await fetch("/scan", {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
+          headers,
           body: JSON.stringify({ intent, code })
         });
 
@@ -2444,11 +2460,10 @@ exec(decoded)`;
       exportRow.style.display = "none";
 
       try {
+        const headers = await buildApiHeaders();
         const response = await fetch("/scan-repo", {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
+          headers,
           body: JSON.stringify({ intent, repo_url: repoUrl })
         });
 
