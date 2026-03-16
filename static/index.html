@@ -350,11 +350,11 @@
     }
 
     .how-to {
-      background: #f5f3ff;
-      padding: 16px;
+      background: #fafafa;
+      padding: 14px 16px;
       border-radius: 10px;
-      margin-bottom: 30px;
-      border: 1px solid #ddd6fe;
+      margin-bottom: 24px;
+      border: 1px solid #e5e7eb;
     }
 
     .behavior-box {
@@ -996,15 +996,15 @@
     }
 
     .plan-note {
-      background: #f5f3ff;
-      border: 1px solid #ddd6fe;
+      background: rgba(124, 58, 237, 0.08);
+      border: 1px solid rgba(124, 58, 237, 0.2);
       color: #5b21b6;
-      padding: 14px;
-      border-radius: 8px;
-      margin-top: -5px;
-      margin-bottom: 20px;
+      padding: 10px 16px;
+      border-radius: 10px;
+      margin-top: 0;
+      margin-bottom: 18px;
       font-size: 14px;
-      line-height: 1.5;
+      line-height: 1.45;
     }
 
     @media (max-width: 720px) {
@@ -1200,12 +1200,16 @@
 
     <div class="how-to" id="how-it-works">
       <strong>How it works:</strong>
-      <ol style="margin-top: 10px;">
+      <ol style="margin-top: 10px; margin-bottom: 0;">
         <li>Describe what the code or repo was supposed to do.</li>
         <li>Choose scan mode below.</li>
         <li>Paste code, upload a file, or enter a public GitHub repo URL.</li>
         <li>Review the trust score, risk badge, and findings before running or using the code.</li>
       </ol>
+    </div>
+
+    <div class="plan-note" id="privacyNote">
+      <strong>Privacy:</strong> By default, raw code is not stored. Only scan results and metadata are saved unless you choose otherwise.
     </div>
 
     <div class="mode-toggle">
