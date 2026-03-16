@@ -11,7 +11,9 @@ import zipfile
 import urllib.request
 import ssl
 import certifi
-from urllib.parse import urlparse, quote
+import hashlib
+from datetime import date
+from urllib.parse import urlparse, quote, urlencode
 
 app = FastAPI()
 
@@ -71,10 +73,14 @@ SUPPORTED_CODE_EXTENSIONS = {
     ".sql", ".html", ".css", ".json", ".yaml", ".yml", ".xml"
 }
 
-FREE_LINE_LIMIT = 10000
-FREE_REPO_FILE_LIMIT = 50
-PRO_LINE_LIMIT = 50000
+FREE_LINE_LIMIT = 2000
+FREE_REPO_FILE_LIMIT = 25
+FREE_REPO_SIZE_LIMIT_BYTES = 1_000_000
+FREE_DAILY_SCAN_LIMIT = 5
+PRO_LINE_LIMIT = 20000
 PRO_REPO_FILE_LIMIT = 200
+PRO_REPO_SIZE_LIMIT_BYTES = 10_000_000
+PRO_DAILY_SCAN_LIMIT = 50
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_SECRET_KEY = os.getenv("SUPABASE_SECRET_KEY", "")
@@ -175,17 +181,23 @@ def get_plan_limits(plan: str) -> dict:
         return {
             "line_limit": None,
             "repo_file_limit": None,
+            "repo_size_limit_bytes": None,
+            "daily_scan_limit": None,
         }
 
     if normalized == "pro":
         return {
             "line_limit": PRO_LINE_LIMIT,
             "repo_file_limit": PRO_REPO_FILE_LIMIT,
+            "repo_size_limit_bytes": PRO_REPO_SIZE_LIMIT_BYTES,
+            "daily_scan_limit": PRO_DAILY_SCAN_LIMIT,
         }
 
     return {
         "line_limit": FREE_LINE_LIMIT,
         "repo_file_limit": FREE_REPO_FILE_LIMIT,
+        "repo_size_limit_bytes": FREE_REPO_SIZE_LIMIT_BYTES,
+        "daily_scan_limit": FREE_DAILY_SCAN_LIMIT,
     }
 
 
@@ -222,6 +234,7 @@ def fetch_supabase_user(access_token: str) -> dict | None:
 def get_request_access_context(request: Request) -> dict:
     access = {
         "authenticated": False,
+        "user_id": None,
         "email": None,
         "role": "user",
         "plan": "free",
@@ -240,6 +253,7 @@ def get_request_access_context(request: Request) -> dict:
 
     access.update({
         "authenticated": True,
+        "user_id": user.get("id"),
         "email": user.get("email"),
         "role": role,
         "plan": plan,
@@ -247,6 +261,134 @@ def get_request_access_context(request: Request) -> dict:
     })
 
     return access
+
+
+def supabase_rest_request(method: str, path: str, payload: dict | list | None = None, query: str = "", prefer: str | None = None) -> dict | list:
+    if not SUPABASE_URL or not SUPABASE_SECRET_KEY:
+        return {}
+
+    url = f"{SUPABASE_URL}/rest/v1/{path}"
+    if query:
+        url = f"{url}?{query}"
+
+    data = None
+    headers = {
+        "apikey": SUPABASE_SECRET_KEY,
+        "Authorization": f"Bearer {SUPABASE_SECRET_KEY}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+
+    if prefer:
+        headers["Prefer"] = prefer
+
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+
+    req = urllib.request.Request(url, data=data, headers=headers, method=method.upper())
+    context = ssl.create_default_context(cafile=certifi.where())
+
+    try:
+        with urllib.request.urlopen(req, timeout=15, context=context) as response:
+            raw = response.read().decode("utf-8", errors="ignore")
+            return json.loads(raw) if raw.strip() else {}
+    except Exception:
+        return {}
+
+
+def build_actor_key(request: Request, access: dict) -> str:
+    if access.get("user_id"):
+        return f"user:{access['user_id']}"
+
+    forwarded_for = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    client_host = forwarded_for or (request.client.host if request.client else "unknown")
+    user_agent = request.headers.get("user-agent", "")
+    fingerprint = f"{client_host}|{user_agent}"
+    digest = hashlib.sha256(fingerprint.encode("utf-8", errors="ignore")).hexdigest()
+    return f"anon:{digest}"
+
+
+def get_daily_usage(actor_key: str, usage_day: str) -> dict | None:
+    query = urlencode({
+        "select": "actor_key,usage_date,scan_count",
+        "actor_key": f"eq.{actor_key}",
+        "usage_date": f"eq.{usage_day}",
+        "limit": "1",
+    })
+    rows = supabase_rest_request("GET", "scan_usage_daily", query=query)
+    if isinstance(rows, list) and rows:
+        return rows[0]
+    return None
+
+
+def increment_daily_usage(actor_key: str, usage_day: str, plan: str) -> int | None:
+    current = get_daily_usage(actor_key, usage_day) or {}
+    current_count = int(current.get("scan_count") or 0)
+    new_count = current_count + 1
+
+    payload = [{
+        "actor_key": actor_key,
+        "usage_date": usage_day,
+        "plan": str(plan or "free").lower(),
+        "scan_count": new_count,
+    }]
+
+    rows = supabase_rest_request(
+        "POST",
+        "scan_usage_daily",
+        payload=payload,
+        prefer="resolution=merge-duplicates,return=representation",
+    )
+
+    if isinstance(rows, list) and rows:
+        return int(rows[0].get("scan_count") or new_count)
+
+    return new_count
+
+
+def build_limit_result(title: str, summary: str, plan: str, limits: dict) -> dict:
+    normalized_plan = str(plan or "free").lower()
+    return {
+        "risk": "limit",
+        "error_type": "limit",
+        "limit_title": title,
+        "touches": [],
+        "flags": [],
+        "intent_mismatches": [],
+        "behavior_summary": [],
+        "summary": summary,
+        "trust_score": 0,
+        "trust_badge": build_trust_badge(0, "red"),
+        "risk_points": 100,
+        "focused_code_blocks": [],
+        "plan_applied": normalized_plan,
+        "limits_applied": limits,
+    }
+
+
+def check_and_record_daily_limit(request: Request, access: dict) -> dict | None:
+    daily_limit = access.get("limits", {}).get("daily_scan_limit")
+
+    if daily_limit is None:
+        return None
+
+    actor_key = build_actor_key(request, access)
+    usage_day = date.today().isoformat()
+    current = get_daily_usage(actor_key, usage_day) or {}
+    current_count = int(current.get("scan_count") or 0)
+
+    if current_count >= daily_limit:
+        plan_name = str(access.get("plan") or "free").lower()
+        label = "Free" if plan_name == "free" else "Pro"
+        return build_limit_result(
+            f"{label} daily scan limit reached",
+            f"{label} allows up to {daily_limit} scans per day. Try again tomorrow or upgrade for higher limits.",
+            access.get("plan", "free"),
+            access.get("limits", {}),
+        )
+
+    increment_daily_usage(actor_key, usage_day, access.get("plan", "free"))
+    return None
 
 
 def strip_string_literals(text: str) -> str:
@@ -2006,6 +2148,11 @@ def health():
 @app.post("/scan")
 def scan(req: ScanRequest, request: Request):
     access = get_request_access_context(request)
+    limit_result = check_and_record_daily_limit(request, access)
+    if limit_result:
+        limit_result["access"] = access
+        return limit_result
+
     result = analyze_code(req.intent, req.code, plan=access["plan"])
     result["access"] = access
     return result
@@ -2013,6 +2160,12 @@ def scan(req: ScanRequest, request: Request):
 
 @app.post("/scan-repo")
 def scan_repo(req: RepoScanRequest, request: Request):
+    access = get_request_access_context(request)
+    limit_result = check_and_record_daily_limit(request, access)
+    if limit_result:
+        limit_result["access"] = access
+        return limit_result
+
     try:
         owner, repo = parse_github_repo(req.repo_url)
         zip_bytes = download_repo_zip(owner, repo)
@@ -2021,8 +2174,8 @@ def scan_repo(req: RepoScanRequest, request: Request):
     except Exception:
         return {"error": "Something went wrong while scanning this repository."}
 
-    access = get_request_access_context(request)
     repo_file_limit = access["limits"].get("repo_file_limit")
+    repo_size_limit_bytes = access["limits"].get("repo_size_limit_bytes")
 
     files_scanned = []
     weighted_points_total = 0.0
@@ -2045,6 +2198,50 @@ def scan_repo(req: RepoScanRequest, request: Request):
             name for name in zf.namelist()
             if not name.endswith("/") and is_supported_code_file(name)
         ]
+
+        if repo_file_limit is not None and len(code_files) > repo_file_limit:
+            result = build_limit_result(
+                "Repo file limit reached",
+                f"{str(access['plan']).capitalize()} scans are limited to {repo_file_limit} code files per repository. Upgrade for larger repo scans.",
+                access.get("plan", "free"),
+                access.get("limits", {}),
+            )
+            result["repo_name"] = f"{owner}/{repo}"
+            result["files_scanned_count"] = 0
+            result["files_scanned_limit"] = repo_file_limit
+            result["highest_file_risk"] = "green"
+            result["files"] = []
+            result["touches"] = []
+            result["dependency_summary"] = None
+            result["dependency_findings"] = []
+            result["dependency_skipped"] = []
+            result["repo_size_bytes"] = sum((zf.getinfo(name).file_size for name in code_files if name in zf.namelist()), 0)
+            result["repo_size_limit_bytes"] = repo_size_limit_bytes
+            result["access"] = access
+            return result
+
+        repo_code_size_bytes = sum((zf.getinfo(name).file_size for name in code_files if name in zf.namelist()), 0)
+
+        if repo_size_limit_bytes is not None and repo_code_size_bytes > repo_size_limit_bytes:
+            result = build_limit_result(
+                "Repo size limit reached",
+                f"{str(access['plan']).capitalize()} scans are limited to about {repo_size_limit_bytes // 1_000_000 if repo_size_limit_bytes >= 1_000_000 else repo_size_limit_bytes:,}{' MB' if repo_size_limit_bytes >= 1_000_000 else ' bytes'} of code per repository. Upgrade for larger repo scans.",
+                access.get("plan", "free"),
+                access.get("limits", {}),
+            )
+            result["repo_name"] = f"{owner}/{repo}"
+            result["files_scanned_count"] = 0
+            result["files_scanned_limit"] = repo_file_limit
+            result["highest_file_risk"] = "green"
+            result["files"] = []
+            result["touches"] = []
+            result["dependency_summary"] = None
+            result["dependency_findings"] = []
+            result["dependency_skipped"] = []
+            result["repo_size_bytes"] = repo_code_size_bytes
+            result["repo_size_limit_bytes"] = repo_size_limit_bytes
+            result["access"] = access
+            return result
 
         if repo_file_limit is not None:
             code_files = code_files[:repo_file_limit]

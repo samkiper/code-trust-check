@@ -1414,8 +1414,9 @@
     </div>
 
     <div class="plan-note" id="pricing">
-      <strong>Free plan:</strong> single-file scans, repo scans, dependency vulnerability checks for requirements.txt, package.json, Cargo.toml, and go.mod, trust scores, and PDF exports.<br>
-      <strong>Pro plan idea:</strong> larger repos, more files scanned, saved history, and advanced analysis.
+      <strong>Free:</strong> up to 2,000 lines per file, up to 25 code files per repo scan, up to 1 MB of scanned repo code, 5 scans per day, dependency checks, trust scores, flagged code sections, and PDF exports.<br>
+      <strong>Pro (coming soon):</strong> up to 20,000 lines per file, up to 200 code files per repo scan, up to 10 MB of scanned repo code, 50 scans per day, deeper reporting, and priority processing.<br>
+      <strong>Admin:</strong> unlimited internal access.
     </div>
 
     <h2 id="result-section">Result</h2>
@@ -2367,7 +2368,7 @@ exec(decoded)`;
         if (data.risk === "limit") {
           resultBox.innerHTML = `
             <div class="limit-box">
-              <strong>Free plan limit reached</strong><br><br>
+              <strong>${escapeHtml(data.limit_title || "Plan limit reached")}</strong><br><br>
               ${escapeHtml(data.summary)}
             </div>
           `;
@@ -2473,6 +2474,16 @@ exec(decoded)`;
           behavior: "smooth",
           block: "start"
         });
+
+        if (data.risk === "limit") {
+          resultBox.innerHTML = `
+            <div class="limit-box">
+              <strong>${escapeHtml(data.limit_title || "Plan limit reached")}</strong><br><br>
+              ${escapeHtml(data.summary)}
+            </div>
+          `;
+          return;
+        }
 
         if (data.error) {
           resultBox.innerHTML = `<div class="error-box">${escapeHtml(data.error)}</div>`;
