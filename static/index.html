@@ -56,14 +56,8 @@
       gap: 22px;
     }
 
-    .nav a {
-      color: #6b7280;
-      text-decoration: none;
-      font-size: 14px;
-    }
-
-    .nav a:hover {
-      color: #5b21b6;
+    .nav-compact {
+      margin-left: auto;
     }
 
     .container {
@@ -98,6 +92,168 @@
       max-width: 680px;
       margin-left: auto;
       margin-right: auto;
+    }
+
+
+    .auth-shell {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .account-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      border-radius: 999px;
+      background: white;
+      border: 1px solid #e5e7eb;
+      box-shadow: 0 6px 18px rgba(17, 24, 39, 0.06);
+      font-size: 14px;
+      color: #374151;
+    }
+
+    .account-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: #9ca3af;
+      flex-shrink: 0;
+    }
+
+    .account-dot.logged-in {
+      background: #10b981;
+    }
+
+    .auth-panel {
+      background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+      border: 1px solid #e5e7eb;
+      border-radius: 16px;
+      padding: 18px;
+      margin-bottom: 22px;
+      box-shadow: 0 12px 28px rgba(15, 23, 42, 0.05);
+    }
+
+    .auth-panel-top {
+      display: block;
+      margin-bottom: 14px;
+    }
+
+    .auth-title {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 700;
+      color: #111827;
+    }
+
+    .auth-copy {
+      margin: 6px 0 0;
+      color: #6b7280;
+      font-size: 14px;
+      line-height: 1.5;
+      max-width: 620px;
+    }
+
+    .auth-form-wrap {
+      display: block;
+    }
+
+    .auth-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      align-items: end;
+    }
+
+    .auth-field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .auth-field label {
+      margin: 0;
+      font-size: 13px;
+      font-weight: 600;
+      color: #374151;
+    }
+
+    .auth-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .auth-message {
+      margin-top: 12px;
+      min-height: 22px;
+      font-size: 14px;
+      color: #374151;
+    }
+
+    .auth-message.error {
+      color: #b91c1c;
+    }
+
+    .auth-message.success {
+      color: #047857;
+    }
+
+    .privacy-note {
+      margin: 0 0 22px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: #f5f3ff;
+      border: 1px solid #ddd6fe;
+      color: #5b21b6;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+
+    .verify-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }
+
+    .verify-btn {
+      background: #6d28d9;
+      color: white;
+      border: none;
+      padding: 16px 28px;
+      font-size: 16px;
+      border-radius: 12px;
+      cursor: pointer;
+      font-weight: 700;
+      box-shadow: 0 10px 24px rgba(109, 40, 217, 0.22);
+      transition: all 0.15s ease;
+    }
+
+    .verify-btn:hover {
+      background: #5b21b6;
+      transform: translateY(-1px);
+      box-shadow: 0 14px 30px rgba(109, 40, 217, 0.28);
+    }
+
+    .privacy-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: #f5f3ff;
+      border: 1px solid #ddd6fe;
+      color: #5b21b6;
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 1.4;
     }
 
     .mode-toggle {
@@ -914,8 +1070,30 @@
       }
 
       .overview-grid,
-      .guidance-grid {
+      .guidance-grid,
+      .auth-grid {
         grid-template-columns: 1fr;
+      }
+
+      .auth-panel-top {
+        flex-direction: column;
+      }
+
+      .signed-in-panel {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      .auth-status-box {
+        width: 100%;
+      }
+
+      .verify-row {
+        align-items: flex-start;
+      }
+
+      .privacy-badge {
+        white-space: normal;
       }
 
       .upload-row {
@@ -951,7 +1129,9 @@
       .footer,
       .nav,
       .export-row,
-      .repo-file-hint {
+      .repo-file-hint,
+      .auth-panel,
+      #authMessage {
         display: none !important;
       }
 
@@ -1014,9 +1194,15 @@
         <span>Verify AI Code Before You Trust It</span>
       </div>
 
-      <div class="nav">
-        <a href="#how-it-works">How it Works</a>
-        <a href="#pricing">Pricing</a>
+      <div class="nav nav-compact">
+        <div class="auth-shell">
+          <div class="account-pill">
+            <span id="accountDot" class="account-dot"></span>
+            <span id="accountStatusText">Not signed in</span>
+          </div>
+          <button type="button" id="topbarAuthBtn" class="secondary-btn" onclick="handleTopbarAuthAction()">Log In</button>
+          <button type="button" id="topbarLogoutBtn" class="secondary-btn" onclick="signOutUser()" style="display:none;">Log Out</button>
+        </div>
       </div>
     </div>
   </div>
@@ -1071,11 +1257,9 @@
       </div>
       <div id="uploadStatus" class="upload-status">No file selected.</div>
 
-      <div class="button-row" style="align-items:center;">
-        <button type="button" onclick="scanCode()">Verify AI Code</button>
-        <span style="font-size:13px;color:#6b7280;margin-left:10px;white-space:nowrap;">
-          🔒 Privacy: By default, raw code is not stored.
-        </span>
+      <div class="verify-row">
+        <button type="button" class="verify-btn" onclick="scanCode()">Verify AI Code</button>
+        <div class="privacy-badge">🔒 Privacy: By default, raw code is not stored.</div>
       </div>
     </div>
 
@@ -1120,7 +1304,162 @@
     </div>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script>
+    const SUPABASE_URL = "https://ohabowduaydfaauqadqt.supabase.co";
+    const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_bIeAp9FiLmcvdJ4Y_epivg_B8Ua7mja";
+
+    const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+
+    function setAuthMessage(message, type = "") {
+      const authMessage = document.getElementById("authMessage");
+      if (!authMessage) return;
+      authMessage.className = `auth-message${type ? ` ${type}` : ""}`;
+      authMessage.textContent = message || "";
+    }
+
+    function updateAuthUi(user) {
+      const email = user && user.email ? user.email : null;
+      const loggedIn = Boolean(email);
+
+      const statusText = loggedIn ? `Signed in as ${email}` : "Not signed in";
+
+      const topbarStatus = document.getElementById("accountStatusText");
+      const topbarDot = document.getElementById("accountDot");
+      const topbarLogoutBtn = document.getElementById("topbarLogoutBtn");
+      const topbarAuthBtn = document.getElementById("topbarAuthBtn");
+      const authEmail = document.getElementById("authEmail");
+      const authPassword = document.getElementById("authPassword");
+      const authFormWrap = document.getElementById("authFormWrap");
+      const authIntroCopy = document.getElementById("authIntroCopy");
+      const accountPanel = document.getElementById("accountPanel");
+
+      if (topbarStatus) topbarStatus.textContent = statusText;
+
+      if (topbarDot) {
+        topbarDot.classList.toggle("logged-in", loggedIn);
+      }
+
+      if (topbarLogoutBtn) topbarLogoutBtn.style.display = loggedIn ? "inline-flex" : "none";
+      if (topbarAuthBtn) {
+        topbarAuthBtn.style.display = loggedIn ? "none" : "inline-flex";
+        topbarAuthBtn.textContent = "Log In";
+      }
+
+      if (accountPanel) accountPanel.style.display = loggedIn ? "none" : "block";
+      if (authFormWrap) authFormWrap.style.display = loggedIn ? "none" : "block";
+
+      if (authIntroCopy) {
+        authIntroCopy.textContent = "Create an account or log in below. Once you’re signed in, your account status will stay in the top right so this page stays clean.";
+      }
+
+      if (authEmail) authEmail.disabled = loggedIn;
+      if (authPassword) authPassword.disabled = loggedIn;
+
+      if (loggedIn && authEmail) authEmail.value = email;
+      if (loggedIn && authPassword) authPassword.value = "";
+    }
+
+
+    function handleTopbarAuthAction() {
+      const accountPanel = document.getElementById("accountPanel");
+      if (accountPanel && accountPanel.style.display !== "none") {
+        accountPanel.scrollIntoView({ behavior: "smooth", block: "center" });
+        const authEmail = document.getElementById("authEmail");
+        if (authEmail) setTimeout(() => authEmail.focus(), 250);
+      }
+    }
+
+    async function loadCurrentSession() {
+      const { data, error } = await supabaseClient.auth.getSession();
+      if (error) {
+        setAuthMessage(error.message || "Could not load session.", "error");
+        updateAuthUi(null);
+        return;
+      }
+      updateAuthUi(data && data.session ? data.session.user : null);
+    }
+
+    async function signUpUser() {
+      const email = document.getElementById("authEmail").value.trim();
+      const password = document.getElementById("authPassword").value;
+
+      if (!email || !password) {
+        setAuthMessage("Enter your email and password first.", "error");
+        return;
+      }
+
+      setAuthMessage("Creating account...");
+
+      const { data, error } = await supabaseClient.auth.signUp({
+        email,
+        password,
+      });
+
+      if (error) {
+        setAuthMessage(error.message || "Could not create account.", "error");
+        return;
+      }
+
+      const needsEmailConfirmation = !data.session;
+      updateAuthUi(data.user || null);
+      setAuthMessage(
+        needsEmailConfirmation
+          ? "Account created. Check your email and confirm your address, then come back and log in."
+          : "Account created and signed in.",
+        "success"
+      );
+    }
+
+    async function signInUser() {
+      const email = document.getElementById("authEmail").value.trim();
+      const password = document.getElementById("authPassword").value;
+
+      if (!email || !password) {
+        setAuthMessage("Enter your email and password first.", "error");
+        return;
+      }
+
+      setAuthMessage("Signing in...");
+
+      const { data, error } = await supabaseClient.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (error) {
+        setAuthMessage(error.message || "Could not sign in.", "error");
+        return;
+      }
+
+      updateAuthUi(data.user || null);
+      setAuthMessage("Logged in successfully.", "success");
+    }
+
+    async function signOutUser() {
+      const { error } = await supabaseClient.auth.signOut();
+
+      if (error) {
+        setAuthMessage(error.message || "Could not log out.", "error");
+        return;
+      }
+
+      const authEmail = document.getElementById("authEmail");
+      const authPassword = document.getElementById("authPassword");
+      if (authEmail) authEmail.value = "";
+      if (authPassword) authPassword.value = "";
+      updateAuthUi(null);
+      setAuthMessage("Logged out.", "success");
+    }
+
+    document.addEventListener("DOMContentLoaded", async () => {
+      await loadCurrentSession();
+
+      supabaseClient.auth.onAuthStateChange((_event, session) => {
+        updateAuthUi(session ? session.user : null);
+      });
+    });
+
     let repoDetailsStateBeforePrint = [];
     let findingDetailsStateBeforePrint = [];
 
