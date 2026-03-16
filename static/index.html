@@ -100,6 +100,130 @@
       margin-right: auto;
     }
 
+
+    .auth-shell {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .account-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      border-radius: 999px;
+      background: white;
+      border: 1px solid #e5e7eb;
+      box-shadow: 0 6px 18px rgba(17, 24, 39, 0.06);
+      font-size: 14px;
+      color: #374151;
+    }
+
+    .account-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: #9ca3af;
+      flex-shrink: 0;
+    }
+
+    .account-dot.logged-in {
+      background: #10b981;
+    }
+
+    .auth-panel {
+      background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+      border: 1px solid #e5e7eb;
+      border-radius: 16px;
+      padding: 18px;
+      margin-bottom: 22px;
+      box-shadow: 0 12px 28px rgba(15, 23, 42, 0.05);
+    }
+
+    .auth-panel-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+      flex-wrap: wrap;
+      margin-bottom: 14px;
+    }
+
+    .auth-title {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 700;
+      color: #111827;
+    }
+
+    .auth-copy {
+      margin: 6px 0 0;
+      color: #6b7280;
+      font-size: 14px;
+      line-height: 1.5;
+      max-width: 620px;
+    }
+
+    .auth-status-box {
+      min-width: 240px;
+    }
+
+    .auth-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      align-items: end;
+    }
+
+    .auth-field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .auth-field label {
+      margin: 0;
+      font-size: 13px;
+      font-weight: 600;
+      color: #374151;
+    }
+
+    .auth-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .auth-message {
+      margin-top: 12px;
+      min-height: 22px;
+      font-size: 14px;
+      color: #374151;
+    }
+
+    .auth-message.error {
+      color: #b91c1c;
+    }
+
+    .auth-message.success {
+      color: #047857;
+    }
+
+    .privacy-note {
+      margin-top: 12px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: #f5f3ff;
+      border: 1px solid #ddd6fe;
+      color: #5b21b6;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
     .mode-toggle {
       display: flex;
       gap: 12px;
@@ -257,6 +381,60 @@
       font-size: 16px;
     }
 
+    .overview-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .overview-card {
+      background: white;
+      border: 1px solid #e5e7eb;
+      border-radius: 12px;
+      padding: 14px;
+    }
+
+    .overview-label {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #6b7280;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .overview-value {
+      font-size: 18px;
+      font-weight: 800;
+      color: #111827;
+      line-height: 1.3;
+    }
+
+    .touch-chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .touch-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: white;
+      border: 1px solid #e5e7eb;
+      color: #374151;
+      padding: 9px 12px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .touch-icon {
+      font-size: 14px;
+    }
+
     .trust-box {
       background: white;
       border: 1px solid #e5e7eb;
@@ -345,6 +523,37 @@
       border: 1px solid #fca5a5;
     }
 
+    .mini-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 34px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 800;
+      margin-left: 8px;
+      vertical-align: middle;
+    }
+
+    .mini-safe {
+      background: #dcfce7;
+      color: #166534;
+      border: 1px solid #86efac;
+    }
+
+    .mini-review {
+      background: #fef3c7;
+      color: #92400e;
+      border: 1px solid #fcd34d;
+    }
+
+    .mini-high {
+      background: #fee2e2;
+      color: #991b1b;
+      border: 1px solid #fca5a5;
+    }
+
     .badge-card {
       background: linear-gradient(135deg, #ffffff 0%, #f8f7ff 100%);
       border: 1px solid #e5e7eb;
@@ -385,12 +594,48 @@
       padding-top: 18px;
     }
 
-    .repo-file-item {
+    .repo-list-hint {
+      margin-top: -2px;
+      margin-bottom: 16px;
+      font-size: 14px;
+      color: #6b7280;
+    }
+
+    details.repo-file-item {
       background: white;
       border: 1px solid #e5e7eb;
-      border-radius: 10px;
-      padding: 14px;
-      margin-bottom: 12px;
+      border-radius: 14px;
+      padding: 0;
+      margin-bottom: 14px;
+      overflow: hidden;
+      transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+    }
+
+    details.repo-file-item:hover {
+      border-color: #c4b5fd;
+      box-shadow: 0 8px 22px rgba(109, 40, 217, 0.08);
+      transform: translateY(-1px);
+    }
+
+    details.repo-file-item[open] {
+      border-color: #c4b5fd;
+      box-shadow: 0 10px 28px rgba(109, 40, 217, 0.10);
+    }
+
+    .repo-file-summary {
+      list-style: none;
+      cursor: pointer;
+      padding: 16px;
+      position: relative;
+      background: linear-gradient(180deg, #ffffff 0%, #fcfcff 100%);
+    }
+
+    .repo-file-summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .repo-file-summary:hover .repo-file-hint {
+      color: #5b21b6;
     }
 
     .repo-file-top {
@@ -403,13 +648,192 @@
     }
 
     .repo-file-name {
-      font-weight: 700;
+      font-weight: 800;
       word-break: break-word;
+      font-size: 18px;
+      color: #111827;
     }
 
     .repo-file-meta {
       font-size: 14px;
       color: #6b7280;
+    }
+
+    .repo-file-summary-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-top: 12px;
+      flex-wrap: wrap;
+    }
+
+    .repo-file-hint {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 700;
+      color: #6b7280;
+      transition: color 0.18s ease;
+    }
+
+    .repo-file-chevron {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 26px;
+      border-radius: 999px;
+      background: #f5f3ff;
+      color: #5b21b6;
+      font-size: 13px;
+      font-weight: 700;
+      transition: transform 0.2s ease, background 0.2s ease;
+    }
+
+    details.repo-file-item[open] .repo-file-chevron {
+      transform: rotate(180deg);
+      background: #ede9fe;
+    }
+
+    .repo-file-content {
+      border-top: 1px solid #e9e5ff;
+      padding: 16px;
+      background: linear-gradient(180deg, #fcfcfd 0%, #faf9ff 100%);
+    }
+
+    .repo-section-label {
+      font-weight: 700;
+      display: block;
+      margin-top: 12px;
+      margin-bottom: 6px;
+    }
+
+    .finding-list {
+      margin-top: 0;
+      margin-bottom: 0;
+      padding-left: 20px;
+    }
+
+    .finding-list li {
+      margin-bottom: 14px;
+      line-height: 1.5;
+    }
+
+    .finding-explanation {
+      display: block;
+      margin-top: 6px;
+      color: #6b7280;
+      font-size: 14px;
+    }
+
+    .finding-line {
+      font-weight: 700;
+      color: #111827;
+    }
+
+    .finding-top {
+      display: inline-flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .scan-callout {
+      margin-top: 14px;
+      padding: 14px;
+      border-radius: 12px;
+      border: 1px solid #e5e7eb;
+      background: #ffffff;
+    }
+
+    .scan-callout strong {
+      display: block;
+      margin-bottom: 6px;
+    }
+
+    .expanded-findings {
+      margin-top: 18px;
+    }
+
+    .expanded-finding-item {
+      background: white;
+      border: 1px solid #e5e7eb;
+      border-radius: 14px;
+      margin-bottom: 12px;
+      overflow: hidden;
+    }
+
+    .expanded-finding-item[open] {
+      border-color: #c4b5fd;
+      box-shadow: 0 8px 20px rgba(109, 40, 217, 0.08);
+    }
+
+    .expanded-finding-summary {
+      list-style: none;
+      cursor: pointer;
+      padding: 14px 16px;
+      background: linear-gradient(180deg, #ffffff 0%, #fcfcff 100%);
+    }
+
+    .expanded-finding-summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .expanded-finding-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }
+
+    .expanded-finding-title {
+      font-weight: 800;
+      color: #111827;
+      line-height: 1.4;
+    }
+
+    .expanded-finding-meta {
+      margin-top: 6px;
+      color: #6b7280;
+      font-size: 13px;
+    }
+
+    .expanded-finding-content {
+      padding: 16px;
+      border-top: 1px solid #ede9fe;
+      background: #faf9ff;
+    }
+
+    .guidance-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-top: 6px;
+    }
+
+    .guidance-card {
+      background: white;
+      border: 1px solid #e5e7eb;
+      border-radius: 12px;
+      padding: 12px;
+    }
+
+    .guidance-card h4 {
+      margin: 0 0 6px 0;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #6b7280;
+    }
+
+    .guidance-card p {
+      margin: 0;
+      font-size: 14px;
+      line-height: 1.55;
+      color: #111827;
     }
 
     .export-row {
@@ -442,15 +866,29 @@
 
     .code-viewer {
       margin-top: 20px;
+      display: none;
+    }
+
+    .code-block-card {
+      margin-top: 14px;
       background: #111827;
       color: #f9fafb;
       padding: 16px;
-      border-radius: 10px;
+      border-radius: 12px;
       overflow-x: auto;
       font-family: monospace;
       font-size: 14px;
       line-height: 1.6;
-      display: none;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .code-block-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: #c7d2fe;
+      margin-bottom: 10px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
     }
 
     .code-line {
@@ -464,9 +902,38 @@
 
     .line-number {
       display: inline-block;
-      width: 40px;
+      width: 54px;
       color: #9ca3af;
       user-select: none;
+    }
+
+    .code-viewer-hint {
+      margin-top: 4px;
+      margin-bottom: 10px;
+      color: #6b7280;
+      font-size: 14px;
+    }
+
+    .upload-row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-top: 8px;
+      margin-bottom: 20px;
+    }
+
+    .upload-row input[type="file"] {
+      margin: 0;
+      flex: 1;
+      min-width: 240px;
+    }
+
+    .upload-status {
+      margin-top: -10px;
+      margin-bottom: 16px;
+      font-size: 14px;
+      color: #6b7280;
     }
 
     .limit-box,
@@ -488,6 +955,56 @@
       color: #991b1b;
     }
 
+
+    .badge-snippet-box {
+      background: #f8fafc;
+      border: 1px solid #e5e7eb;
+      border-radius: 14px;
+      padding: 16px;
+      margin-top: 18px;
+    }
+
+    .badge-preview {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 14px;
+    }
+
+    .badge-preview img {
+      max-width: 100%;
+      height: auto;
+      border-radius: 8px;
+    }
+
+    .snippet-label {
+      display: block;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #6b7280;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+
+    .snippet-input {
+      width: 100%;
+      min-height: 76px;
+      resize: vertical;
+      margin-top: 0;
+      margin-bottom: 14px;
+      padding: 12px;
+      font-size: 13px;
+      line-height: 1.5;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      background: #111827;
+      color: #f9fafb;
+      border: 1px solid #1f2937;
+      border-radius: 10px;
+      box-sizing: border-box;
+    }
+
     .plan-note {
       background: #f5f3ff;
       border: 1px solid #ddd6fe;
@@ -498,6 +1015,46 @@
       margin-bottom: 20px;
       font-size: 14px;
       line-height: 1.5;
+    }
+
+    @media (max-width: 720px) {
+      .container {
+        padding: 30px 18px 28px;
+        border-radius: 0;
+      }
+
+      .topbar {
+        padding: 14px 18px 0;
+      }
+
+      .topbar-inner {
+        gap: 12px;
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .hero-logo img {
+        width: 260px;
+      }
+
+      .overview-grid,
+      .guidance-grid,
+      .auth-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .auth-panel-top {
+        flex-direction: column;
+      }
+
+      .auth-status-box {
+        width: 100%;
+      }
+
+      .upload-row {
+        flex-direction: column;
+        align-items: stretch;
+      }
     }
 
     @media print {
@@ -514,15 +1071,22 @@
       #intent,
       #code,
       #fileUpload,
+      #clearUploadedFileBtn,
+      #repoIntent,
       #repoUrl,
+      #uploadStatus,
       label[for="intent"],
       label[for="code"],
       label[for="fileUpload"],
+      label[for="repoIntent"],
       label[for="repoUrl"],
       button,
       .footer,
       .nav,
-      .export-row {
+      .export-row,
+      .repo-file-hint,
+      .auth-panel,
+      #authMessage {
         display: none !important;
       }
 
@@ -544,7 +1108,7 @@
         display: block !important;
       }
 
-      .code-viewer {
+      .code-block-card {
         background: white !important;
         color: black !important;
         border: 1px solid #ddd !important;
@@ -557,6 +1121,21 @@
 
       .flagged-line {
         background: #fde2e2 !important;
+      }
+
+      details.repo-file-item,
+      details.expanded-finding-item {
+        box-shadow: none !important;
+        transform: none !important;
+      }
+
+      details.repo-file-item .repo-file-content,
+      details.expanded-finding-item .expanded-finding-content {
+        display: block !important;
+      }
+
+      .touch-chip {
+        border-color: #d1d5db !important;
       }
     }
   </style>
@@ -573,6 +1152,13 @@
       <div class="nav">
         <a href="#how-it-works">How it Works</a>
         <a href="#pricing">Pricing</a>
+        <div class="auth-shell">
+          <div class="account-pill">
+            <span id="accountDot" class="account-dot"></span>
+            <span id="accountStatusText">Not signed in</span>
+          </div>
+          <button type="button" id="topbarLogoutBtn" class="secondary-btn" onclick="signOutUser()" style="display:none;">Log Out</button>
+        </div>
       </div>
     </div>
   </div>
@@ -583,8 +1169,45 @@
     </div>
 
     <p class="subtitle">
-      Detect suspicious behavior, exposed secrets, and risky repo patterns before you trust AI-generated code.
+      Detect suspicious behavior, exposed secrets, risky deserialization, hidden execution paths, dangerous repo patterns, and vulnerable dependencies before you trust AI-generated code.
     </p>
+
+    <div class="auth-panel" id="accountPanel">
+      <div class="auth-panel-top">
+        <div>
+          <h3 class="auth-title">Account</h3>
+          <p class="auth-copy">Create an account or log in so your app can start showing signed-in state cleanly now and support paid plans later.</p>
+        </div>
+        <div class="auth-status-box">
+          <div class="account-pill" style="width: 100%; box-sizing: border-box;">
+            <span id="panelAccountDot" class="account-dot"></span>
+            <span id="panelAccountStatusText">Not signed in</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="auth-grid">
+        <div class="auth-field">
+          <label for="authEmail">Email</label>
+          <input id="authEmail" type="email" placeholder="you@example.com" autocomplete="email" />
+        </div>
+        <div class="auth-field">
+          <label for="authPassword">Password</label>
+          <input id="authPassword" type="password" placeholder="Choose a password" autocomplete="current-password" />
+        </div>
+        <div class="auth-actions">
+          <button type="button" onclick="signUpUser()">Sign Up</button>
+          <button type="button" class="secondary-btn" onclick="signInUser()">Log In</button>
+          <button type="button" class="secondary-btn" id="panelLogoutBtn" onclick="signOutUser()" style="display:none;">Log Out</button>
+        </div>
+      </div>
+
+      <div id="authMessage" class="auth-message"></div>
+
+      <div class="privacy-note">
+        By default, raw code is not stored. Only scan results and metadata are saved unless you choose otherwise.
+      </div>
+    </div>
 
     <div class="how-to" id="how-it-works">
       <strong>How it works:</strong>
@@ -611,6 +1234,7 @@
         <button type="button" class="example-btn" onclick="loadSafeExample()">🟢 Safe Example</button>
         <button type="button" class="example-btn" onclick="loadSuspiciousExample()">🟡 Suspicious Example</button>
         <button type="button" class="example-btn" onclick="loadSecretExample()">🔴 Secret Leak Example</button>
+        <button type="button" class="example-btn" onclick="loadEncodedExecutionExample()">🧩 Hidden Execution Example</button>
       </div>
 
       <label for="intent">What was the AI code supposed to do?</label>
@@ -620,7 +1244,11 @@
       <textarea id="code" placeholder="Paste code here..."></textarea>
 
       <label for="fileUpload">Or upload a code file</label>
-      <input type="file" id="fileUpload" accept=".py,.js,.ts,.go,.java,.rb,.php,.cs,.cpp,.c,.rs,.sh,.txt" />
+      <div class="upload-row">
+        <input type="file" id="fileUpload" accept=".py,.js,.ts,.go,.java,.rb,.php,.cs,.cpp,.c,.rs,.sh,.txt,.html,.css,.json,.yaml,.yml,.xml" />
+        <button type="button" class="secondary-btn" id="clearUploadedFileBtn" onclick="clearUploadedFile()">Remove File</button>
+      </div>
+      <div id="uploadStatus" class="upload-status">No file selected.</div>
 
       <div class="button-row">
         <button type="button" onclick="scanCode()">Verify AI Code</button>
@@ -630,7 +1258,7 @@
     <div class="section-card" id="repoScanCard" style="display: none;">
       <h3 class="section-title">Scan a GitHub repository</h3>
       <p class="section-subtitle">
-        Paste a public GitHub repo URL to scan supported files and generate a repo-level trust score and badge.
+        Paste a public GitHub repo URL to scan supported files and dependency manifests, then generate a repo-level trust score and badge.
       </p>
 
       <label for="repoIntent">What was this repo supposed to do?</label>
@@ -645,7 +1273,7 @@
     </div>
 
     <div class="plan-note" id="pricing">
-      <strong>Free plan:</strong> single-file scans, repo scans, trust scores, and PDF exports.<br>
+      <strong>Free plan:</strong> single-file scans, repo scans, dependency vulnerability checks for requirements.txt, package.json, Cargo.toml, and go.mod, trust scores, and PDF exports.<br>
       <strong>Pro plan idea:</strong> larger repos, more files scanned, saved history, and advanced analysis.
     </div>
 
@@ -668,7 +1296,146 @@
     </div>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script>
+    const SUPABASE_URL = "https://ohabowduaydfaauqadqt.supabase.co";
+    const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_bIeAp9FiLmcvdJ4Y_epivg_B8Ua7mja";
+
+    const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+
+    function setAuthMessage(message, type = "") {
+      const authMessage = document.getElementById("authMessage");
+      if (!authMessage) return;
+      authMessage.className = `auth-message${type ? ` ${type}` : ""}`;
+      authMessage.textContent = message || "";
+    }
+
+    function updateAuthUi(user) {
+      const email = user && user.email ? user.email : null;
+      const loggedIn = Boolean(email);
+
+      const statusText = loggedIn ? `Signed in as ${email}` : "Not signed in";
+
+      const topbarStatus = document.getElementById("accountStatusText");
+      const panelStatus = document.getElementById("panelAccountStatusText");
+      const topbarDot = document.getElementById("accountDot");
+      const panelDot = document.getElementById("panelAccountDot");
+      const topbarLogoutBtn = document.getElementById("topbarLogoutBtn");
+      const panelLogoutBtn = document.getElementById("panelLogoutBtn");
+      const authEmail = document.getElementById("authEmail");
+      const authPassword = document.getElementById("authPassword");
+
+      if (topbarStatus) topbarStatus.textContent = statusText;
+      if (panelStatus) panelStatus.textContent = statusText;
+
+      [topbarDot, panelDot].forEach(dot => {
+        if (!dot) return;
+        dot.classList.toggle("logged-in", loggedIn);
+      });
+
+      if (topbarLogoutBtn) topbarLogoutBtn.style.display = loggedIn ? "inline-flex" : "none";
+      if (panelLogoutBtn) panelLogoutBtn.style.display = loggedIn ? "inline-flex" : "none";
+
+      if (authEmail) authEmail.disabled = loggedIn;
+      if (authPassword) authPassword.disabled = loggedIn;
+
+      if (loggedIn && authEmail) authEmail.value = email;
+      if (loggedIn && authPassword) authPassword.value = "";
+    }
+
+    async function loadCurrentSession() {
+      const { data, error } = await supabaseClient.auth.getSession();
+      if (error) {
+        setAuthMessage(error.message || "Could not load session.", "error");
+        updateAuthUi(null);
+        return;
+      }
+      updateAuthUi(data && data.session ? data.session.user : null);
+    }
+
+    async function signUpUser() {
+      const email = document.getElementById("authEmail").value.trim();
+      const password = document.getElementById("authPassword").value;
+
+      if (!email || !password) {
+        setAuthMessage("Enter your email and password first.", "error");
+        return;
+      }
+
+      setAuthMessage("Creating account...");
+
+      const { data, error } = await supabaseClient.auth.signUp({
+        email,
+        password,
+      });
+
+      if (error) {
+        setAuthMessage(error.message || "Could not create account.", "error");
+        return;
+      }
+
+      const needsEmailConfirmation = !data.session;
+      updateAuthUi(data.user || null);
+      setAuthMessage(
+        needsEmailConfirmation
+          ? "Account created. Check your email and confirm your address, then come back and log in."
+          : "Account created and signed in.",
+        "success"
+      );
+    }
+
+    async function signInUser() {
+      const email = document.getElementById("authEmail").value.trim();
+      const password = document.getElementById("authPassword").value;
+
+      if (!email || !password) {
+        setAuthMessage("Enter your email and password first.", "error");
+        return;
+      }
+
+      setAuthMessage("Signing in...");
+
+      const { data, error } = await supabaseClient.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (error) {
+        setAuthMessage(error.message || "Could not sign in.", "error");
+        return;
+      }
+
+      updateAuthUi(data.user || null);
+      setAuthMessage("Logged in successfully.", "success");
+    }
+
+    async function signOutUser() {
+      const { error } = await supabaseClient.auth.signOut();
+
+      if (error) {
+        setAuthMessage(error.message || "Could not log out.", "error");
+        return;
+      }
+
+      const authEmail = document.getElementById("authEmail");
+      const authPassword = document.getElementById("authPassword");
+      if (authEmail) authEmail.value = "";
+      if (authPassword) authPassword.value = "";
+      updateAuthUi(null);
+      setAuthMessage("Logged out.", "success");
+    }
+
+    document.addEventListener("DOMContentLoaded", async () => {
+      await loadCurrentSession();
+
+      supabaseClient.auth.onAuthStateChange((_event, session) => {
+        updateAuthUi(session ? session.user : null);
+      });
+    });
+
+    let repoDetailsStateBeforePrint = [];
+    let findingDetailsStateBeforePrint = [];
+
     if ("scrollRestoration" in history) {
       history.scrollRestoration = "manual";
     }
@@ -677,6 +1444,12 @@
       window.scrollTo(0, 0);
       setTimeout(() => window.scrollTo(0, 0), 10);
       setScanMode("code");
+      setupFileInputWatcher();
+      updateUploadStatus();
+    });
+
+    window.addEventListener("afterprint", function () {
+      restoreExpandedDetailsAfterPrint();
     });
 
     function setScanMode(mode) {
@@ -698,12 +1471,74 @@
       }
     }
 
+    function setupFileInputWatcher() {
+      const fileInput = document.getElementById("fileUpload");
+      if (!fileInput) return;
+
+      fileInput.addEventListener("change", updateUploadStatus);
+    }
+
+    function updateUploadStatus() {
+      const fileInput = document.getElementById("fileUpload");
+      const uploadStatus = document.getElementById("uploadStatus");
+
+      if (!fileInput || !uploadStatus) return;
+
+      if (fileInput.files && fileInput.files.length > 0) {
+        uploadStatus.textContent = `Selected file: ${fileInput.files[0].name}`;
+      } else {
+        uploadStatus.textContent = "No file selected.";
+      }
+    }
+
+    function clearUploadedFile() {
+      const fileInput = document.getElementById("fileUpload");
+      if (!fileInput) return;
+
+      fileInput.value = "";
+      updateUploadStatus();
+    }
+
+    function expandAllRepoDetailsForPrint() {
+      const repoDetails = Array.from(document.querySelectorAll("details.repo-file-item"));
+      repoDetailsStateBeforePrint = repoDetails.map(item => item.open);
+      repoDetails.forEach(item => {
+        item.open = true;
+      });
+    }
+
+    function expandAllFindingDetailsForPrint() {
+      const findingDetails = Array.from(document.querySelectorAll("details.expanded-finding-item"));
+      findingDetailsStateBeforePrint = findingDetails.map(item => item.open);
+      findingDetails.forEach(item => {
+        item.open = true;
+      });
+    }
+
+    function restoreExpandedDetailsAfterPrint() {
+      const repoDetails = Array.from(document.querySelectorAll("details.repo-file-item"));
+      repoDetails.forEach((item, index) => {
+        item.open = Boolean(repoDetailsStateBeforePrint[index]);
+      });
+      repoDetailsStateBeforePrint = [];
+
+      const findingDetails = Array.from(document.querySelectorAll("details.expanded-finding-item"));
+      findingDetails.forEach((item, index) => {
+        item.open = Boolean(findingDetailsStateBeforePrint[index]);
+      });
+      findingDetailsStateBeforePrint = [];
+    }
+
     function exportReportAsPDF() {
-      window.print();
+      expandAllRepoDetailsForPrint();
+      expandAllFindingDetailsForPrint();
+      setTimeout(() => {
+        window.print();
+      }, 80);
     }
 
     function escapeHtml(text) {
-      return text
+      return String(text)
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;");
@@ -735,13 +1570,59 @@
       return "Looks relatively safe based on this scan.";
     }
 
+    function severityClass(severity) {
+      if (severity >= 20) return "mini-high";
+      if (severity >= 8) return "mini-review";
+      return "mini-safe";
+    }
+
+    function severityText(severity) {
+      if (severity >= 20) return "HIGH";
+      if (severity >= 8) return "MED";
+      return "LOW";
+    }
+
+    function touchMetaFor(name) {
+      const map = {
+        "network": { icon: "🌐", label: "Network" },
+        "files": { icon: "📁", label: "Files" },
+        "system execution": { icon: "💻", label: "System Execution" },
+        "dynamic imports": { icon: "🧩", label: "Dynamic Imports" },
+        "deserialization": { icon: "📦", label: "Deserialization" },
+        "obfuscation": { icon: "🎭", label: "Obfuscation" },
+        "secrets": { icon: "🔐", label: "Secrets" },
+        "dependencies": { icon: "📚", label: "Dependency Risk" }
+      };
+      return map[name] || { icon: "•", label: name };
+    }
+
+    function renderTouchChips(touches) {
+      if (!touches || !touches.length) {
+        return `<div class="touch-chip-row"><span class="touch-chip"><span class="touch-icon">✅</span><span>No notable behavior categories detected</span></span></div>`;
+      }
+
+      return `
+        <div class="touch-chip-row">
+          ${touches.map(item => {
+            const meta = touchMetaFor(item);
+            return `
+              <span class="touch-chip">
+                <span class="touch-icon">${meta.icon}</span>
+                <span>${escapeHtml(meta.label)}</span>
+              </span>
+            `;
+          }).join("")}
+        </div>
+      `;
+    }
+
     function loadSafeExample() {
       document.getElementById("intent").value = "make a simple calculator";
       document.getElementById("code").value = `def add(a, b):
     return a + b
 
 print(add(2, 3))`;
-      document.getElementById("fileUpload").value = "";
+      clearUploadedFile();
       setScanMode("code");
     }
 
@@ -754,7 +1635,7 @@ def add(a, b):
 
 os.system("echo suspicious command")
 print(add(2, 3))`;
-      document.getElementById("fileUpload").value = "";
+      clearUploadedFile();
       setScanMode("code");
     }
 
@@ -768,7 +1649,18 @@ def show_status():
 
 os.system("echo using secret")
 print(show_status())`;
-      document.getElementById("fileUpload").value = "";
+      clearUploadedFile();
+      setScanMode("code");
+    }
+
+    function loadEncodedExecutionExample() {
+      document.getElementById("intent").value = "decode a harmless string";
+      document.getElementById("code").value = `import base64
+
+payload = "cHJpbnQoImhpIik="
+decoded = base64.b64decode(payload).decode()
+exec(decoded)`;
+      clearUploadedFile();
       setScanMode("code");
     }
 
@@ -802,6 +1694,383 @@ print(show_status())`;
           </div>
           <div class="badge-sub">${subtitle}</div>
         </div>
+      `;
+    }
+
+    function renderOverviewCards(data, typeLabel, options = {}) {
+      const findingsCount = Array.isArray(data.flags) ? data.flags.length : 0;
+      const mismatchCount = Array.isArray(data.intent_mismatches) ? data.intent_mismatches.length : 0;
+      const behaviorCount = Array.isArray(data.touches) ? data.touches.length : 0;
+
+      return `
+        <div class="overview-grid">
+          <div class="overview-card">
+            <div class="overview-label">${typeLabel}</div>
+            <div class="overview-value">${escapeHtml(riskBadgeText(data.risk))}</div>
+          </div>
+          <div class="overview-card">
+            <div class="overview-label">Findings</div>
+            <div class="overview-value">${options.findingsCountOverride ?? findingsCount}</div>
+          </div>
+          <div class="overview-card">
+            <div class="overview-label">Intent Mismatches</div>
+            <div class="overview-value">${options.mismatchCountOverride ?? mismatchCount}</div>
+          </div>
+          <div class="overview-card">
+            <div class="overview-label">Behavior Categories</div>
+            <div class="overview-value">${behaviorCount}</div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderFindings(flags) {
+      if (!flags || !flags.length) {
+        return "<li>No flags</li>";
+      }
+
+      return flags.map(flag => `
+        <li>
+          <div class="finding-top">
+            <span class="finding-line">Line ${flag.line}:</span>
+            <span>${escapeHtml(flag.message)}</span>
+            <span class="mini-badge ${severityClass(Number(flag.severity || 0))}">${severityText(Number(flag.severity || 0))}</span>
+          </div>
+          ${flag.explanation ? `<span class="finding-explanation">${escapeHtml(flag.explanation)}</span>` : ""}
+        </li>
+      `).join("");
+    }
+
+    function renderExpandedFindingCards(flags, sectionTitle = "Detailed Finding Guidance") {
+      if (!flags || !flags.length) {
+        return "";
+      }
+
+      return `
+        <div class="expanded-findings">
+          <h3 style="margin-top:0;">${escapeHtml(sectionTitle)}</h3>
+          ${flags.map(flag => `
+            <details class="expanded-finding-item">
+              <summary class="expanded-finding-summary">
+                <div class="expanded-finding-head">
+                  <div>
+                    <div class="expanded-finding-title">
+                      Line ${flag.line}: ${escapeHtml(flag.message)}
+                      <span class="mini-badge ${severityClass(Number(flag.severity || 0))}">${severityText(Number(flag.severity || 0))}</span>
+                    </div>
+                    <div class="expanded-finding-meta">
+                      Pattern: ${escapeHtml(flag.pattern || "unknown")}
+                    </div>
+                  </div>
+                  <span class="repo-file-chevron">⌄</span>
+                </div>
+              </summary>
+              <div class="expanded-finding-content">
+                ${flag.explanation ? `
+                  <div class="guidance-card" style="margin-bottom: 12px;">
+                    <h4>Plain-English Explanation</h4>
+                    <p>${escapeHtml(flag.explanation)}</p>
+                  </div>
+                ` : ""}
+
+                <div class="guidance-grid">
+                  <div class="guidance-card">
+                    <h4>Why This Can Be Risky</h4>
+                    <p>${escapeHtml(flag.why_risky || "Review this behavior carefully in context.")}</p>
+                  </div>
+
+                  <div class="guidance-card">
+                    <h4>What To Check</h4>
+                    <p>${escapeHtml(flag.what_to_check || "Inspect the surrounding code and the values reaching this behavior.")}</p>
+                  </div>
+
+                  <div class="guidance-card">
+                    <h4>When It May Be Legitimate</h4>
+                    <p>${escapeHtml(flag.when_legitimate || "This may be acceptable if the behavior is intentional and the inputs are tightly controlled.")}</p>
+                  </div>
+
+                  <div class="guidance-card">
+                    <h4>Suggested Fix</h4>
+                    <p>${escapeHtml(flag.suggested_fix || "Prefer the safest practical implementation and document intentional risk clearly.")}</p>
+                  </div>
+                </div>
+              </div>
+            </details>
+          `).join("")}
+        </div>
+      `;
+    }
+
+    function dependencySeverityClass(label) {
+      const normalized = String(label || "").toUpperCase();
+      if (normalized === "CRITICAL" || normalized === "HIGH") return "mini-high";
+      if (normalized === "MEDIUM" || normalized === "MODERATE" || normalized === "UNKNOWN") return "mini-review";
+      return "mini-safe";
+    }
+
+    function renderDependencySummary(summary) {
+      if (!summary) return "";
+
+      const lines = Array.isArray(summary.summary_lines) ? summary.summary_lines : [];
+
+      return `
+        <div class="behavior-box">
+          <h3>Dependency Vulnerability Scan</h3>
+          <div class="overview-grid">
+            <div class="overview-card">
+              <div class="overview-label">Manifest Files</div>
+              <div class="overview-value">${summary.manifests_scanned ?? 0}</div>
+            </div>
+            <div class="overview-card">
+              <div class="overview-label">Dependencies Parsed</div>
+              <div class="overview-value">${summary.dependencies_parsed ?? 0}</div>
+            </div>
+            <div class="overview-card">
+              <div class="overview-label">Dependencies Queried</div>
+              <div class="overview-value">${summary.dependencies_queried ?? 0}</div>
+            </div>
+            <div class="overview-card">
+              <div class="overview-label">Vulnerabilities Found</div>
+              <div class="overview-value">${summary.vulnerabilities_found ?? 0}</div>
+            </div>
+          </div>
+
+          ${
+            lines.length
+              ? `
+                <ul class="finding-list">
+                  ${lines.map(item => `<li>${escapeHtml(item)}</li>`).join("")}
+                </ul>
+              `
+              : ""
+          }
+
+          ${
+            summary.scan_error
+              ? `<div class="error-box" style="margin-top:12px;">${escapeHtml(summary.scan_error)}</div>`
+              : ""
+          }
+        </div>
+      `;
+    }
+
+    function renderDependencyFindings(findings) {
+      if (!findings || !findings.length) {
+        return `
+          <div class="behavior-box">
+            <h3>Dependency Findings</h3>
+            <ul class="finding-list">
+              <li>No known dependency vulnerabilities were detected in the queried manifest versions.</li>
+            </ul>
+          </div>
+        `;
+      }
+
+      return `
+        <div class="expanded-findings">
+          <h3 style="margin-top:0;">Dependency Findings</h3>
+          ${findings.map(item => `
+            <details class="expanded-finding-item">
+              <summary class="expanded-finding-summary">
+                <div class="expanded-finding-head">
+                  <div>
+                    <div class="expanded-finding-title">
+                      ${escapeHtml(item.package)} ${escapeHtml(item.declared_version || item.version || "")}
+                      <span class="mini-badge ${dependencySeverityClass(item.severity_label)}">${escapeHtml(item.severity_label || "UNKNOWN")}</span>
+                    </div>
+                    <div class="expanded-finding-meta">
+                      ${escapeHtml(item.file || "manifest")} • ${escapeHtml(item.id || "OSV record")}
+                      ${item.aliases && item.aliases.length ? ` • ${escapeHtml(item.aliases.join(", "))}` : ""}
+                    </div>
+                  </div>
+                  <span class="repo-file-chevron">⌄</span>
+                </div>
+              </summary>
+
+              <div class="expanded-finding-content">
+                <div class="guidance-card" style="margin-bottom: 12px;">
+                  <h4>Plain-English Explanation</h4>
+                  <p>${escapeHtml(item.explanation || "Known vulnerability record returned for this dependency.")}</p>
+                </div>
+
+                <div class="guidance-card" style="margin-bottom: 12px;">
+                  <h4>Package Details</h4>
+                  <p>
+                    <strong>Package:</strong> ${escapeHtml(item.package || "")}<br>
+                    <strong>Ecosystem:</strong> ${escapeHtml(item.ecosystem || "")}<br>
+                    <strong>Declared Version:</strong> ${escapeHtml(item.declared_version || item.version || "")}<br>
+                    <strong>Queried Version:</strong> ${escapeHtml(item.version || "")}<br>
+                    <strong>Manifest:</strong> ${escapeHtml(item.file || "")}
+                    ${item.dependency_section ? `<br><strong>Section:</strong> ${escapeHtml(item.dependency_section)}` : ""}
+                    ${item.fixed_versions && item.fixed_versions.length ? `<br><strong>Fixed Versions Seen:</strong> ${escapeHtml(item.fixed_versions.join(", "))}` : ""}
+                  </p>
+                </div>
+
+                <div class="guidance-grid">
+                  <div class="guidance-card">
+                    <h4>Why This Can Be Risky</h4>
+                    <p>${escapeHtml(item.why_risky || "This dependency should be reviewed.")}</p>
+                  </div>
+
+                  <div class="guidance-card">
+                    <h4>What To Check</h4>
+                    <p>${escapeHtml(item.what_to_check || "Confirm the installed version and whether a fixed version is available.")}</p>
+                  </div>
+
+                  <div class="guidance-card">
+                    <h4>When It May Be Legitimate</h4>
+                    <p>${escapeHtml(item.when_legitimate || "The shipped version may differ from the declared manifest version.")}</p>
+                  </div>
+
+                  <div class="guidance-card">
+                    <h4>Suggested Fix</h4>
+                    <p>${escapeHtml(item.suggested_fix || "Upgrade or pin to a fixed version where practical.")}</p>
+                  </div>
+                </div>
+              </div>
+            </details>
+          `).join("")}
+        </div>
+      `;
+    }
+
+    function renderSkippedDependencyNotes(items) {
+      if (!items || !items.length) return "";
+
+      return `
+        <div class="behavior-box">
+          <h3>Skipped Dependency Entries</h3>
+          <ul class="finding-list">
+            ${items.map(item => `
+              <li>
+                <strong>${escapeHtml(item.file || "manifest")}</strong>
+                ${item.raw ? ` — ${escapeHtml(item.raw)}` : ""}
+                <span class="finding-explanation">${escapeHtml(item.reason || "Skipped during dependency parsing.")}</span>
+              </li>
+            `).join("")}
+          </ul>
+        </div>
+      `;
+    }
+
+    function renderFocusedCodeBlocks(blocks, title = "Flagged Code Sections") {
+      if (!blocks || !blocks.length) {
+        return "";
+      }
+
+      return `
+        <div>
+          <h3 style="margin-bottom:8px;">${escapeHtml(title)}</h3>
+          <div class="code-viewer-hint">Showing only the code regions around flagged lines for faster review.</div>
+          ${blocks.map(block => `
+            <div class="code-block-card">
+              <div class="code-block-title">Lines ${block.start_line}–${block.end_line}</div>
+              ${block.lines.map(line => `
+                <span class="code-line ${line.flagged ? "flagged-line" : ""}">
+                  <span class="line-number">${line.line}</span>${escapeHtml(line.content)}
+                </span>
+              `).join("")}
+            </div>
+          `).join("")}
+        </div>
+      `;
+    }
+
+    function renderFullCodeFallback(code, flags) {
+      if (!code) return "";
+
+      const flaggedLines = new Set((flags || []).map(flag => flag.line));
+      const codeLines = code.split("\n");
+
+      return `
+        <div>
+          <h3 style="margin-bottom:8px;">Flagged Code Sections</h3>
+          <div class="code-viewer-hint">Focused sections were not available, so the full code is shown below.</div>
+          <div class="code-block-card">
+            <div class="code-block-title">Full File</div>
+            ${codeLines.map((line, index) => {
+              const lineNumber = index + 1;
+              const isFlagged = flaggedLines.has(lineNumber);
+              return `
+                <span class="code-line ${isFlagged ? "flagged-line" : ""}">
+                  <span class="line-number">${lineNumber}</span>${escapeHtml(line)}
+                </span>
+              `;
+            }).join("")}
+          </div>
+        </div>
+      `;
+    }
+
+    function renderCodeReviewArea(data) {
+      const blocks = Array.isArray(data.focused_code_blocks) ? data.focused_code_blocks : [];
+      if (blocks.length) {
+        return renderFocusedCodeBlocks(blocks, "Flagged Code Sections");
+      }
+      return renderFullCodeFallback(data.code, data.flags || []);
+    }
+
+    function renderRepoBadgeAssets(assets) {
+      if (!assets || !assets.badge_url) return "";
+
+      return `
+        <div class="badge-snippet-box">
+          <h3 style="margin-top:0;">Repo Badge Snippets</h3>
+          <p class="section-subtitle" style="margin-bottom: 14px;">Use this snapshot badge in a README, landing page, or internal docs to show the latest scan result for this repo.</p>
+
+          <div class="badge-preview">
+            <img src="${escapeHtml(assets.badge_url)}" alt="${escapeHtml(assets.alt_text || assets.label || 'Repo badge')}" />
+            <span class="risk-badge ${riskBadgeClass((assets.label || '').toLowerCase().includes('high risk') ? 'red' : (assets.label || '').toLowerCase().includes('safe') ? 'green' : 'yellow')}">Snapshot Badge</span>
+          </div>
+
+          <span class="snippet-label">Markdown</span>
+          <textarea class="snippet-input" readonly onclick="this.select()">${escapeHtml(assets.markdown || '')}</textarea>
+
+          <span class="snippet-label">HTML</span>
+          <textarea class="snippet-input" readonly onclick="this.select()">${escapeHtml(assets.html || '')}</textarea>
+
+          <span class="snippet-label">Image Only</span>
+          <textarea class="snippet-input" readonly onclick="this.select()">${escapeHtml(assets.image_markdown || '')}</textarea>
+
+          ${assets.snapshot_note ? `<div class="plan-note" style="margin: 0;">${escapeHtml(assets.snapshot_note)}</div>` : ''}
+        </div>
+      `;
+    }
+
+    function renderRepoFileDetails(file) {
+      const touches = file.touches && file.touches.length ? renderTouchChips(file.touches) : renderTouchChips([]);
+      const mismatchWarnings = file.intent_mismatches && file.intent_mismatches.length
+        ? file.intent_mismatches.map(item => `<li>${escapeHtml(item)}</li>`).join("")
+        : "<li>No intent mismatches</li>";
+
+      const behaviorSummary = file.behavior_summary && file.behavior_summary.length
+        ? file.behavior_summary.map(item => `<li>${escapeHtml(item)}</li>`).join("")
+        : "<li>No behavior summary available</li>";
+
+      return `
+        <span class="repo-section-label">Behavior Categories</span>
+        ${touches}
+
+        <span class="repo-section-label">Behavior Summary</span>
+        <ul class="finding-list">
+          ${behaviorSummary}
+        </ul>
+
+        <span class="repo-section-label">Security Findings</span>
+        <ul class="finding-list">
+          ${renderFindings(file.flags)}
+        </ul>
+
+        ${renderExpandedFindingCards(file.flags, "Detailed Finding Guidance")}
+
+        ${Array.isArray(file.focused_code_blocks) && file.focused_code_blocks.length
+          ? renderFocusedCodeBlocks(file.focused_code_blocks, "Flagged Code Sections")
+          : ""}
+
+        <span class="repo-section-label">Intent Mismatch Warnings</span>
+        <ul class="finding-list">
+          ${mismatchWarnings}
+        </ul>
       `;
     }
 
@@ -852,7 +2121,7 @@ print(show_status())`;
           resultBox.innerHTML = `
             <div class="limit-box">
               <strong>Free plan limit reached</strong><br><br>
-              ${data.summary}
+              ${escapeHtml(data.summary)}
             </div>
           `;
           return;
@@ -863,6 +2132,17 @@ print(show_status())`;
         resultBox.innerHTML = `
           ${renderBadgeCard("Trust Badge", data.trust_badge, score, data.trust_badge.message)}
           ${renderTrustBox(score)}
+          ${renderOverviewCards(data, "Scan Risk")}
+
+          <div class="risk-row">
+            <span class="risk-label">Risk Assessment:</span>
+            <span class="risk-badge ${riskBadgeClass(data.risk)}">${riskBadgeText(data.risk)}</span>
+          </div>
+
+          <div class="behavior-box">
+            <h3>Behavior Categories</h3>
+            ${renderTouchChips(data.touches || [])}
+          </div>
 
           ${
             data.behavior_summary && data.behavior_summary.length
@@ -870,64 +2150,42 @@ print(show_status())`;
                 <div class="behavior-box">
                   <h3>Behavior Summary</h3>
                   <ul>
-                    ${data.behavior_summary.map(item => `<li>${item}</li>`).join("")}
+                    ${data.behavior_summary.map(item => `<li>${escapeHtml(item)}</li>`).join("")}
                   </ul>
                 </div>
               `
               : ""
           }
 
-          <div class="risk-row">
-            <span class="risk-label">Risk Assessment:</span>
-            <span class="risk-badge ${riskBadgeClass(data.risk)}">${riskBadgeText(data.risk)}</span>
-          </div>
-
-          <strong>Touches:</strong> ${data.touches.length ? data.touches.join(", ") : "None"}<br><br>
-
           <strong>Security Findings:</strong>
-          <ul>
-            ${
-              data.flags.length
-                ? data.flags.map(flag => `<li>Line ${flag.line}: ${flag.message}</li>`).join("")
-                : "<li>No flags</li>"
-            }
+          <ul class="finding-list">
+            ${renderFindings(data.flags)}
           </ul>
 
+          ${renderExpandedFindingCards(data.flags, "Detailed Finding Guidance")}
+
           <strong>Intent Mismatch Warnings:</strong>
-          <ul>
+          <ul class="finding-list">
             ${
-              data.intent_mismatches.length
-                ? data.intent_mismatches.map(item => `<li>${item}</li>`).join("")
+              data.intent_mismatches && data.intent_mismatches.length
+                ? data.intent_mismatches.map(item => `<li>${escapeHtml(item)}</li>`).join("")
                 : "<li>No intent mismatches</li>"
             }
           </ul>
 
-          <strong>Summary:</strong> ${data.summary}
+          <div class="scan-callout">
+            <strong>Summary</strong>
+            <span>${escapeHtml(data.summary)}</span>
+          </div>
         `;
 
         exportRow.style.display = "block";
 
-        if (data.code) {
-          const flaggedLines = new Set(data.flags.map(flag => flag.line));
-          const codeLines = data.code.split("\n");
-
-          codeViewer.innerHTML = codeLines.map((line, index) => {
-            const lineNumber = index + 1;
-            const isFlagged = flaggedLines.has(lineNumber);
-            const safeLine = escapeHtml(line);
-
-            return `
-              <span class="code-line ${isFlagged ? "flagged-line" : ""}">
-                <span class="line-number">${lineNumber}</span>${safeLine}
-              </span>
-            `;
-          }).join("");
-
-          codeViewer.style.display = "block";
-        }
+        codeViewer.innerHTML = renderCodeReviewArea(data);
+        codeViewer.style.display = codeViewer.innerHTML.trim() ? "block" : "none";
 
       } catch (error) {
-        resultBox.innerHTML = `<div class="error-box">Error: ${error}</div>`;
+        resultBox.innerHTML = `<div class="error-box">Error: ${escapeHtml(error && error.message ? error.message : String(error))}</div>`;
         codeViewer.style.display = "none";
         exportRow.style.display = "none";
       }
@@ -971,39 +2229,67 @@ print(show_status())`;
         });
 
         if (data.error) {
-          resultBox.innerHTML = `<div class="error-box">${data.error}</div>`;
+          resultBox.innerHTML = `<div class="error-box">${escapeHtml(data.error)}</div>`;
           return;
         }
 
-        const topFiles = (data.files || [])
+        const allFiles = Array.isArray(data.files) ? data.files : [];
+        const topFiles = allFiles
           .slice()
           .sort((a, b) => {
             const aPoints = typeof a.weighted_risk_points === "number" ? a.weighted_risk_points : 0;
             const bPoints = typeof b.weighted_risk_points === "number" ? b.weighted_risk_points : 0;
 
             if (bPoints !== aPoints) return bPoints - aPoints;
-            return a.trust_score - b.trust_score;
+            return (a.trust_score ?? 100) - (b.trust_score ?? 100);
           })
           .slice(0, 10);
+
+        const totalRepoFindings =
+          allFiles.reduce((sum, file) => {
+            return sum + ((file.flags && file.flags.length) ? file.flags.length : 0);
+          }, 0) + ((data.dependency_findings && data.dependency_findings.length) ? data.dependency_findings.length : 0);
+
+        const totalRepoMismatches = allFiles.reduce((sum, file) => {
+          return sum + ((file.intent_mismatches && file.intent_mismatches.length) ? file.intent_mismatches.length : 0);
+        }, 0);
 
         resultBox.innerHTML = `
           ${renderBadgeCard(
             "Repo Trust Badge",
             data.trust_badge,
             data.trust_score,
-            `${data.repo_name} • ${data.trust_badge.message}`
+            `${escapeHtml(data.repo_name)} • ${escapeHtml(data.trust_badge.message)}`
           )}
 
           ${renderTrustBox(data.trust_score)}
+          ${renderOverviewCards(
+            {
+              risk: data.risk,
+              flags: [],
+              intent_mismatches: [],
+              touches: data.touches || []
+            },
+            "Repo Risk",
+            {
+              findingsCountOverride: totalRepoFindings,
+              mismatchCountOverride: totalRepoMismatches
+            }
+          )}
 
           <div class="risk-row">
             <span class="risk-label">Repo Risk Assessment:</span>
             <span class="risk-badge ${riskBadgeClass(data.risk)}">${riskBadgeText(data.risk)}</span>
           </div>
 
-          <strong>Repository:</strong> ${data.repo_name}<br><br>
+          <strong>Repository:</strong> ${escapeHtml(data.repo_name)}<br><br>
           <strong>Files scanned:</strong> ${data.files_scanned_count} / ${data.files_scanned_limit}<br><br>
-          <strong>Touches:</strong> ${data.touches.length ? data.touches.join(", ") : "None"}<br><br>
+          <strong>Highest file risk:</strong> <span class="risk-badge ${riskBadgeClass(data.highest_file_risk)}">${riskBadgeText(data.highest_file_risk)}</span>
+
+          <div class="behavior-box" style="margin-top:18px;">
+            <h3>Repo Behavior Categories</h3>
+            ${renderTouchChips(data.touches || [])}
+          </div>
 
           ${
             data.behavior_summary && data.behavior_summary.length
@@ -1011,29 +2297,49 @@ print(show_status())`;
                 <div class="behavior-box">
                   <h3>Repo Behavior Summary</h3>
                   <ul>
-                    ${data.behavior_summary.map(item => `<li>${item}</li>`).join("")}
+                    ${data.behavior_summary.map(item => `<li>${escapeHtml(item)}</li>`).join("")}
                   </ul>
                 </div>
               `
               : ""
           }
 
-          <strong>Summary:</strong> ${data.summary}
+          ${renderDependencySummary(data.dependency_summary)}
+          ${renderDependencyFindings(data.dependency_findings || [])}
+          ${renderSkippedDependencyNotes(data.dependency_skipped || [])}
+          ${renderRepoBadgeAssets(data.repo_badge_assets)}
+
+          <div class="scan-callout">
+            <strong>Summary</strong>
+            <span>${escapeHtml(data.summary)}</span>
+          </div>
 
           <div class="repo-file-list">
             <h3 style="margin-top:0;">Top flagged files</h3>
+            <div class="repo-list-hint">Click any file card below to view detailed findings, explanations, behavior notes, and flagged code sections.</div>
             ${
               topFiles.length
                 ? topFiles.map(file => `
-                  <div class="repo-file-item">
-                    <div class="repo-file-top">
-                      <div class="repo-file-name">${file.file}</div>
-                      <span class="risk-badge ${riskBadgeClass(file.risk)}">${riskBadgeText(file.risk)}</span>
+                  <details class="repo-file-item">
+                    <summary class="repo-file-summary">
+                      <div class="repo-file-top">
+                        <div class="repo-file-name">${escapeHtml(file.file)}</div>
+                        <span class="risk-badge ${riskBadgeClass(file.risk)}">${riskBadgeText(file.risk)}</span>
+                      </div>
+                      <div class="repo-file-meta">Trust Score: ${file.trust_score} / 100</div>
+                      <div class="repo-file-meta">Weighted Risk Points: ${file.weighted_risk_points ?? 0}</div>
+                      <div class="repo-file-meta" style="margin-top:6px;">${escapeHtml(file.summary)}</div>
+                      <div class="repo-file-summary-footer">
+                        <span class="repo-file-hint">
+                          <span class="repo-file-chevron">⌄</span>
+                          <span>Click to view details</span>
+                        </span>
+                      </div>
+                    </summary>
+                    <div class="repo-file-content">
+                      ${renderRepoFileDetails(file)}
                     </div>
-                    <div class="repo-file-meta">Trust Score: ${file.trust_score} / 100</div>
-                    <div class="repo-file-meta">Weighted Risk Points: ${file.weighted_risk_points ?? 0}</div>
-                    <div class="repo-file-meta" style="margin-top:6px;">${file.summary}</div>
-                  </div>
+                  </details>
                 `).join("")
                 : "<p>No files were scanned.</p>"
             }
@@ -1043,7 +2349,7 @@ print(show_status())`;
         exportRow.style.display = "block";
 
       } catch (error) {
-        resultBox.innerHTML = `<div class="error-box">Error: ${error}</div>`;
+        resultBox.innerHTML = `<div class="error-box">Error: ${escapeHtml(error && error.message ? error.message : String(error))}</div>`;
         codeViewer.style.display = "none";
         exportRow.style.display = "none";
       }
