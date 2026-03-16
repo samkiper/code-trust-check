@@ -1081,25 +1081,318 @@
 
 
     .badge-snippet-box {
-      background: #f8fafc;
+      background: linear-gradient(180deg, #fffdf8 0%, #f8fafc 100%);
       border: 1px solid #e5e7eb;
-      border-radius: 14px;
-      padding: 16px;
+      border-radius: 18px;
+      padding: 20px;
       margin-top: 18px;
+      box-shadow: 0 10px 28px rgba(17, 24, 39, 0.06);
     }
 
     .badge-preview {
       display: flex;
       align-items: center;
-      gap: 12px;
+      justify-content: space-between;
+      gap: 16px;
       flex-wrap: wrap;
-      margin-bottom: 14px;
+      margin: 16px 0 14px;
+      padding: 16px;
+      border-radius: 16px;
+      background: white;
+      border: 1px solid #eceff3;
+    }
+
+    .badge-preview-main {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      flex: 1 1 320px;
+    }
+
+    .badge-preview-label {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #6b7280;
+      font-weight: 800;
     }
 
     .badge-preview img {
       max-width: 100%;
-      height: auto;
+      width: auto;
+      height: 36px;
       border-radius: 8px;
+      box-shadow: 0 6px 16px rgba(17, 24, 39, 0.08);
+    }
+
+    .badge-preview-help {
+      margin: 0;
+      color: #4b5563;
+      font-size: 14px;
+      line-height: 1.5;
+      max-width: 540px;
+    }
+
+    .badge-preview-side {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      flex: 0 0 auto;
+    }
+
+    
+    .badge-preview-brand {
+      display: inline-flex;
+      align-items: stretch;
+      justify-content: center;
+      margin: 14px auto 0;
+      border-radius: 18px;
+      overflow: hidden;
+      border: 1px solid rgba(98, 76, 188, 0.10);
+      box-shadow:
+        0 12px 28px rgba(17, 24, 39, 0.10),
+        0 0 0 4px rgba(124, 58, 237, 0.04);
+      background: #ffffff;
+      transition: transform 0.18s ease, box-shadow 0.18s ease;
+    }
+
+    .badge-preview-brand:hover {
+      transform: translateY(-1px);
+      box-shadow:
+        0 16px 34px rgba(17, 24, 39, 0.12),
+        0 0 0 6px rgba(124, 58, 237, 0.06);
+    }
+
+    .badge-preview-brand-left {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 22px 0 20px;
+      background: linear-gradient(180deg, #ffffff 0%, #faf8ff 100%);
+      white-space: nowrap;
+      flex-shrink: 0;
+      height: 84px;
+      border-right: 1px solid rgba(98, 76, 188, 0.08);
+    }
+
+    .badge-preview-brand-left img {
+      width: 420px;
+      height: 58px;
+      object-fit: contain;
+      display: block;
+      flex-shrink: 0;
+    }
+
+    .badge-preview-brand-right {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 154px;
+      padding: 0 26px;
+      color: #ffffff;
+      font-size: 1.75rem;
+      font-weight: 800;
+      line-height: 1;
+      letter-spacing: -0.02em;
+      text-shadow: 0 1px 1px rgba(0,0,0,0.12);
+      white-space: nowrap;
+      flex-shrink: 0;
+      height: 84px;
+    }
+
+    .badge-preview-brand-right.badge-risk-green {
+      background: linear-gradient(180deg, #22c55e 0%, #16a34a 100%);
+    }
+
+    .badge-preview-brand-right.badge-risk-yellow {
+      background: linear-gradient(180deg, #e0b62f 0%, #cda316 100%);
+    }
+
+    .badge-preview-brand-right.badge-risk-red {
+      background: linear-gradient(180deg, #ef4444 0%, #dc2626 100%);
+    }
+
+    @media (max-width: 900px) {
+      .badge-preview-brand-left {
+        height: 72px;
+        padding: 0 18px 0 16px;
+      }
+
+      .badge-preview-brand-left img {
+        width: 320px;
+        height: 46px;
+      }
+
+      .badge-preview-brand-right {
+        min-width: 126px;
+        height: 72px;
+        padding: 0 20px;
+        font-size: 1.35rem;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .badge-preview-brand-left {
+        height: 58px;
+        padding: 0 14px 0 12px;
+      }
+
+      .badge-preview-brand-left img {
+        width: 210px;
+        height: 34px;
+      }
+
+      .badge-preview-brand-right {
+        min-width: 92px;
+        height: 58px;
+        padding: 0 14px;
+        font-size: 1rem;
+      }
+    }
+
+
+    .primary-copy-button {
+      appearance: none;
+      border: none;
+      background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+      color: white;
+      border-radius: 12px;
+      padding: 10px 18px;
+      font-size: 14px;
+      font-weight: 800;
+      cursor: pointer;
+      box-shadow: 0 10px 20px rgba(217, 119, 6, 0.18);
+      transition: transform 0.16s ease, box-shadow 0.16s ease, filter 0.16s ease;
+    }
+
+    .primary-copy-button:hover {
+      transform: translateY(-1px);
+      filter: brightness(1.02);
+      box-shadow: 0 12px 22px rgba(217, 119, 6, 0.28);
+    }
+
+    .primary-copy-button:active {
+      transform: translateY(0);
+    }
+
+    .badge-howto {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin: 14px 0 18px;
+    }
+
+    .badge-howto-step {
+      background: #ffffff;
+      border: 1px solid #eceff3;
+      border-radius: 14px;
+      padding: 12px;
+    }
+
+    .badge-howto-step-number {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      border-radius: 999px;
+      background: #fef3c7;
+      color: #92400e;
+      font-weight: 800;
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
+
+    .badge-howto-step p {
+      margin: 0;
+      color: #4b5563;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .badge-advanced-details {
+      margin-top: 8px;
+      border: 1px solid #eceff3;
+      border-radius: 14px;
+      background: #ffffff;
+      overflow: hidden;
+    }
+
+    .badge-advanced-details summary {
+      cursor: pointer;
+      list-style: none;
+      padding: 14px 16px;
+      font-weight: 700;
+      color: #111827;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .badge-advanced-details summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .badge-advanced-title-wrap {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .badge-advanced-chevron {
+      width: 32px;
+      height: 32px;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(240, 144, 0, 0.10);
+      border: 1px solid rgba(240, 144, 0, 0.22);
+      color: #b45309;
+      font-size: 20px;
+      font-weight: 800;
+      line-height: 1;
+      transition: transform 0.18s ease, background 0.18s ease, border-color 0.18s ease;
+      flex-shrink: 0;
+    }
+
+    .badge-advanced-details[open] .badge-advanced-chevron {
+      transform: rotate(90deg);
+      background: rgba(240, 144, 0, 0.16);
+      border-color: rgba(240, 144, 0, 0.34);
+    }
+
+    .badge-advanced-summary-text {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      line-height: 1.2;
+    }
+
+    .badge-advanced-summary-text strong {
+      font-size: 16px;
+      color: #111827;
+    }
+
+    .badge-advanced-summary-text span {
+      font-size: 12px;
+      color: #6b7280;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+
+    .badge-advanced-toggle-hint {
+      color: #6b7280;
+      font-weight: 700;
+      font-size: 14px;
+      white-space: nowrap;
+    }
+
+    .badge-advanced-content {
+      padding: 0 16px 16px;
     }
 
     .snippet-label {
@@ -1109,7 +1402,7 @@
       letter-spacing: 0.08em;
       color: #6b7280;
       font-weight: 700;
-      margin-bottom: 6px;
+      margin: 12px 0 6px;
     }
 
     .snippet-input {
@@ -1117,14 +1410,14 @@
       min-height: 76px;
       resize: vertical;
       margin-top: 0;
-      margin-bottom: 14px;
+      margin-bottom: 10px;
       padding: 12px;
       font-size: 13px;
       line-height: 1.5;
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-      background: #111827;
-      color: #f9fafb;
-      border: 1px solid #1f2937;
+      background: #0f172a;
+      color: #f8fafc;
+      border: 1px solid #1e293b;
       border-radius: 10px;
       box-sizing: border-box;
     }
@@ -1185,6 +1478,18 @@
       .upload-row {
         flex-direction: column;
         align-items: stretch;
+      }
+
+      .badge-howto {
+        grid-template-columns: 1fr;
+      }
+
+      .badge-preview {
+        align-items: flex-start;
+      }
+
+      .badge-preview-side {
+        justify-content: flex-start;
       }
     }
 
@@ -1270,6 +1575,45 @@
         border-color: #d1d5db !important;
       }
     }
+  
+    .copy-action-row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin: 8px 0 4px;
+    }
+
+    .copy-action-button {
+      appearance: none;
+      border: 1px solid #d1d5db;
+      background: #ffffff;
+      color: #111827;
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-size: 0.92rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 0.16s ease, background 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+      box-shadow: 0 4px 12px rgba(17, 24, 39, 0.05);
+    }
+
+    .copy-action-button:hover {
+      background: #f9fafb;
+      border-color: #cbd5e1;
+      transform: translateY(-1px);
+      box-shadow: 0 6px 16px rgba(17, 24, 39, 0.08);
+    }
+
+    .copy-action-button:active {
+      transform: translateY(0);
+    }
+
+    .copy-status-note {
+      margin-top: 12px;
+      color: #6b7280;
+      font-size: 0.9rem;
+    }
+
   </style>
 </head>
 
@@ -2251,6 +2595,88 @@ exec(decoded)`;
       `;
     }
 
+    async function copySnippetValue(value, successMessage = "Copied to clipboard.") {
+      if (!value) {
+        return;
+      }
+
+      try {
+        await navigator.clipboard.writeText(value);
+        alert(successMessage);
+      } catch (error) {
+        const fallback = document.createElement("textarea");
+        fallback.value = value;
+        document.body.appendChild(fallback);
+        fallback.select();
+        document.execCommand("copy");
+        document.body.removeChild(fallback);
+        alert(successMessage);
+      }
+    }
+
+    function renderReadmeBadgeTools(readmeBadge) {
+      if (!readmeBadge || !readmeBadge.badge_markdown) return "";
+
+      const markdown = JSON.stringify(readmeBadge.badge_markdown || "");
+      const html = JSON.stringify(readmeBadge.badge_html || "");
+      const imageUrl = JSON.stringify(readmeBadge.badge_image_url || "");
+      const badgeUrl = String(readmeBadge.badge_image_url || "");
+      const scoreMatch = badgeUrl.match(/Audit-(\d+)%2F100/i);
+      const safeTrustScore = scoreMatch ? Number(scoreMatch[1]) : 0;
+      const badgeRiskClass = safeTrustScore >= 75 ? "badge-risk-green" : (safeTrustScore >= 60 ? "badge-risk-yellow" : "badge-risk-red");
+
+      return `
+        <div class="badge-snippet-box">
+          <h3 style="margin-top:0; margin-bottom:8px;">Repo Badge</h3>
+          <p class="section-subtitle" style="margin-bottom: 14px;">For GitHub repo scans only. Copy the Markdown and paste it into your repository README.md to show your latest AI Code Audit score.</p>
+
+          <div class="badge-preview" style="display:block; text-align:center;">
+            <div class="badge-preview-main" style="max-width:none;">
+              <span class="badge-preview-label">Badge preview</span>
+              <div class="badge-preview-brand" aria-label="AI Code Audit README badge preview">
+                <div class="badge-preview-brand-left">
+                  <img src="/static/logo.png" alt="AI Code Audit logo" />
+                </div>
+                <div class="badge-preview-brand-right ${badgeRiskClass}">${escapeHtml(String(safeTrustScore) + "/100")}</div>
+              </div>
+              <div style="margin-top: 14px; display:flex; justify-content:center;">
+                <button class="primary-copy-button" onclick='copySnippetValue(${markdown}, "README markdown copied. Paste it into your GitHub README.")'>Copy README Markdown</button>
+              </div>
+              <p style="margin: 14px 0 0; color:#6b7280; font-size:0.98rem;">Copy Markdown → open <strong>README.md</strong> → paste it where you want the badge → commit the change.</p>
+            </div>
+          </div>
+
+          <details class="badge-advanced-details" style="margin-top:16px;">
+            <summary>
+              <span class="badge-advanced-title-wrap">
+                <span class="badge-advanced-chevron">›</span>
+                <span class="badge-advanced-summary-text">
+                  <strong>Advanced badge options</strong>
+                  <span>HTML, Image URL, and raw code snippets</span>
+                </span>
+              </span>
+              
+            </summary>
+            <div class="badge-advanced-content">
+              <div class="copy-action-row">
+                <button class="copy-action-button" onclick='copySnippetValue(${html}, "README HTML copied.")'>Copy HTML</button>
+                <button class="copy-action-button" onclick='copySnippetValue(${imageUrl}, "Badge image URL copied.")'>Copy Image URL</button>
+              </div>
+
+              <span class="snippet-label">Markdown</span>
+              <textarea class="snippet-input" readonly onclick="this.select()">${escapeHtml(readmeBadge.badge_markdown || "")}</textarea>
+
+              <span class="snippet-label">HTML</span>
+              <textarea class="snippet-input" readonly onclick="this.select()">${escapeHtml(readmeBadge.badge_html || "")}</textarea>
+
+              <span class="snippet-label">Image URL</span>
+              <textarea class="snippet-input" readonly onclick="this.select()">${escapeHtml(readmeBadge.badge_image_url || "")}</textarea>
+            </div>
+          </details>
+        </div>
+      `;
+    }
+
     function renderCodeReviewArea(data) {
       const blocks = Array.isArray(data.focused_code_blocks) ? data.focused_code_blocks : [];
       if (blocks.length) {
@@ -2564,6 +2990,7 @@ exec(decoded)`;
           ${renderDependencySummary(data.dependency_summary)}
           ${renderDependencyFindings(data.dependency_findings || [])}
           ${renderSkippedDependencyNotes(data.dependency_skipped || [])}
+          ${renderReadmeBadgeTools(data.readme_badge)}
           ${renderRepoBadgeAssets(data.repo_badge_assets)}
 
           <div class="scan-callout">

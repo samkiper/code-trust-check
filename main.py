@@ -12,8 +12,11 @@ import urllib.request
 import ssl
 import certifi
 import hashlib
+from dotenv import load_dotenv
 from datetime import date
 from urllib.parse import urlparse, quote, urlencode
+
+load_dotenv()
 
 app = FastAPI()
 
@@ -239,14 +242,23 @@ def get_request_access_context(request: Request) -> dict:
         "role": "user",
         "plan": "free",
         "limits": get_plan_limits("free"),
+        "debug": {
+            "has_supabase_url": bool(SUPABASE_URL),
+            "has_supabase_secret_key": bool(SUPABASE_SECRET_KEY),
+            "has_bearer_token": False,
+            "user_fetch_succeeded": False,
+        },
     }
 
     access_token = get_bearer_token(request)
+    access["debug"]["has_bearer_token"] = bool(access_token)
+
     user = fetch_supabase_user(access_token)
 
     if not user:
         return access
 
+    access["debug"]["user_fetch_succeeded"] = True
     app_metadata = user.get("app_metadata") or {}
     role = str(app_metadata.get("role") or "user").lower()
     plan = str(app_metadata.get("plan") or ("admin" if role == "admin" else "free")).lower()
@@ -486,6 +498,31 @@ def parse_github_repo(repo_url: str) -> tuple[str, str]:
     repo = parts[1].replace(".git", "")
     return owner, repo
 
+def generate_readme_badge(repo_name, score, risk):
+    if score >= 90:
+        color = "brightgreen"
+    elif score >= 75:
+        color = "green"
+    elif score >= 60:
+        color = "yellow"
+    elif score >= 40:
+        color = "orange"
+    else:
+        color = "red"
+
+    badge_image = f"https://img.shields.io/badge/AI%20Code%20Audit-{score}%2F100-{color}"
+
+    repo_link = f"https://ai-code-audit.com/report/{repo_name}"
+
+    markdown = f"[![AI Code Audit]({badge_image})]({repo_link})"
+
+    html = f"<a href='{repo_link}'><img src='{badge_image}'/></a>"
+
+    return {
+        "badge_image_url": badge_image,
+        "badge_markdown": markdown,
+        "badge_html": html
+    }
 
 def download_repo_zip(owner: str, repo: str) -> bytes:
     urls = [
@@ -2319,12 +2356,16 @@ def scan_repo(req: RepoScanRequest, request: Request):
     trust_score = calculate_trust_score_from_points(normalized_repo_points)
     trust_badge = build_trust_badge(trust_score, overall_risk)
 
+    repo_name = f"{owner}/{repo}"
+    readme_badge = generate_readme_badge(repo_name, trust_score, overall_risk)
+
     return {
         "repo_url": req.repo_url,
-        "repo_name": f"{owner}/{repo}",
+        "repo_name": repo_name,
         "risk": overall_risk,
         "trust_score": trust_score,
         "trust_badge": trust_badge,
+        "readme_badge": readme_badge,
         "files_scanned_count": len(files_scanned),
         "files_scanned_limit": repo_file_limit if repo_file_limit is not None else "Unlimited",
         "touches": sorted(list(all_touches)),
