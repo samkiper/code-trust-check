@@ -56,14 +56,8 @@
       gap: 22px;
     }
 
-    .nav a {
-      color: #6b7280;
-      text-decoration: none;
-      font-size: 14px;
-    }
-
-    .nav a:hover {
-      color: #5b21b6;
+    .nav-compact {
+      margin-left: auto;
     }
 
     .container {
@@ -169,6 +163,35 @@
 
     .auth-status-box {
       min-width: 240px;
+    }
+
+    .auth-form-wrap {
+      display: block;
+    }
+
+    .signed-in-panel {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 16px;
+      border-radius: 14px;
+      background: #f8fafc;
+      border: 1px solid #e5e7eb;
+      margin-bottom: 4px;
+    }
+
+    .signed-in-copy {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      color: #374151;
+      font-size: 14px;
+    }
+
+    .signed-in-copy strong {
+      color: #111827;
+      font-size: 15px;
     }
 
     .auth-grid {
@@ -1047,6 +1070,11 @@
         flex-direction: column;
       }
 
+      .signed-in-panel {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
       .auth-status-box {
         width: 100%;
       }
@@ -1149,9 +1177,7 @@
         <span>Verify AI Code Before You Trust It</span>
       </div>
 
-      <div class="nav">
-        <a href="#how-it-works">How it Works</a>
-        <a href="#pricing">Pricing</a>
+      <div class="nav nav-compact">
         <div class="auth-shell">
           <div class="account-pill">
             <span id="accountDot" class="account-dot"></span>
@@ -1176,7 +1202,7 @@
       <div class="auth-panel-top">
         <div>
           <h3 class="auth-title">Account</h3>
-          <p class="auth-copy">Create an account or log in so your app can start showing signed-in state cleanly now and support paid plans later.</p>
+          <p class="auth-copy" id="authIntroCopy">Create an account or log in so your app can start showing signed-in state cleanly now and support paid plans later.</p>
         </div>
         <div class="auth-status-box">
           <div class="account-pill" style="width: 100%; box-sizing: border-box;">
@@ -1186,19 +1212,28 @@
         </div>
       </div>
 
-      <div class="auth-grid">
-        <div class="auth-field">
-          <label for="authEmail">Email</label>
-          <input id="authEmail" type="email" placeholder="you@example.com" autocomplete="email" />
+      <div id="signedInPanel" class="signed-in-panel" style="display:none;">
+        <div class="signed-in-copy">
+          <strong>You’re signed in and ready to scan.</strong>
+          <span>Your account is active on this device.</span>
         </div>
-        <div class="auth-field">
-          <label for="authPassword">Password</label>
-          <input id="authPassword" type="password" placeholder="Choose a password" autocomplete="current-password" />
-        </div>
-        <div class="auth-actions">
-          <button type="button" onclick="signUpUser()">Sign Up</button>
-          <button type="button" class="secondary-btn" onclick="signInUser()">Log In</button>
-          <button type="button" class="secondary-btn" id="panelLogoutBtn" onclick="signOutUser()" style="display:none;">Log Out</button>
+        <button type="button" class="secondary-btn" id="panelLogoutBtn" onclick="signOutUser()" style="display:none;">Log Out</button>
+      </div>
+
+      <div id="authFormWrap" class="auth-form-wrap">
+        <div class="auth-grid">
+          <div class="auth-field">
+            <label for="authEmail">Email</label>
+            <input id="authEmail" type="email" placeholder="you@example.com" autocomplete="email" />
+          </div>
+          <div class="auth-field">
+            <label for="authPassword">Password</label>
+            <input id="authPassword" type="password" placeholder="Choose a password" autocomplete="current-password" />
+          </div>
+          <div class="auth-actions">
+            <button type="button" onclick="signUpUser()">Sign Up</button>
+            <button type="button" class="secondary-btn" onclick="signInUser()">Log In</button>
+          </div>
         </div>
       </div>
 
@@ -1324,6 +1359,9 @@
       const panelLogoutBtn = document.getElementById("panelLogoutBtn");
       const authEmail = document.getElementById("authEmail");
       const authPassword = document.getElementById("authPassword");
+      const authFormWrap = document.getElementById("authFormWrap");
+      const signedInPanel = document.getElementById("signedInPanel");
+      const authIntroCopy = document.getElementById("authIntroCopy");
 
       if (topbarStatus) topbarStatus.textContent = statusText;
       if (panelStatus) panelStatus.textContent = statusText;
@@ -1335,6 +1373,15 @@
 
       if (topbarLogoutBtn) topbarLogoutBtn.style.display = loggedIn ? "inline-flex" : "none";
       if (panelLogoutBtn) panelLogoutBtn.style.display = loggedIn ? "inline-flex" : "none";
+
+      if (authFormWrap) authFormWrap.style.display = loggedIn ? "none" : "block";
+      if (signedInPanel) signedInPanel.style.display = loggedIn ? "flex" : "none";
+
+      if (authIntroCopy) {
+        authIntroCopy.textContent = loggedIn
+          ? "Your account is connected. You can keep scanning or log out below."
+          : "Create an account or log in so your app can start showing signed-in state cleanly now and support paid plans later.";
+      }
 
       if (authEmail) authEmail.disabled = loggedIn;
       if (authPassword) authPassword.disabled = loggedIn;
