@@ -101,6 +101,7 @@
       gap: 12px;
       flex-wrap: wrap;
       justify-content: flex-end;
+      position: relative;
     }
 
     .account-pill {
@@ -116,6 +117,70 @@
       color: #374151;
     }
 
+    .account-pill-button {
+      cursor: pointer;
+      font: inherit;
+    }
+
+    .account-pill-button:hover {
+      background: #fafafa;
+    }
+
+    .account-chevron {
+      font-size: 12px;
+      color: #6b7280;
+      line-height: 1;
+    }
+
+    .account-dropdown {
+      position: absolute;
+      top: calc(100% + 10px);
+      right: 0;
+      width: 240px;
+      background: white;
+      border: 1px solid #e5e7eb;
+      border-radius: 14px;
+      box-shadow: 0 18px 40px rgba(17, 24, 39, 0.14);
+      padding: 8px;
+      z-index: 30;
+    }
+
+    .account-dropdown-item {
+      width: 100%;
+      border: none;
+      background: transparent;
+      color: #111827;
+      text-align: left;
+      padding: 12px 12px;
+      border-radius: 10px;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 2px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: none;
+      transform: none;
+    }
+
+    .account-dropdown-item:hover {
+      background: #f8f7ff;
+      color: #5b21b6;
+      transform: none;
+    }
+
+    .account-dropdown-item.danger {
+      color: #b91c1c;
+    }
+
+    .account-dropdown-meta {
+      font-size: 12px;
+      font-weight: 500;
+      color: #6b7280;
+      word-break: break-word;
+    }
+
     .account-dot {
       width: 10px;
       height: 10px;
@@ -127,65 +192,68 @@
     .account-dot.logged-in {
       background: #10b981;
     }
+    .auth-modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.48);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      z-index: 120;
+    }
 
-    .auth-panel {
-      background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+    .auth-modal {
+      width: 100%;
+      max-width: 440px;
+      background: white;
+      border-radius: 20px;
       border: 1px solid #e5e7eb;
-      border-radius: 16px;
-      padding: 18px;
-      margin-bottom: 22px;
-      box-shadow: 0 12px 28px rgba(15, 23, 42, 0.05);
+      box-shadow: 0 24px 60px rgba(15, 23, 42, 0.22);
+      padding: 24px;
+      position: relative;
     }
 
-    .auth-panel-top {
-      display: block;
-      margin-bottom: 14px;
+    .auth-modal-close {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      width: 36px;
+      height: 36px;
+      border-radius: 999px;
+      border: 1px solid #e5e7eb;
+      background: white;
+      color: #6b7280;
+      font-size: 22px;
+      line-height: 1;
+      padding: 0;
+      box-shadow: none;
+      transform: none;
     }
 
-    .auth-title {
-      margin: 0;
-      font-size: 18px;
-      font-weight: 700;
+    .auth-modal-close:hover {
+      background: #f8fafc;
+      color: #111827;
+      transform: none;
+    }
+
+    .auth-modal-title {
+      margin: 0 0 8px;
+      font-size: 24px;
+      font-weight: 800;
       color: #111827;
     }
 
-    .auth-copy {
-      margin: 6px 0 0;
+    .auth-modal-copy {
+      margin: 0 0 18px;
       color: #6b7280;
       font-size: 14px;
       line-height: 1.5;
-      max-width: 620px;
     }
 
-    .auth-form-wrap {
-      display: block;
-    }
-
-    .auth-grid {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 12px;
-      align-items: end;
-    }
-
-    .auth-field {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-
-    .auth-field label {
-      margin: 0;
-      font-size: 13px;
-      font-weight: 600;
-      color: #374151;
-    }
-
-    .auth-actions {
-      display: flex;
-      gap: 10px;
-      flex-wrap: wrap;
-      align-items: center;
+    .modal-auth-actions {
+      margin-top: 6px;
+      justify-content: flex-start;
     }
 
     .auth-message {
@@ -201,6 +269,30 @@
 
     .auth-message.success {
       color: #047857;
+    }
+
+    .account-summary-card {
+      background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+      border: 1px solid #e5e7eb;
+      border-radius: 16px;
+      padding: 16px;
+      margin-bottom: 18px;
+    }
+
+    .account-summary-label {
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #6b7280;
+      margin-bottom: 8px;
+    }
+
+    .account-summary-email {
+      font-size: 18px;
+      font-weight: 700;
+      color: #111827;
+      word-break: break-word;
     }
 
     .privacy-note {
@@ -1070,22 +1162,16 @@
       }
 
       .overview-grid,
-      .guidance-grid,
-      .auth-grid {
+      .guidance-grid {
         grid-template-columns: 1fr;
       }
 
-      .auth-panel-top {
-        flex-direction: column;
+      .auth-modal {
+        padding: 20px 18px;
       }
 
-      .signed-in-panel {
-        flex-direction: column;
-        align-items: stretch;
-      }
-
-      .auth-status-box {
-        width: 100%;
+      .verify-row {
+        align-items: flex-start;
       }
 
       .verify-row {
@@ -1130,7 +1216,8 @@
       .nav,
       .export-row,
       .repo-file-hint,
-      .auth-panel,
+      #authModalOverlay,
+      #accountDropdown,
       #authMessage {
         display: none !important;
       }
@@ -1196,12 +1283,20 @@
 
       <div class="nav nav-compact">
         <div class="auth-shell">
-          <div class="account-pill">
+          <button type="button" id="accountMenuBtn" class="account-pill account-pill-button" onclick="toggleAccountDropdown()">
             <span id="accountDot" class="account-dot"></span>
             <span id="accountStatusText">Not signed in</span>
-          </div>
+            <span id="accountChevron" class="account-chevron" style="display:none;">⌄</span>
+          </button>
           <button type="button" id="topbarAuthBtn" class="secondary-btn" onclick="handleTopbarAuthAction()">Log In</button>
-          <button type="button" id="topbarLogoutBtn" class="secondary-btn" onclick="signOutUser()" style="display:none;">Log Out</button>
+
+          <div id="accountDropdown" class="account-dropdown" style="display:none;">
+            <button type="button" class="account-dropdown-item" onclick="openAccountModal()">
+              <span class="account-dropdown-label">Account</span>
+              <span id="dropdownAccountEmail" class="account-dropdown-meta"></span>
+            </button>
+            <button type="button" class="account-dropdown-item danger" onclick="signOutUser()">Log Out</button>
+          </div>
         </div>
       </div>
     </div>
@@ -1224,6 +1319,44 @@
         <li>Paste code, upload a file, or enter a public GitHub repo URL.</li>
         <li>Review the trust score, risk badge, and findings before running or using the code.</li>
       </ol>
+    </div>
+
+    <div id="authModalOverlay" class="auth-modal-overlay" style="display:none;" onclick="handleAuthOverlayClick(event)">
+      <div class="auth-modal" role="dialog" aria-modal="true" aria-labelledby="authModalTitle">
+        <button type="button" class="auth-modal-close" onclick="closeAuthModal()" aria-label="Close">×</button>
+        <div id="authModalSignedOut" class="auth-modal-view">
+          <h3 id="authModalTitle" class="auth-modal-title">Welcome back</h3>
+          <p class="auth-modal-copy">Log in or create an account to keep using AI Code Audit.</p>
+
+          <div class="auth-field">
+            <label for="authEmail">Email</label>
+            <input id="authEmail" type="email" placeholder="you@example.com" autocomplete="email" />
+          </div>
+          <div class="auth-field">
+            <label for="authPassword">Password</label>
+            <input id="authPassword" type="password" placeholder="Enter your password" autocomplete="current-password" />
+          </div>
+
+          <div class="auth-actions modal-auth-actions">
+            <button type="button" onclick="signInUser()">Log In</button>
+            <button type="button" class="secondary-btn" onclick="signUpUser()">Create Account</button>
+          </div>
+          <div id="authMessage" class="auth-message"></div>
+        </div>
+
+        <div id="authModalSignedIn" class="auth-modal-view" style="display:none;">
+          <h3 class="auth-modal-title">Account</h3>
+          <p class="auth-modal-copy">You’re signed in and ready to scan.</p>
+          <div class="account-summary-card">
+            <div class="account-summary-label">Signed in as</div>
+            <div id="accountModalEmail" class="account-summary-email"></div>
+          </div>
+          <div class="auth-actions modal-auth-actions">
+            <button type="button" class="secondary-btn" onclick="closeAuthModal()">Close</button>
+            <button type="button" onclick="signOutUser()">Log Out</button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div class="mode-toggle">
@@ -1318,56 +1451,105 @@
       authMessage.textContent = message || "";
     }
 
+    function openAuthModal() {
+      const overlay = document.getElementById("authModalOverlay");
+      const signedOutView = document.getElementById("authModalSignedOut");
+      const signedInView = document.getElementById("authModalSignedIn");
+      const email = document.getElementById("authEmail");
+      const isLoggedIn = document.getElementById("accountDot")?.classList.contains("logged-in");
+
+      if (overlay) overlay.style.display = "flex";
+      if (signedOutView) signedOutView.style.display = isLoggedIn ? "none" : "block";
+      if (signedInView) signedInView.style.display = isLoggedIn ? "block" : "none";
+      document.body.style.overflow = "hidden";
+      if (!isLoggedIn && email) setTimeout(() => email.focus(), 50);
+    }
+
+    function openAccountModal() {
+      closeAccountDropdown();
+      openAuthModal();
+    }
+
+    function closeAuthModal() {
+      const overlay = document.getElementById("authModalOverlay");
+      if (overlay) overlay.style.display = "none";
+      document.body.style.overflow = "";
+    }
+
+    function handleAuthOverlayClick(event) {
+      if (event.target && event.target.id === "authModalOverlay") {
+        closeAuthModal();
+      }
+    }
+
+    function toggleAccountDropdown() {
+      const dropdown = document.getElementById("accountDropdown");
+      const isLoggedIn = document.getElementById("accountDot")?.classList.contains("logged-in");
+      if (!isLoggedIn) return;
+      if (!dropdown) return;
+      dropdown.style.display = dropdown.style.display === "block" ? "none" : "block";
+    }
+
+    function closeAccountDropdown() {
+      const dropdown = document.getElementById("accountDropdown");
+      if (dropdown) dropdown.style.display = "none";
+    }
+
     function updateAuthUi(user) {
       const email = user && user.email ? user.email : null;
       const loggedIn = Boolean(email);
-
       const statusText = loggedIn ? `Signed in as ${email}` : "Not signed in";
 
       const topbarStatus = document.getElementById("accountStatusText");
       const topbarDot = document.getElementById("accountDot");
-      const topbarLogoutBtn = document.getElementById("topbarLogoutBtn");
       const topbarAuthBtn = document.getElementById("topbarAuthBtn");
+      const accountMenuBtn = document.getElementById("accountMenuBtn");
+      const accountChevron = document.getElementById("accountChevron");
+      const dropdownAccountEmail = document.getElementById("dropdownAccountEmail");
+      const accountModalEmail = document.getElementById("accountModalEmail");
+      const signedOutView = document.getElementById("authModalSignedOut");
+      const signedInView = document.getElementById("authModalSignedIn");
       const authEmail = document.getElementById("authEmail");
       const authPassword = document.getElementById("authPassword");
-      const authFormWrap = document.getElementById("authFormWrap");
-      const authIntroCopy = document.getElementById("authIntroCopy");
-      const accountPanel = document.getElementById("accountPanel");
 
       if (topbarStatus) topbarStatus.textContent = statusText;
+      if (dropdownAccountEmail) dropdownAccountEmail.textContent = email || "";
+      if (accountModalEmail) accountModalEmail.textContent = email || "";
 
       if (topbarDot) {
         topbarDot.classList.toggle("logged-in", loggedIn);
       }
 
-      if (topbarLogoutBtn) topbarLogoutBtn.style.display = loggedIn ? "inline-flex" : "none";
-      if (topbarAuthBtn) {
-        topbarAuthBtn.style.display = loggedIn ? "none" : "inline-flex";
-        topbarAuthBtn.textContent = "Log In";
+      if (accountMenuBtn) {
+        accountMenuBtn.disabled = !loggedIn;
+        accountMenuBtn.style.cursor = loggedIn ? "pointer" : "default";
       }
 
-      if (accountPanel) accountPanel.style.display = loggedIn ? "none" : "block";
-      if (authFormWrap) authFormWrap.style.display = loggedIn ? "none" : "block";
+      if (accountChevron) accountChevron.style.display = loggedIn ? "inline-flex" : "none";
+      if (topbarAuthBtn) topbarAuthBtn.style.display = loggedIn ? "none" : "inline-flex";
 
-      if (authIntroCopy) {
-        authIntroCopy.textContent = "Create an account or log in below. Once you’re signed in, your account status will stay in the top right so this page stays clean.";
+      if (!loggedIn) {
+        closeAccountDropdown();
       }
 
-      if (authEmail) authEmail.disabled = loggedIn;
-      if (authPassword) authPassword.disabled = loggedIn;
+      if (signedOutView && signedInView) {
+        signedOutView.style.display = loggedIn ? "none" : "block";
+        signedInView.style.display = loggedIn ? "block" : "none";
+      }
 
-      if (loggedIn && authEmail) authEmail.value = email;
-      if (loggedIn && authPassword) authPassword.value = "";
+      if (authEmail) {
+        authEmail.disabled = false;
+        authEmail.value = loggedIn ? email : authEmail.value;
+      }
+      if (authPassword) {
+        authPassword.disabled = false;
+        authPassword.value = "";
+      }
     }
 
 
     function handleTopbarAuthAction() {
-      const accountPanel = document.getElementById("accountPanel");
-      if (accountPanel && accountPanel.style.display !== "none") {
-        accountPanel.scrollIntoView({ behavior: "smooth", block: "center" });
-        const authEmail = document.getElementById("authEmail");
-        if (authEmail) setTimeout(() => authEmail.focus(), 250);
-      }
+      openAuthModal();
     }
 
     async function loadCurrentSession() {
@@ -1409,6 +1591,9 @@
           : "Account created and signed in.",
         "success"
       );
+      if (!needsEmailConfirmation) {
+        setTimeout(() => closeAuthModal(), 700);
+      }
     }
 
     async function signInUser() {
@@ -1434,6 +1619,7 @@
 
       updateAuthUi(data.user || null);
       setAuthMessage("Logged in successfully.", "success");
+      setTimeout(() => closeAuthModal(), 500);
     }
 
     async function signOutUser() {
@@ -1449,6 +1635,8 @@
       if (authEmail) authEmail.value = "";
       if (authPassword) authPassword.value = "";
       updateAuthUi(null);
+      closeAccountDropdown();
+      closeAuthModal();
       setAuthMessage("Logged out.", "success");
     }
 
@@ -1457,6 +1645,22 @@
 
       supabaseClient.auth.onAuthStateChange((_event, session) => {
         updateAuthUi(session ? session.user : null);
+      });
+
+      document.addEventListener("click", (event) => {
+        const dropdown = document.getElementById("accountDropdown");
+        const menuBtn = document.getElementById("accountMenuBtn");
+        if (!dropdown || !menuBtn) return;
+        if (!dropdown.contains(event.target) && !menuBtn.contains(event.target)) {
+          closeAccountDropdown();
+        }
+      });
+
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          closeAccountDropdown();
+          closeAuthModal();
+        }
       });
     });
 
