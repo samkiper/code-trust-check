@@ -138,11 +138,7 @@
     }
 
     .auth-panel-top {
-      display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
-      gap: 18px;
-      flex-wrap: wrap;
+      display: block;
       margin-bottom: 14px;
     }
 
@@ -161,37 +157,8 @@
       max-width: 620px;
     }
 
-    .auth-status-box {
-      min-width: 240px;
-    }
-
     .auth-form-wrap {
       display: block;
-    }
-
-    .signed-in-panel {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-      padding: 14px 16px;
-      border-radius: 14px;
-      background: #f8fafc;
-      border: 1px solid #e5e7eb;
-      margin-bottom: 4px;
-    }
-
-    .signed-in-copy {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-      color: #374151;
-      font-size: 14px;
-    }
-
-    .signed-in-copy strong {
-      color: #111827;
-      font-size: 15px;
     }
 
     .auth-grid {
@@ -237,7 +204,7 @@
     }
 
     .privacy-note {
-      margin-top: 12px;
+      margin: 0 0 22px;
       padding: 12px 14px;
       border-radius: 12px;
       background: #f5f3ff;
@@ -1183,6 +1150,7 @@
             <span id="accountDot" class="account-dot"></span>
             <span id="accountStatusText">Not signed in</span>
           </div>
+          <button type="button" id="topbarAuthBtn" class="secondary-btn" onclick="handleTopbarAuthAction()">Log In</button>
           <button type="button" id="topbarLogoutBtn" class="secondary-btn" onclick="signOutUser()" style="display:none;">Log Out</button>
         </div>
       </div>
@@ -1198,26 +1166,16 @@
       Detect suspicious behavior, exposed secrets, risky deserialization, hidden execution paths, dangerous repo patterns, and vulnerable dependencies before you trust AI-generated code.
     </p>
 
+    <div class="privacy-note">
+      By default, raw code is not stored. Only scan results and metadata are saved unless you choose otherwise.
+    </div>
+
     <div class="auth-panel" id="accountPanel">
       <div class="auth-panel-top">
         <div>
           <h3 class="auth-title">Account</h3>
-          <p class="auth-copy" id="authIntroCopy">Create an account or log in so your app can start showing signed-in state cleanly now and support paid plans later.</p>
+          <p class="auth-copy" id="authIntroCopy">Create an account or log in below. Once you’re signed in, your account status will stay in the top right so this page stays clean.</p>
         </div>
-        <div class="auth-status-box">
-          <div class="account-pill" style="width: 100%; box-sizing: border-box;">
-            <span id="panelAccountDot" class="account-dot"></span>
-            <span id="panelAccountStatusText">Not signed in</span>
-          </div>
-        </div>
-      </div>
-
-      <div id="signedInPanel" class="signed-in-panel" style="display:none;">
-        <div class="signed-in-copy">
-          <strong>You’re signed in and ready to scan.</strong>
-          <span>Your account is active on this device.</span>
-        </div>
-        <button type="button" class="secondary-btn" id="panelLogoutBtn" onclick="signOutUser()" style="display:none;">Log Out</button>
       </div>
 
       <div id="authFormWrap" class="auth-form-wrap">
@@ -1238,10 +1196,6 @@
       </div>
 
       <div id="authMessage" class="auth-message"></div>
-
-      <div class="privacy-note">
-        By default, raw code is not stored. Only scan results and metadata are saved unless you choose otherwise.
-      </div>
     </div>
 
     <div class="how-to" id="how-it-works">
@@ -1352,35 +1306,32 @@
       const statusText = loggedIn ? `Signed in as ${email}` : "Not signed in";
 
       const topbarStatus = document.getElementById("accountStatusText");
-      const panelStatus = document.getElementById("panelAccountStatusText");
       const topbarDot = document.getElementById("accountDot");
-      const panelDot = document.getElementById("panelAccountDot");
       const topbarLogoutBtn = document.getElementById("topbarLogoutBtn");
-      const panelLogoutBtn = document.getElementById("panelLogoutBtn");
+      const topbarAuthBtn = document.getElementById("topbarAuthBtn");
       const authEmail = document.getElementById("authEmail");
       const authPassword = document.getElementById("authPassword");
       const authFormWrap = document.getElementById("authFormWrap");
-      const signedInPanel = document.getElementById("signedInPanel");
       const authIntroCopy = document.getElementById("authIntroCopy");
+      const accountPanel = document.getElementById("accountPanel");
 
       if (topbarStatus) topbarStatus.textContent = statusText;
-      if (panelStatus) panelStatus.textContent = statusText;
 
-      [topbarDot, panelDot].forEach(dot => {
-        if (!dot) return;
-        dot.classList.toggle("logged-in", loggedIn);
-      });
+      if (topbarDot) {
+        topbarDot.classList.toggle("logged-in", loggedIn);
+      }
 
       if (topbarLogoutBtn) topbarLogoutBtn.style.display = loggedIn ? "inline-flex" : "none";
-      if (panelLogoutBtn) panelLogoutBtn.style.display = loggedIn ? "inline-flex" : "none";
+      if (topbarAuthBtn) {
+        topbarAuthBtn.style.display = loggedIn ? "none" : "inline-flex";
+        topbarAuthBtn.textContent = "Log In";
+      }
 
+      if (accountPanel) accountPanel.style.display = loggedIn ? "none" : "block";
       if (authFormWrap) authFormWrap.style.display = loggedIn ? "none" : "block";
-      if (signedInPanel) signedInPanel.style.display = loggedIn ? "flex" : "none";
 
       if (authIntroCopy) {
-        authIntroCopy.textContent = loggedIn
-          ? "Your account is connected. You can keep scanning or log out below."
-          : "Create an account or log in so your app can start showing signed-in state cleanly now and support paid plans later.";
+        authIntroCopy.textContent = "Create an account or log in below. Once you’re signed in, your account status will stay in the top right so this page stays clean.";
       }
 
       if (authEmail) authEmail.disabled = loggedIn;
@@ -1388,6 +1339,16 @@
 
       if (loggedIn && authEmail) authEmail.value = email;
       if (loggedIn && authPassword) authPassword.value = "";
+    }
+
+
+    function handleTopbarAuthAction() {
+      const accountPanel = document.getElementById("accountPanel");
+      if (accountPanel && accountPanel.style.display !== "none") {
+        accountPanel.scrollIntoView({ behavior: "smooth", block: "center" });
+        const authEmail = document.getElementById("authEmail");
+        if (authEmail) setTimeout(() => authEmail.focus(), 250);
+      }
     }
 
     async function loadCurrentSession() {
