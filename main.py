@@ -769,17 +769,12 @@ def build_scan_confidence(
         elif files_total > files_scanned_count:
             level = "Medium"
             lines.append("Only part of the repo could be analyzed.")
-        elif scan_error:
+        elif scan_error or dependency_summary.get("scan_error") or dependencies_skipped_count > 0:
             level = "Medium"
-        elif files_scanned_count >= 50 and dependencies_skipped_count == 0:
-            level = "High"
-            lines.append("Coverage was broad enough for a high-confidence repo result.")
-        elif files_scanned_count >= 15:
-            level = "Medium"
-            lines.append("Coverage was partial, so confidence is moderate.")
+            lines.append("Some dependency analysis was incomplete, so confidence is moderate.")
         else:
-            level = "Limited"
-            lines.append("Only a smaller portion of the repo was analyzed.")
+            level = "High"
+            lines.append("All supported files were analyzed.")
     else:
         code_line_count = int(code_line_count or 0)
         noun = "line" if code_line_count == 1 else "lines"
