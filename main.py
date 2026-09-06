@@ -27,6 +27,19 @@ app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
+@app.exception_handler(Exception)
+async def unhandled_application_error(request: Request, exc: Exception):
+    stage = str(getattr(request.state, "operation_stage", "processing the request"))
+    safe_stage = re.sub(r"[^a-zA-Z0-9 _-]", "", stage)[:80] or "processing the request"
+    error_type = type(exc).__name__
+    log_server_issue(f"Unhandled application error while {safe_stage}", exc)
+    return JSONResponse(
+        {"detail": f"The server hit a {error_type} while {safe_stage}."},
+        status_code=500,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 class ScanRequest(BaseModel):
     intent: str
     code: str
@@ -3105,9 +3118,11 @@ async def stripe_checkout_session_status(request: Request, session_id: str):
 
 @app.post("/stripe/reconcile-subscription")
 async def reconcile_stripe_subscription(request: Request):
+    request.state.operation_stage = "checking billing configuration"
     if not stripe_is_configured():
         raise HTTPException(status_code=503, detail="Stripe is not fully configured on the server yet.")
 
+    request.state.operation_stage = "verifying the signed-in account"
     access_token = await extract_request_access_token(request)
     access = get_request_access_context(request, access_token=access_token)
     access = enrich_access_with_admin_metadata(access)
@@ -3120,6 +3135,7 @@ async def reconcile_stripe_subscription(request: Request):
             detail="Your payment is safe, but the server cannot securely update your account. Replace SUPABASE_SECRET_KEY in Render with the current Supabase secret key, redeploy, then select Restore paid subscription.",
         )
 
+    request.state.operation_stage = "listing completed Stripe checkouts"
     try:
         checkout_sessions = stripe.checkout.Session.list(limit=100)
         session_records = list(getattr(checkout_sessions, "data", None) or checkout_sessions.get("data") or [])
@@ -3127,6 +3143,7 @@ async def reconcile_stripe_subscription(request: Request):
         log_server_issue("Could not list Stripe Checkout Sessions while restoring subscription", exc)
         raise HTTPException(status_code=502, detail="Stripe could not be reached to restore the subscription right now.") from exc
 
+    request.state.operation_stage = "matching the paid checkout to the account"
     paid_session = None
     expected_user_id = str(access["user_id"])
     expected_email = str(access["email"]).strip().lower()
@@ -3158,6 +3175,7 @@ async def reconcile_stripe_subscription(request: Request):
             detail="No completed paid checkout was found for this account. Confirm you are signed in with the same email used at checkout.",
         )
 
+    request.state.operation_stage = "reading the paid checkout identifiers"
     raw_subscription = paid_session.get("subscription")
     raw_customer = paid_session.get("customer")
     subscription_id = str(
@@ -3167,6 +3185,7 @@ async def reconcile_stripe_subscription(request: Request):
     status = "active"
     cancel_at_period_end = False
     current_period_end = None
+    request.state.operation_stage = "reading the Stripe subscription"
     try:
         subscription = stripe.Subscription.retrieve(subscription_id)
         status = str(subscription.get("status") or "active").lower()
@@ -3186,6 +3205,7 @@ async def reconcile_stripe_subscription(request: Request):
             detail="The checkout was paid, but the associated subscription is no longer active.",
         )
 
+    request.state.operation_stage = "updating the Supabase account to Pro"
     synced = sync_user_plan_from_subscription(
         str(access["user_id"]),
         plan=restored_plan,
@@ -3201,6 +3221,7 @@ async def reconcile_stripe_subscription(request: Request):
             detail="Stripe confirmed the paid subscription, but Supabase could not update the account. Replace SUPABASE_SECRET_KEY in Render, redeploy, then try Restore paid subscription again.",
         )
 
+    request.state.operation_stage = "building the refreshed Pro account"
     refreshed_access = build_authenticated_access_payload_for_user(str(access["user_id"]), request=request)
     return JSONResponse(
         {
@@ -3335,6 +3356,7 @@ def stripe_status():
         "has_webhook_secret": bool(STRIPE_WEBHOOK_SECRET),
         "supabase_admin_valid": supabase_admin_is_valid(),
         "app_base_url": APP_BASE_URL,
+        "recovery_version": 3,
     }
 
 
