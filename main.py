@@ -2674,6 +2674,28 @@ def stripe_is_configured() -> bool:
     return bool(STRIPE_SECRET_KEY and STRIPE_PRICE_ID)
 
 
+def stripe_object_value(value, key: str, default=None):
+    """Read a field from either a Stripe SDK object or a plain dictionary."""
+    if value is None:
+        return default
+    if isinstance(value, dict):
+        return value.get(key, default)
+    try:
+        return getattr(value, key)
+    except (AttributeError, TypeError):
+        try:
+            return value[key]
+        except (KeyError, IndexError, TypeError, AttributeError):
+            return default
+
+
+def stripe_reference_id(value) -> str:
+    if value is None:
+        return ""
+    reference_id = stripe_object_value(value, "id", value)
+    return str(reference_id or "").strip()
+
+
 def supabase_admin_is_valid() -> bool:
     if not SUPABASE_URL or not SUPABASE_SECRET_KEY:
         return False
@@ -3138,7 +3160,7 @@ async def reconcile_stripe_subscription(request: Request):
     request.state.operation_stage = "listing completed Stripe checkouts"
     try:
         checkout_sessions = stripe.checkout.Session.list(limit=100)
-        session_records = list(getattr(checkout_sessions, "data", None) or checkout_sessions.get("data") or [])
+        session_records = list(stripe_object_value(checkout_sessions, "data", []) or [])
     except Exception as exc:
         log_server_issue("Could not list Stripe Checkout Sessions while restoring subscription", exc)
         raise HTTPException(status_code=502, detail="Stripe could not be reached to restore the subscription right now.") from exc
@@ -3148,13 +3170,17 @@ async def reconcile_stripe_subscription(request: Request):
     expected_user_id = str(access["user_id"])
     expected_email = str(access["email"]).strip().lower()
     for session in session_records:
-        metadata = session.get("metadata") or {}
-        session_user_id = str(metadata.get("user_id") or session.get("client_reference_id") or "")
-        customer_details = session.get("customer_details") or {}
+        metadata = stripe_object_value(session, "metadata", {}) or {}
+        session_user_id = str(
+            stripe_object_value(metadata, "user_id")
+            or stripe_object_value(session, "client_reference_id")
+            or ""
+        )
+        customer_details = stripe_object_value(session, "customer_details", {}) or {}
         session_email = str(
-            metadata.get("user_email")
-            or customer_details.get("email")
-            or session.get("customer_email")
+            stripe_object_value(metadata, "user_email")
+            or stripe_object_value(customer_details, "email")
+            or stripe_object_value(session, "customer_email")
             or ""
         ).strip().lower()
         belongs_to_user = session_user_id == expected_user_id or (
@@ -3162,9 +3188,10 @@ async def reconcile_stripe_subscription(request: Request):
         )
         if (
             belongs_to_user
-            and str(session.get("status") or "").lower() == "complete"
-            and str(session.get("payment_status") or "").lower() in {"paid", "no_payment_required"}
-            and session.get("subscription")
+            and str(stripe_object_value(session, "status") or "").lower() == "complete"
+            and str(stripe_object_value(session, "payment_status") or "").lower()
+            in {"paid", "no_payment_required"}
+            and stripe_object_value(session, "subscription")
         ):
             paid_session = session
             break
@@ -3176,21 +3203,26 @@ async def reconcile_stripe_subscription(request: Request):
         )
 
     request.state.operation_stage = "reading the paid checkout identifiers"
-    raw_subscription = paid_session.get("subscription")
-    raw_customer = paid_session.get("customer")
-    subscription_id = str(
-        raw_subscription.get("id") if hasattr(raw_subscription, "get") else raw_subscription
-    ).strip()
-    customer_id = str(raw_customer.get("id") if hasattr(raw_customer, "get") else raw_customer).strip()
+    raw_subscription = stripe_object_value(paid_session, "subscription")
+    raw_customer = stripe_object_value(paid_session, "customer")
+    subscription_id = stripe_reference_id(raw_subscription)
+    customer_id = stripe_reference_id(raw_customer)
+    if not subscription_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Stripe confirmed the payment, but no subscription was attached to the checkout.",
+        )
     status = "active"
     cancel_at_period_end = False
     current_period_end = None
     request.state.operation_stage = "reading the Stripe subscription"
     try:
         subscription = stripe.Subscription.retrieve(subscription_id)
-        status = str(subscription.get("status") or "active").lower()
-        cancel_at_period_end = bool(subscription.get("cancel_at_period_end") or False)
-        current_period_end = subscription.get("current_period_end")
+        status = str(stripe_object_value(subscription, "status", "active") or "active").lower()
+        cancel_at_period_end = bool(
+            stripe_object_value(subscription, "cancel_at_period_end", False) or False
+        )
+        current_period_end = stripe_object_value(subscription, "current_period_end")
     except Exception as exc:
         log_server_issue("Could not retrieve subscription during paid Checkout Session recovery; applying paid access", exc)
 
@@ -3356,7 +3388,7 @@ def stripe_status():
         "has_webhook_secret": bool(STRIPE_WEBHOOK_SECRET),
         "supabase_admin_valid": supabase_admin_is_valid(),
         "app_base_url": APP_BASE_URL,
-        "recovery_version": 3,
+        "recovery_version": 4,
     }
 
 
