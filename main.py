@@ -2957,6 +2957,18 @@ async def create_stripe_checkout_session(request: Request):
 
     try:
         session = stripe.checkout.Session.create(**checkout_kwargs)
+    except stripe.error.AuthenticationError as exc:
+        log_server_issue("Stripe rejected the configured secret key", exc)
+        raise HTTPException(
+            status_code=500,
+            detail="Stripe rejected the configured secret key. Replace STRIPE_SECRET_KEY in Render with the current key from the same live Stripe account.",
+        ) from exc
+    except stripe.error.InvalidRequestError as exc:
+        log_server_issue("Stripe rejected the checkout configuration", exc)
+        raise HTTPException(
+            status_code=500,
+            detail="Stripe rejected the configured Price ID. Confirm STRIPE_PRICE_ID is a recurring live price from the same Stripe account as STRIPE_SECRET_KEY.",
+        ) from exc
     except Exception as exc:
         log_server_issue("Could not start Stripe checkout", exc)
         raise HTTPException(status_code=500, detail="Could not start Stripe checkout.") from exc
