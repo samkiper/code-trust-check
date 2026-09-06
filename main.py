@@ -4723,7 +4723,7 @@ def result_to_sarif(result: dict, filename: str = "snippet.py") -> dict:
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
         "version": "2.1.0",
         "runs": [{
-            "tool": {"driver": {"name": "AI Code Audit", "version": "15", "rules": list(rules.values())}},
+            "tool": {"driver": {"name": "AI Code Audit", "version": "16", "rules": list(rules.values())}},
             "results": sarif_results,
         }],
     }
@@ -5648,12 +5648,63 @@ def download_github_archive(full_name: str, sha: str, token: str) -> bytes:
     return data
 
 
+def github_finding_severity(severity: float) -> str:
+    if severity >= 18:
+        return "High"
+    if severity >= 8:
+        return "Medium"
+    return "Notice"
+
+
+def github_annotation_message(finding: dict) -> str:
+    parts = [str(finding.get("message") or "Code behavior requires review.")]
+    why_risky = str(finding.get("why_risky") or "").strip()
+    suggested_fix = str(finding.get("suggested_fix") or "").strip()
+    if why_risky:
+        parts.append(f"Why it matters: {why_risky}")
+    if suggested_fix:
+        parts.append(f"Suggested fix: {suggested_fix}")
+    return "\n\n".join(parts)[:1000]
+
+
+def build_github_check_output(
+    findings: list[tuple[str, dict]],
+    files_scanned: int,
+    files_skipped: int,
+) -> dict:
+    counts = {"High": 0, "Medium": 0, "Notice": 0}
+    review_lines = []
+    for path, finding in findings:
+        severity = github_finding_severity(float(finding.get("severity", 0) or 0))
+        counts[severity] += 1
+        if len(review_lines) < 50:
+            line = max(1, int(finding.get("line") or 1))
+            message = str(finding.get("message") or "Code behavior requires review.")
+            review_lines.append(f"- **{severity.upper()}** `{path}:{line}` — {message}")
+
+    summary = (
+        f"**{counts['High']} high · {counts['Medium']} medium · {counts['Notice']} notice**\n\n"
+        "Monitor-only: this check does not block merging. No code was executed. "
+        f"Scanned {files_scanned} changed supported file(s); skipped {files_skipped}."
+    )
+    output = {
+        "title": f"{len(findings)} finding(s) across {files_scanned} file(s)",
+        "summary": summary,
+    }
+    if review_lines:
+        output["text"] = "## Review these findings\n\n" + "\n".join(review_lines)
+    return output
+
+
 def process_github_pull_request(installation_id: int, full_name: str, pull_request_number: int, sha: str) -> None:
     token = ""
     try:
         token = github_installation_token(installation_id)
         if not token:
             raise RuntimeError("GitHub did not issue an installation token")
+        details_url = (
+            f"https://github.com/{quote(full_name, safe='/')}/pull/{pull_request_number}/files"
+        )
         upsert_github_check(
             full_name,
             pull_request_number,
@@ -5661,6 +5712,7 @@ def process_github_pull_request(installation_id: int, full_name: str, pull_reque
             token,
             {
                 "status": "in_progress",
+                "details_url": details_url,
                 "output": {
                     "title": "Scanning changed files",
                     "summary": "Monitor-only scan in progress. This check does not block merging.",
@@ -5679,10 +5731,12 @@ def process_github_pull_request(installation_id: int, full_name: str, pull_reque
                 "path": path,
                 "start_line": line,
                 "end_line": line,
-                "annotation_level": "failure" if severity >= 18 else "warning" if severity >= 8 else "notice",
-                "message": str(finding.get("message") or "Code behavior requires review.")[:1000],
-                "title": "AI Code Audit",
+                "annotation_level": "warning" if severity >= 8 else "notice",
+                "message": github_annotation_message(finding),
+                "title": f"AI Code Audit • {github_finding_severity(severity)} severity",
             })
+        check_output = build_github_check_output(findings, files_scanned, files_skipped)
+        check_output["annotations"] = annotations
         upsert_github_check(
             full_name,
             pull_request_number,
@@ -5691,14 +5745,8 @@ def process_github_pull_request(installation_id: int, full_name: str, pull_reque
             {
                 "status": "completed",
                 "conclusion": conclusion,
-                "output": {
-                    "title": f"{len(findings)} finding(s) across {files_scanned} file(s)",
-                    "summary": (
-                        "Monitor-only: this check does not block merging. No code was executed. "
-                        f"Scanned {files_scanned} changed supported file(s); skipped {files_skipped}."
-                    ),
-                    "annotations": annotations,
-                },
+                "details_url": details_url,
+                "output": check_output,
             },
         )
     except Exception as exc:
@@ -5784,7 +5832,7 @@ def stripe_status():
         "supabase_admin_valid": supabase_admin_is_valid(),
         "app_base_url": APP_BASE_URL,
         "recovery_version": 4,
-        "scanner_version": 15,
+        "scanner_version": 16,
         "security_version": 1,
         "benchmark_cases": 1103,
         "benchmark_independent_cases": 300,
@@ -5898,7 +5946,7 @@ def submit_feedback(req: FeedbackRequest, request: Request):
         "verdict": verdict,
         "category": req.category.strip()[:80],
         "note": req.note.strip()[:500],
-        "scanner_version": 15,
+        "scanner_version": 16,
     }
     inserted = supabase_rest_request("POST", "scan_feedback", payload=payload, prefer="return=representation")
     if not inserted:

@@ -28,6 +28,8 @@ The feedback control stores the signed-in user ID, a one-way scan fingerprint, a
 
 Scanner v15 extends credential-flow analysis across multiline network calls. The regression suite includes both an unexpected multiline credential transmission and a legitimate multiline HTTPS authentication request, ensuring the former is flagged without turning the latter into an exfiltration false positive.
 
+Scanner v16 improves GitHub Check presentation without changing risk scoring: severity counts, review summaries, explanations, suggested fixes, and pull-request file links are included directly in the check result.
+
 ## Next accuracy work
 
 1. Preserve the no-hint holdout without tuning against its three misses; use a new development set for weak-randomness improvements.

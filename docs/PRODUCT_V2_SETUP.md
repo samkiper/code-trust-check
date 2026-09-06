@@ -53,7 +53,7 @@ Configure the GitHub App with:
 - Subscribe to: Pull request
 - Repository permissions: Metadata read-only, Contents read-only, Pull requests read-only, Checks read and write
 
-After installing the App on a repository, opening or updating a pull request queues a static scan of changed supported files and produces an **AI Code Audit** check. Findings use a neutral conclusion and do not block merging. Re-delivered webhooks update the same check instead of creating duplicates.
+After installing the App on a repository, opening or updating a pull request queues a static scan of changed supported files and produces an **AI Code Audit** check. Findings use a neutral conclusion and do not block merging. Each annotation includes a severity label, explanation, suggested fix, and a link to the pull request's changed files. Re-delivered webhooks update the same check instead of creating duplicates.
 
 The public status endpoint at `/github/status` reports only whether each required setting exists, the public installation URL, and the integration capabilities; it never returns secrets.
 

@@ -454,13 +454,27 @@ class GitHubWebhookTests(unittest.TestCase):
         with patch.object(main, "github_installation_token", return_value="token"), \
                 patch.object(main, "list_github_pull_request_files", return_value=[{"filename": "app.py"}]), \
                 patch.object(main, "download_github_archive", return_value=archive.getvalue()), \
-                patch.object(main, "analyze_code", return_value={"flags": [{"line": 1, "severity": 25, "message": "Risk"}]}), \
+                patch.object(main, "analyze_code", return_value={"flags": [{
+                    "line": 1,
+                    "severity": 25,
+                    "message": "Risk",
+                    "why_risky": "This can expose a credential.",
+                    "suggested_fix": "Remove the credential from the request.",
+                }]}), \
                 patch.object(main, "upsert_github_check", return_value={}) as upsert:
             main.process_github_pull_request(1, "owner/repo", 5, "c" * 40)
         final_payload = upsert.call_args_list[-1].args[4]
         self.assertEqual(final_payload["status"], "completed")
         self.assertEqual(final_payload["conclusion"], "neutral")
         self.assertIn("does not block merging", final_payload["output"]["summary"])
+        self.assertIn("1 high", final_payload["output"]["summary"])
+        self.assertIn("**HIGH**", final_payload["output"]["text"])
+        self.assertEqual(final_payload["details_url"], "https://github.com/owner/repo/pull/5/files")
+        annotation = final_payload["output"]["annotations"][0]
+        self.assertEqual(annotation["annotation_level"], "warning")
+        self.assertEqual(annotation["title"], "AI Code Audit • High severity")
+        self.assertIn("Why it matters:", annotation["message"])
+        self.assertIn("Suggested fix:", annotation["message"])
 
     def test_scan_failure_is_reported_as_non_blocking_neutral(self):
         with patch.object(main, "github_installation_token", return_value="token"), \
