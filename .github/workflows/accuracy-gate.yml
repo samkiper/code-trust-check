@@ -40,7 +40,8 @@ jobs:
         run: python -m unittest discover -s tests -v
 
       - name: Enforce accuracy thresholds
-        run: python app/scripts/run_accuracy_gate.py --owasp-dir owasp --limit 750 --report app/accuracy-report.json
+        working-directory: app
+        run: python scripts/run_accuracy_gate.py --owasp-dir ../owasp --limit 750 --report accuracy-report.json
 
       - name: Confirm committed report is current
         working-directory: app
