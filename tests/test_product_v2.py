@@ -161,6 +161,66 @@ xml.dom.minidom.parseString(payload, parser)"""
         self.assertEqual(safe_result["risk"], "green")
         self.assertTrue(any(item.get("pattern") == "xxe_external_entities" for item in unsafe_result["flags"]))
 
+    def test_ldap_filter_requires_escaping(self):
+        unsafe = '''from flask import request
+value = request.args.get("name")
+filter_text = f"(uid={value})"
+conn.search("dc=example,dc=com", filter_text)'''
+        safe = unsafe.replace(
+            'from flask import request',
+            'from flask import request\nfrom ldap3.utils.conv import escape_filter_chars',
+        ).replace('value = request.args.get("name")', 'value = escape_filter_chars(request.args.get("name"))')
+        unsafe_result = main.analyze_code("Review this LDAP search", unsafe)
+        safe_result = main.analyze_code("Review this LDAP search", safe)
+        self.assertEqual(unsafe_result["risk"], "yellow")
+        self.assertEqual(safe_result["risk"], "green")
+        self.assertTrue(any(item.get("pattern") == "dynamic_ldap_filter" for item in unsafe_result["flags"]))
+
+    def test_xpath_query_requires_escaping(self):
+        unsafe = '''from flask import request
+value = request.args.get("id")
+query = f"/users/user[@id='{value}']"
+nodes = root.xpath(query)'''
+        safe = unsafe.replace(
+            'value = request.args.get("id")',
+            "value = request.args.get(\"id\").replace(\"'\", \"&apos;\")",
+        )
+        unsafe_result = main.analyze_code("Review this XPath query", unsafe)
+        safe_result = main.analyze_code("Review this XPath query", safe)
+        self.assertEqual(unsafe_result["risk"], "yellow")
+        self.assertEqual(safe_result["risk"], "green")
+        self.assertTrue(any(item.get("pattern") == "dynamic_xpath_query" for item in unsafe_result["flags"]))
+
+    def test_redirect_requires_an_allowlisted_host_and_scheme(self):
+        unsafe = '''from flask import request, redirect
+target = request.args.get("next")
+return redirect(target)'''
+        safe = '''from flask import request, redirect
+from urllib.parse import urlparse
+target = request.args.get("next")
+parsed = urlparse(target)
+if parsed.netloc not in {"example.com"} or parsed.scheme != "https":
+    raise ValueError("untrusted redirect")
+return redirect(target)'''
+        unsafe_result = main.analyze_code("Review this redirect", unsafe)
+        safe_result = main.analyze_code("Review this redirect", safe)
+        self.assertEqual(unsafe_result["risk"], "yellow")
+        self.assertEqual(safe_result["risk"], "green")
+        self.assertTrue(any(item.get("pattern") == "unvalidated_redirect" for item in unsafe_result["flags"]))
+
+    def test_request_data_cannot_cross_into_session_state(self):
+        unsafe = '''from flask import request, session
+role = request.form.get("role")
+session["role"] = role'''
+        safe = '''from flask import request, session
+request.form.get("role")
+session["role"] = "member"'''
+        unsafe_result = main.analyze_code("Review this trust boundary", unsafe)
+        safe_result = main.analyze_code("Review this trust boundary", safe)
+        self.assertEqual(unsafe_result["risk"], "yellow")
+        self.assertEqual(safe_result["risk"], "green")
+        self.assertTrue(any(item.get("pattern") == "untrusted_session_state" for item in unsafe_result["flags"]))
+
 
 class SarifTests(unittest.TestCase):
     def test_sarif_is_github_compatible_shape(self):

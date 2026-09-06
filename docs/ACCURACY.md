@@ -7,9 +7,9 @@ AI Code Audit is evaluated against two distinct datasets. Internal labeled scena
 | Dataset | Cases | Precision | Recall | False-positive rate | F1 |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Internal independent cases | 53 | 100.00% | 100.00% | 0.00% | 100.00% |
-| OWASP category-balanced cases | 750 | 77.49% | 58.31% | 11.74% | 66.54% |
+| OWASP category-balanced cases | 750 | 80.81% | 71.34% | 11.74% | 75.78% |
 
-The internal result demonstrates performance on the product's deliberately supported behaviors. On the selected OWASP cases, the engine has complete recall with no false positives for weak hashes, insecure cookie transport, weak security randomness, and SQL injection. It also detects every selected command-injection, code-injection, and deserialization case, although those three categories still produce substantial false positives. Flow-sensitive checks now reach 54.84% recall for XSS and 25% for path traversal with no false positives in either category; XXE recall is 25% with no false positives. LDAP injection, redirects, trust-boundary violations, and XPath injection still have zero recall in this benchmark. The product must therefore describe these results as a review aid, not a complete security guarantee.
+The internal result demonstrates performance on the product's deliberately supported behaviors. On the selected OWASP cases, the engine has complete recall with no false positives for weak hashes, insecure cookie transport, weak security randomness, and SQL injection. It also detects every selected command-injection, code-injection, and deserialization case, although those three categories still produce substantial false positives. Flow-sensitive checks reach 72.22% recall for trust-boundary violations, 54.84% for XSS, 53.85% for redirects, 41.18% for XPath injection, 37.50% for LDAP injection, and 25% for path traversal, with no false positives in those categories. XXE recall is 25% with no false positives. The product must therefore describe these results as a review aid, not a complete security guarantee.
 
 Exact confusion matrices and per-category measurements are in `accuracy-report.json` and the public `/accuracy/status` endpoint.
 

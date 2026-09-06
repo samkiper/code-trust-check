@@ -440,15 +440,15 @@
     "revision": "f1291485808b66e20ddb6b01b10dc71b3df8c8ba",
     "selection": "deterministic category-balanced subset",
     "overall": {
-      "tp": 179,
+      "tp": 219,
       "fp": 52,
       "tn": 391,
-      "fn": 128,
+      "fn": 88,
       "cases": 750,
-      "precision": 0.7749,
-      "recall": 0.5831,
+      "precision": 0.8081,
+      "recall": 0.7134,
       "false_positive_rate": 0.1174,
-      "f1": 0.6654
+      "f1": 0.7578
     },
     "by_vulnerability": {
       "cmdi": {
@@ -496,15 +496,15 @@
         "f1": 1.0
       },
       "ldapi": {
-        "tp": 0,
+        "tp": 6,
         "fp": 0,
         "tn": 13,
-        "fn": 16,
+        "fn": 10,
         "cases": 29,
-        "precision": null,
-        "recall": 0.0,
+        "precision": 1.0,
+        "recall": 0.375,
         "false_positive_rate": 0.0,
-        "f1": 0.0
+        "f1": 0.5455
       },
       "pathtraver": {
         "tp": 9,
@@ -518,15 +518,15 @@
         "f1": 0.4
       },
       "redirect": {
-        "tp": 0,
+        "tp": 7,
         "fp": 0,
         "tn": 21,
-        "fn": 13,
+        "fn": 6,
         "cases": 34,
-        "precision": null,
-        "recall": 0.0,
+        "precision": 1.0,
+        "recall": 0.5385,
         "false_positive_rate": 0.0,
-        "f1": 0.0
+        "f1": 0.7
       },
       "securecookie": {
         "tp": 24,
@@ -551,15 +551,15 @@
         "f1": 1.0
       },
       "trustbound": {
-        "tp": 0,
+        "tp": 13,
         "fp": 0,
         "tn": 19,
-        "fn": 18,
+        "fn": 5,
         "cases": 37,
-        "precision": null,
-        "recall": 0.0,
+        "precision": 1.0,
+        "recall": 0.7222,
         "false_positive_rate": 0.0,
-        "f1": 0.0
+        "f1": 0.8387
       },
       "weakrand": {
         "tp": 26,
@@ -573,15 +573,15 @@
         "f1": 1.0
       },
       "xpathi": {
-        "tp": 0,
+        "tp": 14,
         "fp": 0,
         "tn": 54,
-        "fn": 34,
+        "fn": 20,
         "cases": 88,
-        "precision": null,
-        "recall": 0.0,
+        "precision": 1.0,
+        "recall": 0.4118,
         "false_positive_rate": 0.0,
-        "f1": 0.0
+        "f1": 0.5833
       },
       "xss": {
         "tp": 17,

@@ -2491,12 +2491,18 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
         intent_lower,
         ["pathtraver", "path traversal", "file", "upload", "download", "filesystem", "directory"],
     )
+    ldap_context = intent_mentions_any(intent_lower, ["ldapi", "ldap", "directory search"])
+    xpath_context = intent_mentions_any(intent_lower, ["xpathi", "xpath", "xml query"])
+    redirect_context = intent_mentions_any(intent_lower, ["redirect", "forward user", "return url"])
+    trust_context = intent_mentions_any(intent_lower, ["trustbound", "trust boundary", "session", "user state"])
     sanitizer_names = {
         "escape",
         "escape_for_html",
         "html.escape",
         "markupsafe.escape",
         "bleach.clean",
+        "escape_filter_chars",
+        "quoteattr",
     }
     path_sanitizer_names = {"basename", "secure_filename", "os.path.basename"}
     unknown = object()
@@ -2615,6 +2621,17 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
                 return False
             if call_name == "request.path" or call_name.startswith("request.path."):
                 return False
+            if (
+                xpath_context
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "replace"
+                and len(node.args) >= 2
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[1], ast.Constant)
+                and (str(node.args[0].value), str(node.args[1].value))
+                in {("'", "&apos;"), ('"', "&quot;")}
+            ):
+                return False
             if call_name.rsplit(".", 1)[-1] in {"get_form_parameter", "get_query_parameter"}:
                 return True
             if root_name(node.func) == "request":
@@ -2682,6 +2699,18 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
             if isinstance(node.left, ast.Constant) and str(node.left.value) in {"..", "../", "..\\"}:
                 right_names = [child.id for child in ast.walk(node.comparators[0]) if isinstance(child, ast.Name)]
                 return right_names[0] if right_names else ""
+        return ""
+
+    def rejected_character_guard_name(node: ast.AST) -> str:
+        if isinstance(node, ast.Compare) and len(node.ops) == 1 and isinstance(node.ops[0], ast.In):
+            if isinstance(node.left, ast.Constant) and str(node.left.value) in {"'", '"'}:
+                names = [child.id for child in ast.walk(node.comparators[0]) if isinstance(child, ast.Name)]
+                return names[0] if names else ""
+        if isinstance(node, ast.BoolOp):
+            for value in node.values:
+                guarded = rejected_character_guard_name(value)
+                if guarded:
+                    return guarded
         return ""
 
     def definitely_stops(statements: list[ast.stmt]) -> bool:
@@ -2761,6 +2790,59 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
             ),
         ))
 
+    def record_security_sink(call: ast.Call, tainted: set[str], containers: set[str], sanitized: set[str]) -> None:
+        call_name = dotted_name(call.func)
+        short_name = call_name.rsplit(".", 1)[-1]
+        if ldap_context and short_name == "search" and len(call.args) >= 2:
+            query = call.args[1]
+            names = tainted_names(query, tainted, containers)
+            if expr_tainted(query, tainted, containers) and (not names or not names.issubset(sanitized)):
+                findings.append(make_flag(
+                    line=call.lineno,
+                    flag_type="ldap_injection",
+                    pattern="dynamic_ldap_filter",
+                    message="Request-controlled data is interpolated into an LDAP filter",
+                    severity=22,
+                    explanation=(
+                        "LDAP metacharacters can change the filter and expose or modify unintended directory records. "
+                        "Escape filter values with the LDAP library's filter-escaping helper before building the query."
+                    ),
+                ))
+        xpath_argument = None
+        if xpath_context and (call_name.endswith(".XPath") or short_name == "xpath") and call.args:
+            xpath_argument = call.args[0]
+        elif xpath_context and call_name.endswith("elementpath.select") and len(call.args) >= 2:
+            xpath_argument = call.args[1]
+        if xpath_argument is not None:
+            names = tainted_names(xpath_argument, tainted, containers)
+            if expr_tainted(xpath_argument, tainted, containers) and (not names or not names.issubset(sanitized)):
+                findings.append(make_flag(
+                    line=call.lineno,
+                    flag_type="xpath_injection",
+                    pattern="dynamic_xpath_query",
+                    message="Request-controlled data is interpolated into an XPath query",
+                    severity=22,
+                    explanation=(
+                        "XPath operators and quotes can change the query structure. "
+                        "Use variable binding when supported, or strictly validate and escape values before interpolation."
+                    ),
+                ))
+        if redirect_context and short_name == "redirect" and call.args:
+            destination = call.args[0]
+            names = tainted_names(destination, tainted, containers)
+            if expr_tainted(destination, tainted, containers) and (not names or not names.issubset(sanitized)):
+                findings.append(make_flag(
+                    line=call.lineno,
+                    flag_type="open_redirect",
+                    pattern="unvalidated_redirect",
+                    message="Request-controlled data determines a redirect destination",
+                    severity=20,
+                    explanation=(
+                        "An attacker can send users to a malicious site when arbitrary redirect destinations are accepted. "
+                        "Allowlist trusted hosts and schemes, or accept only application-relative paths."
+                    ),
+                ))
+
     def process_block(statements, tainted=None, containers=None, constants=None, sanitized=None):
         tainted = set(tainted or ())
         containers = set(containers or ())
@@ -2788,6 +2870,7 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
             if isinstance(statement, ast.Assign):
                 if isinstance(statement.value, ast.Call):
                     record_path_sink(statement.value, tainted, containers, sanitized)
+                    record_security_sink(statement.value, tainted, containers, sanitized)
                 value_constant = const_value(statement.value, constants)
                 value_tainted = (
                     False
@@ -2797,6 +2880,26 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
                 source_names = tainted_names(statement.value, tainted, containers)
                 value_path_safe = bool(source_names) and source_names.issubset(sanitized)
                 for target in statement.targets:
+                    if (
+                        trust_context
+                        and isinstance(target, ast.Subscript)
+                        and dotted_name(target.value).endswith("session")
+                        and (
+                            value_tainted
+                            or expr_tainted(target.slice, tainted, containers)
+                        )
+                    ):
+                        findings.append(make_flag(
+                            line=statement.lineno,
+                            flag_type="trust_boundary_violation",
+                            pattern="untrusted_session_state",
+                            message="Request-controlled data crosses into trusted session state",
+                            severity=18,
+                            explanation=(
+                                "Session data is often trusted by later authorization and workflow code. "
+                                "Validate and normalize request values before storing them, and keep session keys fixed."
+                            ),
+                        ))
                     assign_target(
                         target,
                         value_tainted,
@@ -2807,6 +2910,15 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
                         sanitized,
                         value_path_safe,
                     )
+                    if (
+                        isinstance(target, ast.Name)
+                        and isinstance(statement.value, ast.Call)
+                        and dotted_name(statement.value.func).endswith("urlparse")
+                        and statement.value.args
+                    ):
+                        source_names = tainted_names(statement.value.args[0], tainted, containers)
+                        if source_names:
+                            constants[target.id] = ("__parsed_url__", tuple(sorted(source_names)))
                 continue
             if isinstance(statement, ast.AnnAssign) and statement.value:
                 assign_target(
@@ -2851,6 +2963,17 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
                     guarded_name = traversal_guard_name(statement.test)
                     if guarded_name and definitely_stops(statement.body) and falls_through:
                         sanitized.add(guarded_name)
+                    rejected_name = rejected_character_guard_name(statement.test)
+                    if rejected_name and definitely_stops(statement.body) and falls_through:
+                        sanitized.add(rejected_name)
+                    if definitely_stops(statement.body) and falls_through:
+                        tested_names = {child.id for child in ast.walk(statement.test) if isinstance(child, ast.Name)}
+                        tested_attrs = {child.attr for child in ast.walk(statement.test) if isinstance(child, ast.Attribute)}
+                        if {"netloc", "scheme"}.issubset(tested_attrs):
+                            for tested_name in tested_names:
+                                marker = constants.get(tested_name)
+                                if isinstance(marker, tuple) and marker and marker[0] == "__parsed_url__":
+                                    sanitized.update(marker[1])
                 continue
             if isinstance(statement, ast.Match):
                 subject = const_value(statement.subject, constants)
@@ -2900,6 +3023,7 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
                 for item in statement.items:
                     if isinstance(item.context_expr, ast.Call):
                         record_path_sink(item.context_expr, tainted, containers, sanitized)
+                        record_security_sink(item.context_expr, tainted, containers, sanitized)
                 tainted, containers, constants, sanitized, falls_through = process_block(
                     statement.body, tainted, containers, constants, sanitized
                 )
@@ -2907,6 +3031,7 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
             if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call):
                 call = statement.value
                 record_path_sink(call, tainted, containers, sanitized)
+                record_security_sink(call, tainted, containers, sanitized)
                 call_name = dotted_name(call.func).rsplit(".", 1)[-1]
                 if isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name):
                     container_name = call.func.value.id
@@ -2959,6 +3084,8 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
                             containers.add(container_name)
                 continue
             if isinstance(statement, ast.Return):
+                if isinstance(statement.value, ast.Call):
+                    record_security_sink(statement.value, tainted, containers, sanitized)
                 if (
                     web_context
                     and statement.value
@@ -5173,7 +5300,7 @@ def stripe_status():
         "supabase_admin_valid": supabase_admin_is_valid(),
         "app_base_url": APP_BASE_URL,
         "recovery_version": 4,
-        "scanner_version": 10,
+        "scanner_version": 11,
         "security_version": 1,
         "benchmark_cases": 803,
         "benchmark_independent_cases": 803,
@@ -5284,7 +5411,7 @@ def submit_feedback(req: FeedbackRequest, request: Request):
         "verdict": verdict,
         "category": req.category.strip()[:80],
         "note": req.note.strip()[:500],
-        "scanner_version": 10,
+        "scanner_version": 11,
     }
     inserted = supabase_rest_request("POST", "scan_feedback", payload=payload, prefer="return=representation")
     if not inserted:
