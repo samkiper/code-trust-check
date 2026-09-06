@@ -90,7 +90,9 @@ class RepositoryScoringTests(unittest.TestCase):
             output.writestr("repo/requirements.txt", "requests==2.31.0\n")
             output.writestr("repo/package.json", '{"dependencies":{"lodash":"4.17.21"}}')
         archive.seek(0)
-        with zipfile.ZipFile(archive) as source, patch.object(main, "query_osv_batch", return_value=[]):
+        with zipfile.ZipFile(archive) as source, \
+                patch.object(main, "query_osv_batch", return_value=[]), \
+                patch.object(main, "registry_package_exists", return_value=True):
             result = main.analyze_dependency_manifests(source)
         self.assertEqual(result["manifests_scanned"], 2)
         self.assertEqual(result["dependencies_parsed"], 2)

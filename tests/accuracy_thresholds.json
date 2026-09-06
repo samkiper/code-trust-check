@@ -1,0 +1,28 @@
+{
+  "internal": {
+    "minimum_cases": 53,
+    "minimum_recall": 0.90,
+    "maximum_false_positive_rate": 0.05
+  },
+  "owasp": {
+    "minimum_cases": 750,
+    "minimum_recall": 0.16,
+    "maximum_false_positive_rate": 0.12
+  },
+  "owasp_categories": {
+    "cmdi": {"minimum_recall": 1.0, "maximum_false_positive_rate": 1.0},
+    "codeinj": {"minimum_recall": 1.0, "maximum_false_positive_rate": 1.0},
+    "deserialization": {"minimum_recall": 1.0, "maximum_false_positive_rate": 0.34},
+    "hash": {"minimum_recall": 0.0, "maximum_false_positive_rate": 0.01},
+    "ldapi": {"minimum_recall": 0.0, "maximum_false_positive_rate": 0.01},
+    "pathtraver": {"minimum_recall": 0.0, "maximum_false_positive_rate": 0.01},
+    "redirect": {"minimum_recall": 0.0, "maximum_false_positive_rate": 0.01},
+    "securecookie": {"minimum_recall": 0.0, "maximum_false_positive_rate": 0.01},
+    "sqli": {"minimum_recall": 0.0, "maximum_false_positive_rate": 0.01},
+    "trustbound": {"minimum_recall": 0.0, "maximum_false_positive_rate": 0.01},
+    "weakrand": {"minimum_recall": 0.0, "maximum_false_positive_rate": 0.01},
+    "xpathi": {"minimum_recall": 0.0, "maximum_false_positive_rate": 0.01},
+    "xss": {"minimum_recall": 0.0, "maximum_false_positive_rate": 0.01},
+    "xxe": {"minimum_recall": 0.0, "maximum_false_positive_rate": 0.01}
+  }
+}

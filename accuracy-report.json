@@ -1,0 +1,610 @@
+{
+  "schema_version": 1,
+  "internal": {
+    "overall": {
+      "tp": 23,
+      "fp": 0,
+      "tn": 30,
+      "fn": 0,
+      "cases": 53,
+      "precision": 1.0,
+      "recall": 1.0,
+      "false_positive_rate": 0.0,
+      "f1": 1.0
+    },
+    "by_language": {
+      "config": {
+        "tp": 1,
+        "fp": 0,
+        "tn": 0,
+        "fn": 0,
+        "cases": 1,
+        "precision": 1.0,
+        "recall": 1.0,
+        "false_positive_rate": null,
+        "f1": 1.0
+      },
+      "css": {
+        "tp": 0,
+        "fp": 0,
+        "tn": 1,
+        "fn": 0,
+        "cases": 1,
+        "precision": null,
+        "recall": null,
+        "false_positive_rate": 0.0,
+        "f1": null
+      },
+      "go": {
+        "tp": 0,
+        "fp": 0,
+        "tn": 1,
+        "fn": 0,
+        "cases": 1,
+        "precision": null,
+        "recall": null,
+        "false_positive_rate": 0.0,
+        "f1": null
+      },
+      "html": {
+        "tp": 0,
+        "fp": 0,
+        "tn": 3,
+        "fn": 0,
+        "cases": 3,
+        "precision": null,
+        "recall": null,
+        "false_positive_rate": 0.0,
+        "f1": null
+      },
+      "java": {
+        "tp": 0,
+        "fp": 0,
+        "tn": 1,
+        "fn": 0,
+        "cases": 1,
+        "precision": null,
+        "recall": null,
+        "false_positive_rate": 0.0,
+        "f1": null
+      },
+      "javascript": {
+        "tp": 4,
+        "fp": 0,
+        "tn": 3,
+        "fn": 0,
+        "cases": 7,
+        "precision": 1.0,
+        "recall": 1.0,
+        "false_positive_rate": 0.0,
+        "f1": 1.0
+      },
+      "php": {
+        "tp": 1,
+        "fp": 0,
+        "tn": 0,
+        "fn": 0,
+        "cases": 1,
+        "precision": 1.0,
+        "recall": 1.0,
+        "false_positive_rate": null,
+        "f1": 1.0
+      },
+      "python": {
+        "tp": 16,
+        "fp": 0,
+        "tn": 16,
+        "fn": 0,
+        "cases": 32,
+        "precision": 1.0,
+        "recall": 1.0,
+        "false_positive_rate": 0.0,
+        "f1": 1.0
+      },
+      "rust": {
+        "tp": 0,
+        "fp": 0,
+        "tn": 1,
+        "fn": 0,
+        "cases": 1,
+        "precision": null,
+        "recall": null,
+        "false_positive_rate": 0.0,
+        "f1": null
+      },
+      "shell": {
+        "tp": 1,
+        "fp": 0,
+        "tn": 2,
+        "fn": 0,
+        "cases": 3,
+        "precision": 1.0,
+        "recall": 1.0,
+        "false_positive_rate": 0.0,
+        "f1": 1.0
+      },
+      "sql": {
+        "tp": 0,
+        "fp": 0,
+        "tn": 1,
+        "fn": 0,
+        "cases": 1,
+        "precision": null,
+        "recall": null,
+        "false_positive_rate": 0.0,
+        "f1": null
+      },
+      "typescript": {
+        "tp": 0,
+        "fp": 0,
+        "tn": 1,
+        "fn": 0,
+        "cases": 1,
+        "precision": null,
+        "recall": null,
+        "false_positive_rate": 0.0,
+        "f1": null
+      }
+    },
+    "by_vulnerability": {
+      "css": {
+        "tp": 0,
+        "fp": 0,
+        "tn": 1,
+        "fn": 0,
+        "cases": 1,
+        "precision": null,
+        "recall": null,
+        "false_positive_rate": 0.0,
+        "f1": null
+      },
+      "go": {
+        "tp": 0,
+        "fp": 0,
+        "tn": 1,
+        "fn": 0,
+        "cases": 1,
+        "precision": null,
+        "recall": null,
+        "false_positive_rate": 0.0,
+        "f1": null
+      },
+      "hardcoded_api": {
+        "tp": 1,
+        "fp": 0,
+        "tn": 0,
+        "fn": 0,
+        "cases": 1,
+        "precision": 1.0,
+        "recall": 1.0,
+        "false_positive_rate": null,
+        "f1": 1.0
+      },
+      "hardcoded_aws": {
+        "tp": 1,
+        "fp": 0,
+        "tn": 0,
+        "fn": 0,
+        "cases": 1,
+        "precision": 1.0,
+        "recall": 1.0,
+        "false_positive_rate": null,
+        "f1": 1.0
+      },
+      "html": {
+        "tp": 0,
+        "fp": 0,
+        "tn": 3,
+        "fn": 0,
+        "cases": 3,
+        "precision": null,
+        "recall": null,
+        "false_positive_rate": 0.0,
+        "f1": null
+      },
+      "java": {
+        "tp": 0,
+        "fp": 0,
+        "tn": 1,
+        "fn": 0,
+        "cases": 1,
+        "precision": null,
+        "recall": null,
+        "false_positive_rate": 0.0,
+        "f1": null
+      },
+      "javascript": {
+        "tp": 1,
+        "fp": 0,
+        "tn": 3,
+        "fn": 0,
+        "cases": 4,
+        "precision": 1.0,
+        "recall": 1.0,
+        "false_positive_rate": 0.0,
+        "f1": 1.0
+      },
+      "javascript_atob": {
+        "tp": 1,
+        "fp": 0,
+        "tn": 0,
+        "fn": 0,
+        "cases": 1,
+        "precision": 1.0,
+        "recall": 1.0,
+        "false_positive_rate": null,
+        "f1": 1.0
+      },
+      "javascript_dynamic": {
+        "tp": 1,
+        "fp": 0,
+        "tn": 0,
+        "fn": 0,
+        "cases": 1,
+        "precision": 1.0,
+        "recall": 1.0,
+        "false_positive_rate": null,
+        "f1": 1.0
+      },
+      "javascript_process": {
+        "tp": 1,
+        "fp": 0,
+        "tn": 0,
+        "fn": 0,
+        "cases": 1,
+        "precision": 1.0,
+        "recall": 1.0,
+        "false_positive_rate": null,
+        "f1": 1.0
+      },
+      "php": {
+        "tp": 1,
+        "fp": 0,
+        "tn": 0,
+        "fn": 0,
+        "cases": 1,
+        "precision": 1.0,
+        "recall": 1.0,
+        "false_positive_rate": null,
+        "f1": 1.0
+      },
+      "private": {
+        "tp": 1,
+        "fp": 0,
+        "tn": 0,
+        "fn": 0,
+        "cases": 1,
+        "precision": 1.0,
+        "recall": 1.0,
+        "false_positive_rate": null,
+        "f1": 1.0
+      },
+      "python": {
+        "tp": 4,
+        "fp": 0,
+        "tn": 16,
+        "fn": 0,
+        "cases": 20,
+        "precision": 1.0,
+        "recall": 1.0,
+        "false_positive_rate": 0.0,
+        "f1": 1.0
+      },
+      "python_base64": {
+        "tp": 1,
+        "fp": 0,
+        "tn": 0,
+        "fn": 0,
+        "cases": 1,
+        "precision": 1.0,
+        "recall": 1.0,
+        "false_positive_rate": null,
+        "f1": 1.0
+      },
+      "python_download": {
+        "tp": 1,
+        "fp": 0,
+        "tn": 0,
+        "fn": 0,
+        "cases": 1,
+        "precision": 1.0,
+        "recall": 1.0,
+        "false_positive_rate": null,
+        "f1": 1.0
+      },
+      "python_dynamic": {
+        "tp": 2,
+        "fp": 0,
+        "tn": 0,
+        "fn": 0,
+        "cases": 2,
+        "precision": 1.0,
+        "recall": 1.0,
+        "false_positive_rate": null,
+        "f1": 1.0
+      },
+      "python_hex": {
+        "tp": 1,
+        "fp": 0,
+        "tn": 0,
+        "fn": 0,
+        "cases": 1,
+        "precision": 1.0,
+        "recall": 1.0,
+        "false_positive_rate": null,
+        "f1": 1.0
+      },
+      "python_os": {
+        "tp": 1,
+        "fp": 0,
+        "tn": 0,
+        "fn": 0,
+        "cases": 1,
+        "precision": 1.0,
+        "recall": 1.0,
+        "false_positive_rate": null,
+        "f1": 1.0
+      },
+      "python_secret": {
+        "tp": 1,
+        "fp": 0,
+        "tn": 0,
+        "fn": 0,
+        "cases": 1,
+        "precision": 1.0,
+        "recall": 1.0,
+        "false_positive_rate": null,
+        "f1": 1.0
+      },
+      "python_shell": {
+        "tp": 1,
+        "fp": 0,
+        "tn": 0,
+        "fn": 0,
+        "cases": 1,
+        "precision": 1.0,
+        "recall": 1.0,
+        "false_positive_rate": null,
+        "f1": 1.0
+      },
+      "python_tainted": {
+        "tp": 2,
+        "fp": 0,
+        "tn": 0,
+        "fn": 0,
+        "cases": 2,
+        "precision": 1.0,
+        "recall": 1.0,
+        "false_positive_rate": null,
+        "f1": 1.0
+      },
+      "rust": {
+        "tp": 0,
+        "fp": 0,
+        "tn": 1,
+        "fn": 0,
+        "cases": 1,
+        "precision": null,
+        "recall": null,
+        "false_positive_rate": 0.0,
+        "f1": null
+      },
+      "shell": {
+        "tp": 0,
+        "fp": 0,
+        "tn": 2,
+        "fn": 0,
+        "cases": 2,
+        "precision": null,
+        "recall": null,
+        "false_positive_rate": 0.0,
+        "f1": null
+      },
+      "shell_download": {
+        "tp": 1,
+        "fp": 0,
+        "tn": 0,
+        "fn": 0,
+        "cases": 1,
+        "precision": 1.0,
+        "recall": 1.0,
+        "false_positive_rate": null,
+        "f1": 1.0
+      },
+      "sql": {
+        "tp": 0,
+        "fp": 0,
+        "tn": 1,
+        "fn": 0,
+        "cases": 1,
+        "precision": null,
+        "recall": null,
+        "false_positive_rate": 0.0,
+        "f1": null
+      },
+      "typescript": {
+        "tp": 0,
+        "fp": 0,
+        "tn": 1,
+        "fn": 0,
+        "cases": 1,
+        "precision": null,
+        "recall": null,
+        "false_positive_rate": 0.0,
+        "f1": null
+      }
+    }
+  },
+  "owasp": {
+    "source": "OWASP BenchmarkPython v0.1",
+    "revision": "f1291485808b66e20ddb6b01b10dc71b3df8c8ba",
+    "selection": "deterministic category-balanced subset",
+    "overall": {
+      "tp": 51,
+      "fp": 52,
+      "tn": 391,
+      "fn": 256,
+      "cases": 750,
+      "precision": 0.4951,
+      "recall": 0.1661,
+      "false_positive_rate": 0.1174,
+      "f1": 0.2488
+    },
+    "by_vulnerability": {
+      "cmdi": {
+        "tp": 13,
+        "fp": 7,
+        "tn": 0,
+        "fn": 0,
+        "cases": 20,
+        "precision": 0.65,
+        "recall": 1.0,
+        "false_positive_rate": 1.0,
+        "f1": 0.7879
+      },
+      "codeinj": {
+        "tp": 20,
+        "fp": 33,
+        "tn": 0,
+        "fn": 0,
+        "cases": 53,
+        "precision": 0.3774,
+        "recall": 1.0,
+        "false_positive_rate": 1.0,
+        "f1": 0.5479
+      },
+      "deserialization": {
+        "tp": 18,
+        "fp": 12,
+        "tn": 24,
+        "fn": 0,
+        "cases": 54,
+        "precision": 0.6,
+        "recall": 1.0,
+        "false_positive_rate": 0.3333,
+        "f1": 0.75
+      },
+      "hash": {
+        "tp": 0,
+        "fp": 0,
+        "tn": 43,
+        "fn": 45,
+        "cases": 88,
+        "precision": null,
+        "recall": 0.0,
+        "false_positive_rate": 0.0,
+        "f1": 0.0
+      },
+      "ldapi": {
+        "tp": 0,
+        "fp": 0,
+        "tn": 13,
+        "fn": 16,
+        "cases": 29,
+        "precision": null,
+        "recall": 0.0,
+        "false_positive_rate": 0.0,
+        "f1": 0.0
+      },
+      "pathtraver": {
+        "tp": 0,
+        "fp": 0,
+        "tn": 52,
+        "fn": 36,
+        "cases": 88,
+        "precision": null,
+        "recall": 0.0,
+        "false_positive_rate": 0.0,
+        "f1": 0.0
+      },
+      "redirect": {
+        "tp": 0,
+        "fp": 0,
+        "tn": 21,
+        "fn": 13,
+        "cases": 34,
+        "precision": null,
+        "recall": 0.0,
+        "false_positive_rate": 0.0,
+        "f1": 0.0
+      },
+      "securecookie": {
+        "tp": 0,
+        "fp": 0,
+        "tn": 15,
+        "fn": 24,
+        "cases": 39,
+        "precision": null,
+        "recall": 0.0,
+        "false_positive_rate": 0.0,
+        "f1": 0.0
+      },
+      "sqli": {
+        "tp": 0,
+        "fp": 0,
+        "tn": 11,
+        "fn": 5,
+        "cases": 16,
+        "precision": null,
+        "recall": 0.0,
+        "false_positive_rate": 0.0,
+        "f1": 0.0
+      },
+      "trustbound": {
+        "tp": 0,
+        "fp": 0,
+        "tn": 19,
+        "fn": 18,
+        "cases": 37,
+        "precision": null,
+        "recall": 0.0,
+        "false_positive_rate": 0.0,
+        "f1": 0.0
+      },
+      "weakrand": {
+        "tp": 0,
+        "fp": 0,
+        "tn": 62,
+        "fn": 26,
+        "cases": 88,
+        "precision": null,
+        "recall": 0.0,
+        "false_positive_rate": 0.0,
+        "f1": 0.0
+      },
+      "xpathi": {
+        "tp": 0,
+        "fp": 0,
+        "tn": 54,
+        "fn": 34,
+        "cases": 88,
+        "precision": null,
+        "recall": 0.0,
+        "false_positive_rate": 0.0,
+        "f1": 0.0
+      },
+      "xss": {
+        "tp": 0,
+        "fp": 0,
+        "tn": 57,
+        "fn": 31,
+        "cases": 88,
+        "precision": null,
+        "recall": 0.0,
+        "false_positive_rate": 0.0,
+        "f1": 0.0
+      },
+      "xxe": {
+        "tp": 0,
+        "fp": 0,
+        "tn": 20,
+        "fn": 8,
+        "cases": 28,
+        "precision": null,
+        "recall": 0.0,
+        "false_positive_rate": 0.0,
+        "f1": 0.0
+      }
+    }
+  }
+}

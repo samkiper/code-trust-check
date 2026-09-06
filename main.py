@@ -9,6 +9,7 @@ import ast
 import json
 import zipfile
 import urllib.request
+import urllib.error
 import ssl
 import certifi
 import hashlib
@@ -19,6 +20,7 @@ import tempfile
 import difflib
 import time
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from html import escape as html_escape
 from dotenv import load_dotenv
@@ -78,6 +80,14 @@ class FixPreviewRequest(BaseModel):
     code: str
 
 
+class FeedbackRequest(BaseModel):
+    scan_id: str
+    finding_id: str
+    verdict: str
+    category: str = ""
+    note: str = ""
+
+
 # display_key, regex, label, base severity points
 SUSPICIOUS_PATTERNS = [
     ("eval(", r"(?<![\w.])eval\s*\(", "Suspicious usage detected: eval(", 25),
@@ -104,6 +114,11 @@ SUSPICIOUS_PATTERNS = [
     ("urllib.request.Request", r"\burllib\.request\.Request\s*\(", "Suspicious usage detected: urllib.request.Request", 2),
     ("download helper", r"\b(?:curl|wget)\s+(?:-[^\s]+\s+)*https?://", "Suspicious usage detected: download helper", 8),
     ("bytes.fromhex", r"\bbytes\.fromhex\s*\(", "Suspicious usage detected: bytes.fromhex", 4),
+    ("tls_verify_disabled", r"\bverify\s*=\s*false\b", "TLS certificate verification is disabled", 14),
+    ("debug_mode_enabled", r"\bdebug\s*=\s*true\b", "Production debug mode may be enabled", 9),
+    ("persistence_registry", r"\bwinreg\.(?:setvalue|setvalueex|createkey)\s*\(", "Code may create Windows startup persistence", 24),
+    ("persistence_scheduler", r"\b(?:crontab|schtasks|launchctl)\b", "Code may create scheduled persistence", 23),
+    ("telemetry_sdk", r"\b(?:sentry_sdk\.init|posthog\.capture|analytics\.track|mixpanel\.track)\s*\(", "Code initializes or sends telemetry", 4),
 ]
 
 # regex, label, severity points
@@ -162,6 +177,7 @@ RATE_LIMITS_PER_MINUTE = {
     "scan": {"anonymous": 20, "authenticated": 60},
     "repo": {"anonymous": 5, "authenticated": 15},
     "billing": {"anonymous": 3, "authenticated": 10},
+    "feedback": {"anonymous": 2, "authenticated": 20},
 }
 RATE_LIMIT_STATE: dict[str, list[float]] = {}
 RATE_LIMIT_LOCK = threading.Lock()
@@ -324,6 +340,17 @@ DEPENDENCY_MANIFEST_FILES = {
 OSV_API_BATCH_URL = "https://api.osv.dev/v1/querybatch"
 OSV_VULN_URL_TEMPLATE = "https://api.osv.dev/v1/vulns/{osv_id}"
 OSV_BATCH_SIZE = 100
+MAX_PACKAGE_REPUTATION_LOOKUPS = 25
+PACKAGE_LOOKUP_CACHE: dict[tuple[str, str], bool | None] = {}
+PACKAGE_LOOKUP_LOCK = threading.Lock()
+
+SUSPICIOUS_PACKAGE_TYPOS = {
+    "requets": "requests", "requestes": "requests", "python-dateutils": "python-dateutil",
+    "beautifulsop4": "beautifulsoup4", "djanga": "django", "flaskk": "flask",
+    "numppy": "numpy", "pands": "pandas", "tensorfow": "tensorflow",
+    "expresss": "express", "lodahs": "lodash", "loadsh": "lodash",
+    "axois": "axios", "react-domm": "react-dom", "chalkk": "chalk",
+}
 
 DEPENDENCY_SEVERITY_POINTS = {
     "CRITICAL": 16,
@@ -2696,6 +2723,79 @@ def build_dependency_finding(dep: dict, vuln: dict) -> dict:
     }
 
 
+def registry_package_exists(dep: dict) -> bool | None:
+    ecosystem = str(dep.get("ecosystem") or "")
+    package = str(dep.get("package") or "").strip()
+    cache_key = (ecosystem.lower(), package.lower())
+    with PACKAGE_LOOKUP_LOCK:
+        if cache_key in PACKAGE_LOOKUP_CACHE:
+            return PACKAGE_LOOKUP_CACHE[cache_key]
+    if not package or ecosystem not in {"PyPI", "npm"}:
+        return None
+    if ecosystem == "PyPI":
+        url = f"https://pypi.org/pypi/{quote(package, safe='')}/json"
+    else:
+        url = f"https://registry.npmjs.org/{quote(package, safe='@/') }"
+    request = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "AI-Code-Audit"})
+    result: bool | None = None
+    try:
+        with urllib.request.urlopen(request, timeout=5, context=ssl.create_default_context(cafile=certifi.where())) as response:
+            result = 200 <= int(response.status) < 300
+    except urllib.error.HTTPError as exc:
+        result = False if exc.code == 404 else None
+    except Exception:
+        result = None
+    with PACKAGE_LOOKUP_LOCK:
+        PACKAGE_LOOKUP_CACHE[cache_key] = result
+    return result
+
+
+def build_dependency_reputation_findings(dependencies: list[dict], skipped: list[dict]) -> list[dict]:
+    findings = []
+    lookup_candidates = dependencies[:MAX_PACKAGE_REPUTATION_LOOKUPS]
+    with ThreadPoolExecutor(max_workers=min(8, max(1, len(lookup_candidates)))) as executor:
+        existence = list(executor.map(registry_package_exists, lookup_candidates)) if lookup_candidates else []
+    for dep, exists in zip(lookup_candidates, existence):
+        normalized = str(dep.get("package") or "").lower().replace("_", "-")
+        expected_name = SUSPICIOUS_PACKAGE_TYPOS.get(normalized)
+        if expected_name:
+            findings.append({
+                "type": "dependency_typosquatting",
+                "file": dep.get("file", ""), "line": dep.get("line", 1),
+                "package": dep.get("package", ""), "ecosystem": dep.get("ecosystem", ""),
+                "message": f"Possible dependency typo: {dep.get('package')} resembles {expected_name}",
+                "severity": 18.0,
+                "explanation": "A misspelled popular package name can install an unrelated or malicious package.",
+                "suggested_fix": f"Verify the intended package. If appropriate, replace it with {expected_name} and review the lockfile diff.",
+                "reputation_status": "possible_typosquat",
+            })
+        elif exists is False:
+            findings.append({
+                "type": "dependency_unverified",
+                "file": dep.get("file", ""), "line": dep.get("line", 1),
+                "package": dep.get("package", ""), "ecosystem": dep.get("ecosystem", ""),
+                "message": f"Package was not found in the official {dep.get('ecosystem')} registry: {dep.get('package')}",
+                "severity": 10.0,
+                "explanation": "The dependency may be hallucinated, misspelled, private, removed, or sourced from a registry this scan cannot see.",
+                "suggested_fix": "Confirm the exact package name and registry with the project owner before installing it.",
+                "reputation_status": "not_found",
+            })
+    for item in skipped:
+        raw = str(item.get("raw") or "")
+        if re.search(r"(?:git\+|github:|https?://|file:|link:)", raw, re.IGNORECASE):
+            findings.append({
+                "type": "dependency_unpinned_source",
+                "file": item.get("file", ""), "line": item.get("line", 1),
+                "package": raw[:160], "ecosystem": "source",
+                "message": "Dependency comes from a non-registry or local source",
+                "severity": 8.0,
+                "explanation": "Source dependencies can change outside normal registry controls and are harder to verify reproducibly.",
+                "suggested_fix": "Pin an immutable commit and verify the repository owner, release signature, and reviewed source.",
+                "reputation_status": "unverified_source",
+            })
+    return findings
+
+
 def summarize_dependency_findings(findings: list[dict]) -> dict:
     unique_packages = {
         (item.get("package", "").lower(), item.get("version", ""))
@@ -2753,23 +2853,26 @@ def analyze_dependency_manifests(zip_file: zipfile.ZipFile) -> dict:
         skipped_dependencies.extend(skipped)
 
     deduped_dependencies = dedupe_dependencies(all_dependencies)
+    reputation_findings = build_dependency_reputation_findings(deduped_dependencies, skipped_dependencies)
 
     try:
         osv_matches = query_osv_batch(deduped_dependencies)
     except Exception as exc:
+        reputation_risk = round(min(25.0, sum(float(item["severity"]) for item in reputation_findings) * 0.75), 2)
         return {
             "manifests_scanned": len(manifest_files),
             "dependencies_parsed": len(deduped_dependencies),
             "dependencies_queried": 0,
             "dependencies_skipped": skipped_dependencies,
-            "dependency_findings": [],
-            "dependency_risk_points": 0.0,
+            "dependency_findings": reputation_findings,
+            "dependency_reputation_findings": reputation_findings,
+            "dependency_risk_points": reputation_risk,
             "dependency_summary_lines": [f"Dependency vulnerability lookup failed: {exc}"],
             "dependency_scan_error": "Dependency vulnerability lookup failed during the repo scan.",
             "dependency_rollup": {
                 "advisory_count": 0,
-                "unique_package_versions": 0,
-                "unique_manifest_files": 0,
+                "unique_package_versions": len({item.get("package") for item in reputation_findings}),
+                "unique_manifest_files": len({item.get("file") for item in reputation_findings}),
                 "unique_vulnerability_ids": 0,
             },
         }
@@ -2792,6 +2895,9 @@ def analyze_dependency_manifests(zip_file: zipfile.ZipFile) -> dict:
 
             dependency_findings.append(build_dependency_finding(dep, vuln))
 
+    advisory_count = len(dependency_findings)
+    dependency_findings.extend(reputation_findings)
+
     dependency_findings.sort(
         key=lambda item: (-float(item.get("severity", 0)), item.get("package", "").lower(), item.get("id", ""))
     )
@@ -2806,15 +2912,17 @@ def analyze_dependency_manifests(zip_file: zipfile.ZipFile) -> dict:
         summary_lines.append(f"Parsed {len(deduped_dependencies)} dependency entries with resolvable versions.")
     if skipped_dependencies:
         summary_lines.append(f"Skipped {len(skipped_dependencies)} dependency entries with complex or indirect version specs.")
-    if dependency_findings:
+    if advisory_count:
         summary_lines.append(
-            f"Found {rollup['advisory_count']} dependency advisory finding(s) across "
+            f"Found {advisory_count} dependency advisory finding(s) across "
             f"{rollup['unique_package_versions']} package/version pair(s)."
         )
     elif manifest_files:
         summary_lines.append("No known dependency vulnerabilities were found in the queried manifest versions.")
 
     summary_lines.extend(manifest_scan_errors)
+    if reputation_findings:
+        summary_lines.append(f"Found {len(reputation_findings)} package reputation or source-integrity warning(s).")
 
     return {
         "manifests_scanned": len(manifest_files),
@@ -2822,10 +2930,11 @@ def analyze_dependency_manifests(zip_file: zipfile.ZipFile) -> dict:
         "dependencies_queried": len(deduped_dependencies),
         "dependencies_skipped": skipped_dependencies,
         "dependency_findings": dependency_findings,
+        "dependency_reputation_findings": reputation_findings,
         "dependency_risk_points": dependency_risk_points,
         "dependency_summary_lines": summary_lines,
         "dependency_scan_error": None,
-        "dependency_rollup": rollup,
+        "dependency_rollup": {**rollup, "advisory_count": advisory_count, "reputation_finding_count": len(reputation_findings)},
     }
 
 
@@ -3035,22 +3144,35 @@ def build_evidence_profile(
 
 def build_fix_previews(code: str, flags: list[dict]) -> list[dict]:
     patterns = {str(flag.get("pattern") or "") for flag in flags}
-    if "yaml.load" not in patterns or "yaml.load" not in code:
-        return []
-    patched = re.sub(r"\byaml\.load\s*\(", "yaml.safe_load(", code)
-    if patched == code:
-        return []
-    diff = "\n".join(difflib.unified_diff(
-        code.splitlines(), patched.splitlines(), fromfile="original", tofile="safer", lineterm=""
-    ))
-    return [{
-        "title": "Use PyYAML safe loading",
-        "confidence": "high",
-        "finding_pattern": "yaml.load",
-        "diff": diff,
-        "patched_code": patched,
-        "applies_automatically": False,
-    }]
+    previews = []
+
+    def add_preview(title: str, confidence: str, pattern: str, patched: str) -> None:
+        if patched == code or any(item["patched_code"] == patched for item in previews):
+            return
+        diff = "\n".join(difflib.unified_diff(
+            code.splitlines(), patched.splitlines(), fromfile="original", tofile="safer", lineterm=""
+        ))
+        previews.append({
+            "title": title,
+            "confidence": confidence,
+            "finding_pattern": pattern,
+            "diff": diff,
+            "patched_code": patched,
+            "applies_automatically": False,
+        })
+
+    if "yaml.load" in patterns and "yaml.load" in code:
+        add_preview("Use PyYAML safe loading", "high", "yaml.load", re.sub(r"\byaml\.load\s*\(", "yaml.safe_load(", code))
+    if "tls_verify_disabled" in patterns:
+        add_preview("Restore TLS certificate verification", "high", "tls_verify_disabled", re.sub(r"\bverify\s*=\s*False\b", "verify=True", code))
+    if "debug_mode_enabled" in patterns:
+        add_preview("Disable production debug mode", "high", "debug_mode_enabled", re.sub(r"\bdebug\s*=\s*True\b", "debug=False", code))
+    if any(pattern in patterns for pattern in {"eval(", "exec("}) and re.search(r"\beval\s*\(", code):
+        patched = re.sub(r"\beval\s*\(", "ast.literal_eval(", code)
+        if not re.search(r"^\s*(?:import\s+ast|from\s+ast\s+import)", patched, re.MULTILINE):
+            patched = "import ast\n" + patched
+        add_preview("Parse data instead of executing it", "medium", "eval(", patched)
+    return previews[:4]
 
 
 def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
@@ -3173,6 +3295,34 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
                     explanation=explain_flag(regex_pattern, "secret"),
                 ))
 
+        if re.search(r"\b(?:pip|pip3|npm|pnpm|yarn)\s+(?:install|add)\b.*(?:git\+|https?://|github:)", stripped, re.IGNORECASE):
+            regex_flags.append(make_flag(
+                line=line_number,
+                flag_type="supply_chain",
+                pattern="unverified_package_source",
+                message="Package is installed directly from an external source",
+                severity=9,
+                explanation="Direct source installs can bypass normal registry integrity and version controls. Verify the owner and pin an immutable commit.",
+            ))
+        if re.search(r"allow_origins\s*=\s*\[\s*['\"]\*['\"]\s*\]|access-control-allow-origin\s*[:=]\s*['\"]?\*", stripped, re.IGNORECASE):
+            regex_flags.append(make_flag(
+                line=line_number,
+                flag_type="insecure_default",
+                pattern="wildcard_cors",
+                message="CORS allows every origin",
+                severity=10,
+                explanation="A wildcard cross-origin policy can expose authenticated data to untrusted websites.",
+            ))
+        if re.search(r"\b(?:token|secret|session|nonce|password)\w*\s*=.*\brandom\.", stripped, re.IGNORECASE):
+            regex_flags.append(make_flag(
+                line=line_number,
+                flag_type="insecure_default",
+                pattern="weak_random_secret",
+                message="Security-sensitive value may use non-cryptographic randomness",
+                severity=14,
+                explanation="Python's random module is predictable and should not generate tokens, secrets, nonces, or passwords.",
+            ))
+
     try:
         ast_flags = analyze_python_ast(analysis_code)
     except Exception:
@@ -3260,6 +3410,12 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
     ):
         touches.append("encoding")
 
+    if re.search(r"\b(?:sentry_sdk\.init|posthog\.capture|analytics\.track|mixpanel\.track)\s*\(", cleaned_code_lower):
+        touches.append("telemetry")
+
+    if re.search(r"\bwinreg\.(?:setvalue|setvalueex|createkey)\s*\(|\b(?:crontab|schtasks|launchctl)\b", cleaned_code_lower):
+        touches.append("persistence")
+
     if any(flag["type"] in {"secret", "secret_source", "secret_exfiltration"} for flag in flags):
         touches.append("secrets")
 
@@ -3298,6 +3454,18 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
         mismatch_flags.append("Code deserializes data in a way that is not clearly mentioned in the intent.")
         risk_points += 2.0
 
+    if meaningful_intent and "telemetry" in touches and not intent_mentions_any(
+        intent_lower, ["telemetry", "analytics", "monitoring", "metrics", "logging", "sentry", "tracking"]
+    ):
+        mismatch_flags.append("Code sends telemetry or analytics that was not clearly mentioned in the intent.")
+        risk_points += 6.0
+
+    if meaningful_intent and "persistence" in touches and not intent_mentions_any(
+        intent_lower, ["startup", "scheduled", "scheduler", "service", "persist", "registry", "cron"]
+    ):
+        mismatch_flags.append("Code may create persistence that was not requested.")
+        risk_points += 12.0
+
     has_literal_or_exfiltrated_secret = any(
         flag.get("type") in {"secret", "secret_exfiltration"} for flag in flags
     )
@@ -3325,6 +3493,12 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
 
     if "encoding" in touches:
         behavior_summary.append("Uses encoded data; this is not dangerous by itself unless the decoded value is executed or otherwise trusted blindly.")
+
+    if "telemetry" in touches:
+        behavior_summary.append("Initializes or sends telemetry or analytics events.")
+
+    if "persistence" in touches:
+        behavior_summary.append("May configure the code to persist or run again later.")
 
     if "secrets" in touches:
         behavior_summary.append("Contains possible credentials or secret values.")
@@ -3364,8 +3538,18 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
 
 def analyze_code_product(intent: str, code: str, plan: str = "free", filename: str | None = None) -> dict:
     result = analyze_code(intent, code, plan=plan)
+    scan_id = hashlib.sha256(f"{intent}\0{code}".encode("utf-8", errors="ignore")).hexdigest()[:24]
+    result["scan_id"] = scan_id
+    for finding in result.get("flags") or []:
+        finding["finding_id"] = hashlib.sha256(
+            f"behavior\0{finding.get('pattern')}\0{finding.get('line')}\0{finding.get('message')}".encode("utf-8")
+        ).hexdigest()[:20]
     semgrep = run_semgrep_scan(code, filename=filename)
     semgrep_findings = semgrep.get("findings") or []
+    for finding in semgrep_findings:
+        finding["finding_id"] = hashlib.sha256(
+            f"semgrep\0{finding.get('rule_id')}\0{finding.get('line')}\0{finding.get('message')}".encode("utf-8")
+        ).hexdigest()[:20]
     result["engine_findings"] = semgrep_findings
     result["analysis_engines"] = [
         {"name": "behavior", "status": "complete", "findings": len(result.get("flags") or [])},
@@ -4318,9 +4502,11 @@ def stripe_status():
         "supabase_admin_valid": supabase_admin_is_valid(),
         "app_base_url": APP_BASE_URL,
         "recovery_version": 4,
-        "scanner_version": 7,
+        "scanner_version": 8,
         "security_version": 1,
-        "benchmark_cases": 265,
+        "benchmark_cases": 803,
+        "benchmark_independent_cases": 803,
+        "benchmark_regression_variants": 265,
     }
 
 
@@ -4347,6 +4533,15 @@ def home():
 @app.get("/health")
 def health():
     return {"ok": True}
+
+
+@app.get("/accuracy/status")
+def accuracy_status():
+    try:
+        report = json.loads(Path(__file__).with_name("accuracy-report.json").read_text(encoding="utf-8"))
+    except Exception:
+        return private_json({"available": False, "detail": "The published accuracy report is unavailable."}, status_code=503)
+    return private_json({"available": True, **report})
 
 
 @app.post("/scan")
@@ -4398,6 +4593,32 @@ def fix_preview(req: FixPreviewRequest, request: Request):
         "fix_previews": build_fix_previews(req.code, result.get("flags") or []),
         "applied": False,
     })
+
+
+@app.post("/feedback")
+def submit_feedback(req: FeedbackRequest, request: Request):
+    access = enrich_access_with_admin_metadata(get_request_access_context(request))
+    enforce_rate_limit(request, access, "feedback")
+    if not access.get("authenticated") or not access.get("user_id"):
+        raise HTTPException(status_code=401, detail="Sign in before submitting scanner feedback.")
+    verdict = req.verdict.strip().lower()
+    if verdict not in {"correct", "false_positive", "missed_risk"}:
+        raise HTTPException(status_code=400, detail="Choose correct, false positive, or missed risk.")
+    if not re.fullmatch(r"[a-f0-9]{8,32}", req.scan_id) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,40}", req.finding_id):
+        raise HTTPException(status_code=400, detail="The feedback reference is invalid.")
+    payload = {
+        "user_id": str(access["user_id"]),
+        "scan_id": req.scan_id,
+        "finding_id": req.finding_id,
+        "verdict": verdict,
+        "category": req.category.strip()[:80],
+        "note": req.note.strip()[:500],
+        "scanner_version": 8,
+    }
+    inserted = supabase_rest_request("POST", "scan_feedback", payload=payload, prefer="return=representation")
+    if not inserted:
+        return private_json({"detail": "Feedback storage is not configured yet."}, status_code=503)
+    return private_json({"received": True, "stored_code": False})
 
 
 

@@ -7,6 +7,32 @@
 - Results include six evidence categories, reviewable patch previews, JSON downloads, and SARIF 2.1 output.
 - A GitHub App webhook can scan pull-request snapshots and publish a GitHub Check with line annotations.
 - The regression suite contains 265 formatting variants derived from 53 labeled base scenarios.
+- The independent accuracy gate measures those 53 internal cases plus 750 official OWASP BenchmarkPython cases, with results split by language and vulnerability class.
+- Signed-in users can mark findings accurate, report false alarms, or report a missed risk. Feedback records fingerprints and labels only; submitted code is not stored.
+- Dependency review checks published advisories, likely package-name typos, missing registry packages, and unpinned direct-source installs.
+- Review-only “Fix this safely” previews cover unsafe YAML loading, disabled TLS verification, production debug mode, and dynamic `eval`.
+
+## Accuracy gate
+
+Run the same gate locally with a checked-out copy of the official OWASP Python benchmark:
+
+```bash
+python scripts/run_accuracy_gate.py --owasp-dir ../BenchmarkPython --limit 750
+```
+
+The current measured report is committed as `accuracy-report.json`. The gate fails if recall falls below the committed floor or false-positive rate rises above it. This prevents regression; it is not a claim that every vulnerability class is already detected well. Current limitations and exact category results are documented in `docs/ACCURACY.md` and exposed at `/accuracy/status`.
+
+To make the gate block a Render release, set the service's **Build Command** to:
+
+```bash
+bash scripts/render_build.sh
+```
+
+Also configure Render to wait for GitHub checks before auto-deploying when that option is available for the service.
+
+## Feedback setup
+
+In Supabase, open **SQL Editor**, paste the contents of `supabase/scan_feedback.sql`, and run it once. The table has row-level security enabled and denies browser clients direct access; the authenticated backend writes the minimal feedback record with the existing Supabase secret key.
 
 ## Render environment variables
 
