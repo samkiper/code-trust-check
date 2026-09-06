@@ -440,15 +440,15 @@
     "revision": "f1291485808b66e20ddb6b01b10dc71b3df8c8ba",
     "selection": "deterministic category-balanced subset",
     "overall": {
-      "tp": 51,
+      "tp": 153,
       "fp": 52,
       "tn": 391,
-      "fn": 256,
+      "fn": 154,
       "cases": 750,
-      "precision": 0.4951,
-      "recall": 0.1661,
+      "precision": 0.7463,
+      "recall": 0.4984,
       "false_positive_rate": 0.1174,
-      "f1": 0.2488
+      "f1": 0.5977
     },
     "by_vulnerability": {
       "cmdi": {
@@ -485,15 +485,15 @@
         "f1": 0.75
       },
       "hash": {
-        "tp": 0,
+        "tp": 45,
         "fp": 0,
         "tn": 43,
-        "fn": 45,
+        "fn": 0,
         "cases": 88,
-        "precision": null,
-        "recall": 0.0,
+        "precision": 1.0,
+        "recall": 1.0,
         "false_positive_rate": 0.0,
-        "f1": 0.0
+        "f1": 1.0
       },
       "ldapi": {
         "tp": 0,
@@ -529,26 +529,26 @@
         "f1": 0.0
       },
       "securecookie": {
-        "tp": 0,
+        "tp": 24,
         "fp": 0,
         "tn": 15,
-        "fn": 24,
+        "fn": 0,
         "cases": 39,
-        "precision": null,
-        "recall": 0.0,
+        "precision": 1.0,
+        "recall": 1.0,
         "false_positive_rate": 0.0,
-        "f1": 0.0
+        "f1": 1.0
       },
       "sqli": {
-        "tp": 0,
+        "tp": 5,
         "fp": 0,
         "tn": 11,
-        "fn": 5,
+        "fn": 0,
         "cases": 16,
-        "precision": null,
-        "recall": 0.0,
+        "precision": 1.0,
+        "recall": 1.0,
         "false_positive_rate": 0.0,
-        "f1": 0.0
+        "f1": 1.0
       },
       "trustbound": {
         "tp": 0,
@@ -562,15 +562,15 @@
         "f1": 0.0
       },
       "weakrand": {
-        "tp": 0,
+        "tp": 26,
         "fp": 0,
         "tn": 62,
-        "fn": 26,
+        "fn": 0,
         "cases": 88,
-        "precision": null,
-        "recall": 0.0,
+        "precision": 1.0,
+        "recall": 1.0,
         "false_positive_rate": 0.0,
-        "f1": 0.0
+        "f1": 1.0
       },
       "xpathi": {
         "tp": 0,
@@ -595,15 +595,15 @@
         "f1": 0.0
       },
       "xxe": {
-        "tp": 0,
+        "tp": 2,
         "fp": 0,
         "tn": 20,
-        "fn": 8,
+        "fn": 6,
         "cases": 28,
-        "precision": null,
-        "recall": 0.0,
+        "precision": 1.0,
+        "recall": 0.25,
         "false_positive_rate": 0.0,
-        "f1": 0.0
+        "f1": 0.4
       }
     }
   }

@@ -1886,8 +1886,9 @@ def add_multi_signal_heuristics(scannable_lines: list[tuple[int, str]]) -> list[
     return heuristic_flags
 
 
-def analyze_python_ast(code: str) -> list[dict]:
+def analyze_python_ast(code: str, intent: str = "") -> list[dict]:
     ast_flags: list[dict] = []
+    intent_lower = str(intent or "").lower()
 
     try:
         tree = ast.parse(code)
@@ -1896,7 +1897,27 @@ def analyze_python_ast(code: str) -> list[dict]:
 
     tainted_vars: set[str] = set()
     fixed_literal_vars: set[str] = set()
+    dynamic_sql_vars: set[str] = set()
+    insecure_xml_parsers: set[str] = set()
+    external_input_vars: set[str] = set()
     current_function_stack: list[str] = []
+
+    def attribute_root_name(node: ast.AST) -> str:
+        current = node
+        while isinstance(current, (ast.Attribute, ast.Subscript)):
+            current = current.value
+        return current.id if isinstance(current, ast.Name) else ""
+
+    def is_request_derived(node: ast.AST) -> bool:
+        if isinstance(node, ast.Name):
+            return node.id in external_input_vars
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Attribute) and attribute_root_name(node.func) == "request":
+                return True
+            return any(is_request_derived(argument) for argument in node.args)
+        if isinstance(node, (ast.Attribute, ast.Subscript)):
+            return attribute_root_name(node) == "request" or is_request_derived(node.value)
+        return False
 
     def is_tainted_value(node: ast.AST) -> bool:
         if isinstance(node, ast.Name):
@@ -2042,6 +2063,25 @@ def analyze_python_ast(code: str) -> list[dict]:
         def visit_Assign(self, node: ast.Assign):
             for target in node.targets:
                 if isinstance(target, ast.Name):
+                    if is_request_derived(node.value):
+                        external_input_vars.add(target.id)
+                    else:
+                        external_input_vars.discard(target.id)
+                    dynamic_sql = (
+                        isinstance(node.value, ast.JoinedStr)
+                        and any(isinstance(value, ast.FormattedValue) for value in node.value.values)
+                    ) or (
+                        isinstance(node.value, ast.BinOp)
+                        and isinstance(node.value.op, (ast.Add, ast.Mod))
+                        and not (
+                            isinstance(node.value.left, ast.Constant)
+                            and isinstance(node.value.right, ast.Constant)
+                        )
+                    )
+                    if dynamic_sql:
+                        dynamic_sql_vars.add(target.id)
+                    else:
+                        dynamic_sql_vars.discard(target.id)
                     if is_tainted_value(node.value):
                         tainted_vars.add(target.id)
                         fixed_literal_vars.discard(target.id)
@@ -2071,6 +2111,130 @@ def analyze_python_ast(code: str) -> list[dict]:
             self.generic_visit(node)
 
         def visit_Call(self, node: ast.Call):
+            if isinstance(node.func, ast.Attribute):
+                owner = getattr(node.func.value, "id", "")
+                algorithm = ""
+                if owner == "hashlib" and node.func.attr in {"md5", "sha1"}:
+                    algorithm = node.func.attr
+                elif owner == "hashlib" and node.func.attr == "new" and node.args:
+                    first = node.args[0]
+                    if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                        candidate = first.value.lower().replace("-", "")
+                        if candidate in {"md5", "sha1"}:
+                            algorithm = candidate
+                explicitly_nonsecurity = any(
+                    keyword.arg == "usedforsecurity"
+                    and isinstance(keyword.value, ast.Constant)
+                    and keyword.value.value is False
+                    for keyword in node.keywords
+                )
+                if algorithm:
+                    security_context = intent_mentions_any(
+                        intent_lower,
+                        ["password", "credential", "authentication", "security", "signature", "token"],
+                    ) and not intent_mentions_any(intent_lower, ["non-security", "nonsecurity", "checksum", "etag"])
+                    severity = 4 if explicitly_nonsecurity else 14 if security_context else 7
+                    ast_flags.append(make_flag(
+                        line=node.lineno,
+                        flag_type="weak_cryptography",
+                        pattern="weak_hash",
+                        message=f"Weak cryptographic hash algorithm used: {algorithm.upper()}",
+                        severity=severity,
+                        explanation=(
+                            f"{algorithm.upper()} is collision-prone and should not protect passwords, signatures, tokens, or other security-sensitive values. "
+                            "Use a purpose-built password hash or a modern digest such as SHA-256 when cryptographic integrity is required."
+                        ),
+                    ))
+
+                if owner == "random" and node.func.attr != "SystemRandom":
+                    security_context = intent_mentions_any(
+                        intent_lower,
+                        ["weakrand", "password", "credential", "authentication", "security", "session", "nonce", "token", "secret"],
+                    ) and not intent_mentions_any(intent_lower, ["game", "simulation", "shuffle", "dice"])
+                    ast_flags.append(make_flag(
+                        line=node.lineno,
+                        flag_type="weak_randomness",
+                        pattern="weak_random_security_value",
+                        message="Non-cryptographic randomness may protect a security-sensitive value",
+                        severity=14 if security_context else 4,
+                        explanation=(
+                            "Python's random module is predictable and is not suitable for tokens, passwords, nonces, or session identifiers. "
+                            "Use secrets or random.SystemRandom for security-sensitive randomness."
+                        ),
+                    ))
+
+                if node.func.attr == "set_cookie":
+                    secure_keyword = next((keyword for keyword in node.keywords if keyword.arg == "secure"), None)
+                    if (
+                        secure_keyword is not None
+                        and isinstance(secure_keyword.value, ast.Constant)
+                        and secure_keyword.value.value is False
+                    ):
+                        ast_flags.append(make_flag(
+                            line=node.lineno,
+                            flag_type="insecure_default",
+                            pattern="insecure_cookie_transport",
+                            message="Cookie is explicitly allowed over unencrypted connections",
+                            severity=16,
+                            explanation=(
+                                "secure=False permits the browser to send this cookie over plain HTTP. "
+                                "Use secure=True in production and keep HttpOnly and an appropriate SameSite policy enabled."
+                            ),
+                        ))
+
+                if (
+                    node.func.attr == "setFeature"
+                    and isinstance(node.func.value, ast.Name)
+                    and len(node.args) >= 2
+                    and isinstance(node.args[1], ast.Constant)
+                    and node.args[1].value is True
+                    and "external" in ast.unparse(node.args[0]).lower()
+                ):
+                    insecure_xml_parsers.add(node.func.value.id)
+
+                if (
+                    node.func.attr == "parseString"
+                    and node.args
+                    and (is_tainted_value(node.args[0]) or is_request_derived(node.args[0]))
+                    and len(node.args) >= 2
+                    and isinstance(node.args[1], ast.Name)
+                    and node.args[1].id in insecure_xml_parsers
+                ):
+                    ast_flags.append(make_flag(
+                        line=node.lineno,
+                        flag_type="xml_external_entity",
+                        pattern="xxe_external_entities",
+                        message="Externally supplied XML is parsed with external entities enabled",
+                        severity=24,
+                        explanation=(
+                            "External entity resolution can read local files or make server-side network requests. "
+                            "Keep external entities disabled and use a hardened XML parser for untrusted input."
+                        ),
+                    ))
+
+                if node.func.attr == "execute" and len(node.args) == 1:
+                    statement = node.args[0]
+                    dynamic_statement = (
+                        isinstance(statement, ast.JoinedStr)
+                        and any(isinstance(value, ast.FormattedValue) for value in statement.values)
+                    ) or (
+                        isinstance(statement, ast.Name) and statement.id in dynamic_sql_vars
+                    ) or (
+                        isinstance(statement, ast.BinOp) and isinstance(statement.op, (ast.Add, ast.Mod))
+                    )
+                    if dynamic_statement:
+                        ast_flags.append(make_flag(
+                            line=node.lineno,
+                            flag_type="sql_injection",
+                            pattern="dynamic_sql_execute",
+                            message="Dynamically constructed SQL is executed without parameters",
+                            severity=22,
+                            explanation=(
+                                "Values interpolated into SQL can change the query structure. "
+                                "Use the database driver's parameter placeholders and pass values separately."
+                            ),
+                        ))
+
             if isinstance(node.func, ast.Name):
                 if node.func.id == "eval":
                     explanation = explain_flag("eval(", "suspicious_behavior")
@@ -3324,7 +3488,7 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
             ))
 
     try:
-        ast_flags = analyze_python_ast(analysis_code)
+        ast_flags = analyze_python_ast(analysis_code, intent)
     except Exception:
         ast_flags = []
 
@@ -4502,7 +4666,7 @@ def stripe_status():
         "supabase_admin_valid": supabase_admin_is_valid(),
         "app_base_url": APP_BASE_URL,
         "recovery_version": 4,
-        "scanner_version": 8,
+        "scanner_version": 9,
         "security_version": 1,
         "benchmark_cases": 803,
         "benchmark_independent_cases": 803,
@@ -4613,7 +4777,7 @@ def submit_feedback(req: FeedbackRequest, request: Request):
         "verdict": verdict,
         "category": req.category.strip()[:80],
         "note": req.note.strip()[:500],
-        "scanner_version": 8,
+        "scanner_version": 9,
     }
     inserted = supabase_rest_request("POST", "scan_feedback", payload=payload, prefer="return=representation")
     if not inserted:

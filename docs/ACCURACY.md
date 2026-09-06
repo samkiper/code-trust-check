@@ -7,9 +7,9 @@ AI Code Audit is evaluated against two distinct datasets. Internal labeled scena
 | Dataset | Cases | Precision | Recall | False-positive rate | F1 |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Internal independent cases | 53 | 100.00% | 100.00% | 0.00% | 100.00% |
-| OWASP category-balanced cases | 750 | 49.51% | 16.61% | 11.74% | 24.88% |
+| OWASP category-balanced cases | 750 | 74.63% | 49.84% | 11.74% | 59.77% |
 
-The internal result demonstrates performance on the product's deliberately supported behaviors. The OWASP result shows that broad vulnerability coverage is still limited. In particular, the current engine catches parts of command injection, code injection, and deserialization but has low or zero recall in several other OWASP categories. The product must describe these results as a review aid, not a complete security guarantee.
+The internal result demonstrates performance on the product's deliberately supported behaviors. On the selected OWASP cases, the engine has complete recall with no false positives for weak hashes, insecure cookie transport, weak security randomness, and SQL injection. It also detects every selected command-injection, code-injection, and deserialization case, although those three categories still produce substantial false positives. XXE recall is 25% with no false positives. LDAP injection, path traversal, redirects, trust-boundary violations, XPath injection, and XSS still have zero recall in this benchmark. The product must therefore describe these results as a review aid, not a complete security guarantee.
 
 Exact confusion matrices and per-category measurements are in `accuracy-report.json` and the public `/accuracy/status` endpoint.
 

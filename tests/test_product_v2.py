@@ -81,6 +81,55 @@ class AISpecificBehaviorTests(unittest.TestCase):
         self.assertTrue(any(item.get("pattern") == "wildcard_cors" for item in result["flags"]))
 
 
+class CryptographyAndCookieTests(unittest.TestCase):
+    def test_md5_is_risky_for_security_but_low_priority_for_checksum(self):
+        code = "import hashlib\ndigest = hashlib.md5(payload).hexdigest()"
+        security = main.analyze_code("Hash a security token", code)
+        checksum = main.analyze_code("Calculate a non-security file checksum", code)
+        self.assertEqual(security["risk"], "yellow")
+        self.assertEqual(checksum["risk"], "green")
+        self.assertTrue(any(item.get("pattern") == "weak_hash" for item in security["flags"]))
+
+    def test_random_module_is_risky_for_tokens_but_not_gameplay(self):
+        code = "import random\nvalue = random.randint(0, 999999)"
+        token = main.analyze_code("Generate a random authentication token", code)
+        game = main.analyze_code("Roll a random number for a board game", code)
+        self.assertEqual(token["risk"], "yellow")
+        self.assertEqual(game["risk"], "green")
+
+    def test_cookie_with_secure_false_requires_review(self):
+        code = "response.set_cookie('session', value, secure=False, httponly=True)"
+        result = main.analyze_code("Create a secure login cookie", code)
+        self.assertEqual(result["risk"], "yellow")
+        self.assertTrue(any(item.get("pattern") == "insecure_cookie_transport" for item in result["flags"]))
+
+
+class InjectionAndParserTests(unittest.TestCase):
+    def test_interpolated_sql_is_risky_but_parameterized_sql_is_clear(self):
+        unsafe = "sql = f\"SELECT * FROM users WHERE name = '{name}'\"\ncursor.execute(sql)"
+        safe = "sql = 'SELECT * FROM users WHERE name = ?'\ncursor.execute(sql, (name,))"
+        unsafe_result = main.analyze_code("Look up a database user", unsafe)
+        safe_result = main.analyze_code("Look up a database user", safe)
+        self.assertEqual(unsafe_result["risk"], "yellow")
+        self.assertEqual(safe_result["risk"], "green")
+        self.assertTrue(any(item.get("pattern") == "dynamic_sql_execute" for item in unsafe_result["flags"]))
+
+    def test_external_entities_are_only_high_risk_with_untrusted_xml(self):
+        unsafe = """from flask import request
+import xml.dom.minidom
+import xml.sax
+payload = request.data
+parser = xml.sax.make_parser()
+parser.setFeature(xml.sax.handler.feature_external_ges, True)
+xml.dom.minidom.parseString(payload, parser)"""
+        safe = unsafe.replace("payload = request.data", "payload = '<root>safe</root>'")
+        unsafe_result = main.analyze_code("Parse uploaded XML", unsafe)
+        safe_result = main.analyze_code("Parse a fixed XML template", safe)
+        self.assertEqual(unsafe_result["risk"], "yellow")
+        self.assertEqual(safe_result["risk"], "green")
+        self.assertTrue(any(item.get("pattern") == "xxe_external_entities" for item in unsafe_result["flags"]))
+
+
 class SarifTests(unittest.TestCase):
     def test_sarif_is_github_compatible_shape(self):
         result = main.analyze_code("Display input", "value = input()\neval(value)")
