@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 160" role="img" aria-labelledby="title desc">
+  <title id="title">AI Code Audit</title>
+  <desc id="desc">A green checkmark box followed by the AI Code Audit wordmark.</desc>
+  <rect x="8" y="8" width="144" height="144" rx="34" fill="#a7f43c"/>
+  <path d="M44 82 69 107 118 53" fill="none" stroke="#07110f" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="188" y="104" fill="#07110f" font-family="Arial, Helvetica, sans-serif" font-size="72" font-weight="800" letter-spacing="-2">AI CODE</text>
+  <text x="505" y="104" fill="#239b6b" font-family="Arial, Helvetica, sans-serif" font-size="72" font-weight="800" letter-spacing="-2">AUDIT</text>
+</svg>

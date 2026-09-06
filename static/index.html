@@ -4,7 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="description" content="Verify AI-generated code and public repositories before you trust or run them.">
-  <link rel="icon" type="image/png" href="/static/favicon.png">
+  <meta name="theme-color" content="#07110f">
+  <link rel="icon" type="image/svg+xml" href="/static/brand-mark.svg?v=2">
+  <link rel="alternate icon" type="image/png" href="/static/favicon.png?v=2">
+  <link rel="apple-touch-icon" href="/static/favicon.png?v=2">
   <title>AI Code Audit — Verify Before You Trust</title>
   <style>
     :root{--ink:#07110f;--panel:#0d1a17;--panel2:#0a1512;--line:#263a35;--muted:#93a8a2;--paper:#f1f4ed;--acid:#a7f43c;--mint:#49dfa4;--red:#ff625c;--amber:#ffbd59}
@@ -18,7 +21,7 @@
     .topbar{height:72px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);padding:0 clamp(20px,5vw,72px);position:sticky;top:0;background:#07110feb;backdrop-filter:blur(16px);z-index:30}
     .brand{display:flex;align-items:center;gap:11px;color:#fff;text-decoration:none;font-size:.86rem;letter-spacing:.13em;font-weight:700}
     .brand b{color:var(--acid)}
-    .brand-mark{width:34px;height:34px;display:grid;place-items:center;background:var(--acid);color:var(--ink);border-radius:9px;font-size:19px}
+    .brand-mark{width:34px;height:34px;display:block;flex:0 0 auto;border-radius:9px}
     .topbar nav{display:flex;gap:28px;align-items:center}
     .topbar nav>a{color:#b7c8c2;text-decoration:none;font-size:.88rem}
     .text-btn{border:0;background:none;color:#dbe6e2}
@@ -138,7 +141,7 @@
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="#top"><span class="brand-mark">✓</span><span>AI CODE <b>AUDIT</b></span></a>
+    <a class="brand" href="#top"><img class="brand-mark" src="/static/brand-mark.svg?v=2" alt=""><span>AI CODE <b>AUDIT</b></span></a>
     <nav>
       <a href="#how">How it works</a>
       <a href="#pricing">Pricing</a>
@@ -236,7 +239,7 @@ def build_report(data):
     </div>
   </section>
 
-  <footer><a class="brand" href="#top"><span class="brand-mark">✓</span><span>AI CODE <b>AUDIT</b></span></a><p>Know what the code does before it does it.</p><span>© 2026 AI Code Audit</span></footer>
+  <footer><a class="brand" href="#top"><img class="brand-mark" src="/static/brand-mark.svg?v=2" alt=""><span>AI CODE <b>AUDIT</b></span></a><p>Know what the code does before it does it.</p><span>© 2026 AI Code Audit</span></footer>
 
   <div class="modal-overlay" id="authModal">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="authTitle">
