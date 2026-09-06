@@ -5,7 +5,6 @@ from pydantic import BaseModel
 import re
 import os
 import io
-import base64
 import ast
 import json
 import zipfile
@@ -14,6 +13,7 @@ import ssl
 import certifi
 import hashlib
 import time
+import threading
 from html import escape as html_escape
 from dotenv import load_dotenv
 from datetime import date, datetime, timezone
@@ -27,14 +27,29 @@ app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
+    if request.url.scheme == "https" or forwarded_proto == "https":
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    if request.url.path.startswith(("/scan", "/auth/", "/stripe/")):
+        response.headers.setdefault("Cache-Control", "no-store, max-age=0")
+        response.headers.setdefault("Pragma", "no-cache")
+    return response
+
+
 @app.exception_handler(Exception)
 async def unhandled_application_error(request: Request, exc: Exception):
     stage = str(getattr(request.state, "operation_stage", "processing the request"))
     safe_stage = re.sub(r"[^a-zA-Z0-9 _-]", "", stage)[:80] or "processing the request"
-    error_type = type(exc).__name__
     log_server_issue(f"Unhandled application error while {safe_stage}", exc)
     return JSONResponse(
-        {"detail": f"The server hit a {error_type} while {safe_stage}."},
+        {"detail": "The server could not complete that request."},
         status_code=500,
         headers={"Cache-Control": "no-store"},
     )
@@ -124,6 +139,21 @@ PRO_REPO_FILE_LIMIT = 200
 PRO_REPO_SIZE_LIMIT_BYTES = 10_000_000
 PRO_DAILY_SCAN_LIMIT = None
 
+MAX_PASTED_CODE_BYTES_FREE = 1_000_000
+MAX_PASTED_CODE_BYTES_PRO = 2_000_000
+MAX_REPOSITORY_ARCHIVE_BYTES = 25_000_000
+MAX_DEPENDENCY_MANIFEST_BYTES = 1_000_000
+MAX_DEPENDENCY_MANIFESTS = 25
+
+RATE_LIMIT_WINDOW_SECONDS = 60
+RATE_LIMITS_PER_MINUTE = {
+    "scan": {"anonymous": 20, "authenticated": 60},
+    "repo": {"anonymous": 5, "authenticated": 15},
+    "billing": {"anonymous": 3, "authenticated": 10},
+}
+RATE_LIMIT_STATE: dict[str, list[float]] = {}
+RATE_LIMIT_LOCK = threading.Lock()
+
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_SECRET_KEY = os.getenv("SUPABASE_SECRET_KEY", "")
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "").strip()
@@ -205,6 +235,9 @@ SOURCE_PATTERNS = [
     r"\bsessionStorage\b",
     r"\bdocument\.cookie\b",
     r"\bwindow\.location\b",
+    r"\breq\.(?:body|query|params)\b",
+    r"(?<![A-Za-z0-9_$])\$_(?:GET|POST|REQUEST)\b",
+    r"\bprocess\.argv\b",
 ]
 
 DANGEROUS_SINK_KEYS = {
@@ -425,36 +458,6 @@ async def extract_request_access_token(request: Request) -> str | None:
     return None
 
 
-def decode_supabase_access_token(access_token: str) -> dict | None:
-    if not access_token or access_token.count(".") < 2:
-        return None
-
-    try:
-        payload_segment = access_token.split(".")[1]
-        padding = "=" * (-len(payload_segment) % 4)
-        decoded = base64.urlsafe_b64decode(payload_segment + padding)
-        payload = json.loads(decoded.decode("utf-8"))
-    except Exception:
-        return None
-
-    user_id = payload.get("sub")
-    email = payload.get("email")
-    if not user_id or not email:
-        return None
-
-    app_metadata = payload.get("app_metadata") or {}
-    role = str(app_metadata.get("role") or "user").lower()
-    plan = str(app_metadata.get("plan") or ("admin" if role == "admin" else "free")).lower()
-
-    return {
-        "id": user_id,
-        "email": email,
-        "app_metadata": app_metadata,
-        "role": role,
-        "plan": plan,
-    }
-
-
 def fetch_supabase_user(access_token: str) -> tuple[dict | None, bool]:
     if not access_token:
         return None, False
@@ -474,10 +477,6 @@ def fetch_supabase_user(access_token: str) -> tuple[dict | None, bool]:
                 return json.loads(response.read().decode("utf-8")), True
         except Exception:
             pass
-
-    decoded_user = decode_supabase_access_token(access_token)
-    if decoded_user:
-        return decoded_user, False
 
     return None, False
 
@@ -509,7 +508,6 @@ def get_request_access_context(request: Request, access_token: str | None = None
         return access
 
     access["debug"]["user_fetch_succeeded"] = bool(verified_with_supabase)
-    access["debug"]["user_token_decoded_fallback"] = bool(user and not verified_with_supabase)
     app_metadata = user.get("app_metadata") or {}
     role = str(app_metadata.get("role") or "user").lower()
     plan = str(app_metadata.get("plan") or ("admin" if role == "admin" else "free")).lower()
@@ -566,10 +564,51 @@ def build_actor_key(request: Request, access: dict) -> str:
 
     forwarded_for = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
     client_host = forwarded_for or (request.client.host if request.client else "unknown")
-    user_agent = request.headers.get("user-agent", "")
-    fingerprint = f"{client_host}|{user_agent}"
+    fingerprint = client_host
     digest = hashlib.sha256(fingerprint.encode("utf-8", errors="ignore")).hexdigest()
     return f"anon:{digest}"
+
+
+def enforce_rate_limit(request: Request, access: dict, scope: str):
+    limits = RATE_LIMITS_PER_MINUTE.get(scope) or RATE_LIMITS_PER_MINUTE["scan"]
+    identity_type = "authenticated" if access.get("authenticated") else "anonymous"
+    limit = int(limits[identity_type])
+    actor_key = build_actor_key(request, access)
+    bucket_key = f"{scope}:{actor_key}"
+    now = time.monotonic()
+    cutoff = now - RATE_LIMIT_WINDOW_SECONDS
+
+    with RATE_LIMIT_LOCK:
+        if len(RATE_LIMIT_STATE) > 10_000:
+            stale_keys = [
+                key for key, timestamps in RATE_LIMIT_STATE.items()
+                if not timestamps or timestamps[-1] <= cutoff
+            ]
+            for key in stale_keys[:5_000]:
+                RATE_LIMIT_STATE.pop(key, None)
+        recent = [timestamp for timestamp in RATE_LIMIT_STATE.get(bucket_key, []) if timestamp > cutoff]
+        if len(recent) >= limit:
+            retry_after = max(1, int(RATE_LIMIT_WINDOW_SECONDS - (now - recent[0])))
+            RATE_LIMIT_STATE[bucket_key] = recent
+            raise HTTPException(
+                status_code=429,
+                detail="Too many requests. Wait briefly and try again.",
+                headers={"Retry-After": str(retry_after)},
+            )
+        recent.append(now)
+        RATE_LIMIT_STATE[bucket_key] = recent
+
+
+def private_json(payload: dict | list, status_code: int = 200) -> JSONResponse:
+    return JSONResponse(
+        payload,
+        status_code=status_code,
+        headers={
+            "Cache-Control": "no-store, max-age=0",
+            "Pragma": "no-cache",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 def get_daily_usage(actor_key: str, usage_day: str) -> dict | None:
@@ -734,7 +773,10 @@ def strip_comments_and_strings(text: str, *, mask_strings: bool = True) -> str:
                 index += 1
             continue
 
-        if next_two == "//":
+        # Treat // as a comment delimiter, except when it is the URL separator
+        # in values such as https://example.com. Masking the rest of a URL here
+        # caused shell download-and-execute pipelines to disappear from analysis.
+        if next_two == "//" and (index == 0 or text[index - 1] != ":"):
             mask(index)
             mask(index + 1)
             index += 2
@@ -996,6 +1038,20 @@ def dependency_file_weight(file_name: str) -> float:
     return 1.0
 
 
+def calculate_repository_risk_points(
+    weighted_file_points: list[float],
+    dependency_risk_points: float = 0.0,
+) -> float:
+    normalized_points = [max(0.0, float(value)) for value in weighted_file_points]
+    dependency_points = max(0.0, float(dependency_risk_points or 0))
+    if not normalized_points:
+        return round(min(100.0, dependency_points), 2)
+
+    average_file_points = sum(normalized_points) / len(normalized_points)
+    strongest_file_signal = max(normalized_points)
+    return round(min(100.0, max(average_file_points, strongest_file_signal) + dependency_points), 2)
+
+
 def parse_github_repo(repo_url: str) -> tuple[str, str]:
     parsed = urlparse(repo_url)
     parts = [p for p in parsed.path.split("/") if p]
@@ -1006,6 +1062,29 @@ def parse_github_repo(repo_url: str) -> tuple[str, str]:
     owner = parts[0]
     repo = parts[1].replace(".git", "")
     return owner, repo
+
+
+def read_bounded_response(response, max_bytes: int) -> bytes:
+    content_length = response.headers.get("Content-Length")
+    if content_length:
+        try:
+            declared_length = int(content_length)
+        except (TypeError, ValueError):
+            declared_length = 0
+        if declared_length > max_bytes:
+            raise ValueError("Repository archive exceeds the server download limit.")
+
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = response.read(min(1024 * 1024, max_bytes - total + 1))
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise ValueError("Repository archive exceeds the server download limit.")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def download_repo_zip(owner: str, repo: str) -> bytes:
@@ -1038,7 +1117,7 @@ def download_repo_zip(owner: str, repo: str) -> bytes:
         try:
             zip_request = urllib.request.Request(url, headers={"User-Agent": "AI-Code-Audit/1.0"})
             with urllib.request.urlopen(zip_request, timeout=30, context=ssl_context) as response:
-                return response.read()
+                return read_bounded_response(response, MAX_REPOSITORY_ARCHIVE_BYTES)
         except Exception as exc:
             last_error = exc
 
@@ -1330,14 +1409,26 @@ def extract_scannable_lines(code: str) -> list[tuple[int, str]]:
 
 
 def line_contains_source(line: str) -> bool:
-    return any(re.search(pattern, line) for pattern in SOURCE_PATTERNS)
+    return any(re.search(pattern, line, re.IGNORECASE) for pattern in SOURCE_PATTERNS)
 
 
 def extract_assigned_variable(line: str) -> str | None:
-    match = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*=", line)
+    match = re.match(
+        r"\s*(?:(?:const|let|var)\s+)?([A-Za-z_$][A-Za-z0-9_$]*)\s*=",
+        line,
+    )
     if match:
         return match.group(1)
     return None
+
+
+def contains_variable_reference(text: str, variable_name: str) -> bool:
+    """Match Python, JavaScript, and PHP identifiers without partial matches."""
+    return bool(re.search(
+        rf"(?<![A-Za-z0-9_$]){re.escape(variable_name)}(?![A-Za-z0-9_$])",
+        text,
+        re.IGNORECASE,
+    ))
 
 
 def build_taint_map(scannable_lines: list[tuple[int, str]]) -> dict[str, str]:
@@ -1351,12 +1442,12 @@ def build_taint_map(scannable_lines: list[tuple[int, str]]) -> dict[str, str]:
             continue
 
         if line_contains_source(line_lower):
-            tainted[variable] = "source"
+            tainted[variable.lower()] = "source"
             continue
 
         for known_var in list(tainted.keys()):
-            if re.search(rf"\b{re.escape(known_var)}\b", line_lower):
-                tainted[variable] = "propagated"
+            if contains_variable_reference(line_lower, known_var):
+                tainted[variable.lower()] = "propagated"
                 break
 
     return tainted
@@ -1534,7 +1625,7 @@ def assess_sink_context(
         context_notes.append("User-controlled or external input appears near this sink, which raises the risk significantly.")
 
     for variable_name in tainted_vars:
-        if re.search(rf"\b{re.escape(variable_name.lower())}\b", args_lower):
+        if contains_variable_reference(args_lower, variable_name):
             boost += 12
             context_notes.append(f"The argument appears to use a variable derived from external input ({variable_name}).")
             break
@@ -1583,7 +1674,7 @@ def find_dataflow_chain_line(
 
         assigned_variable = extract_assigned_variable(cleaned_line)
         references_source = any(
-            re.search(rf"\b{re.escape(variable_name)}\b", cleaned_line)
+            contains_variable_reference(cleaned_line, variable_name)
             for variable_name in source_variables
         )
         if assigned_variable and (has_source or references_source):
@@ -1602,7 +1693,7 @@ def add_multi_signal_heuristics(scannable_lines: list[tuple[int, str]]) -> list[
 
     obfuscated_execution_line = find_dataflow_chain_line(
         scannable_lines,
-        r"base64\.(?:b64decode|standard_b64decode|urlsafe_b64decode)\s*\(|bytes\.fromhex\s*\(",
+        r"base64\.(?:b64decode|standard_b64decode|urlsafe_b64decode)\s*\(|bytes\.fromhex\s*\(|\batob\s*\(|\bBuffer\.from\s*\(",
         r"(?<![\w.])exec\s*\(|(?<![\w.])eval\s*\(|\bos\.system\s*\(|\bsubprocess\.(?:run|Popen|call|check_call|check_output)\s*\(",
     )
     download_execute_line = find_dataflow_chain_line(
@@ -1610,11 +1701,13 @@ def add_multi_signal_heuristics(scannable_lines: list[tuple[int, str]]) -> list[
         r"requests\.(?:get|post)\s*\(|urllib\.request\.(?:urlopen|urlretrieve|Request)\s*\(|(?<![\w.])fetch\s*\(",
         r"\bos\.system\s*\(|\bsubprocess\.(?:run|Popen|call|check_call|check_output)\s*\(|\bchild_process\.(?:exec|execFile|spawn|fork)\s*\(|(?<![\w.])exec\s*\(|(?<![\w.])eval\s*\(",
     )
+    direct_download_pipeline = False
     if download_execute_line is None:
         for line_number, line in scannable_lines:
             cleaned_line = strip_comments_and_strings(line)
             if re.search(r"\b(?:curl|wget)\b[^|\n]*\|\s*(?:sh|bash|zsh|python|node)\b", cleaned_line, re.IGNORECASE):
                 download_execute_line = line_number
+                direct_download_pipeline = True
                 break
 
     has_long_base64_blob = bool(re.search(r"[A-Za-z0-9+/]{180,}={0,2}", joined_code))
@@ -1636,7 +1729,7 @@ def add_multi_signal_heuristics(scannable_lines: list[tuple[int, str]]) -> list[
             flag_type="heuristic",
             pattern="download_execute_chain",
             message="Suspicious behavior detected: remote content may be downloaded and then executed",
-            severity=14,
+            severity=35 if direct_download_pipeline else 14,
             explanation=explain_flag("download_execute_chain", "heuristic"),
         ))
 
@@ -2519,16 +2612,26 @@ def summarize_dependency_findings(findings: list[dict]) -> dict:
 
 
 def analyze_dependency_manifests(zip_file: zipfile.ZipFile) -> dict:
-    manifest_files = [
+    all_manifest_files = [
         name for name in zip_file.namelist()
         if not name.endswith("/") and is_dependency_manifest(name)
     ]
+    all_manifest_files.sort(key=lambda name: (dependency_file_weight(name) * -1, name.lower()))
+    manifest_files = all_manifest_files[:MAX_DEPENDENCY_MANIFESTS]
 
     all_dependencies: list[dict] = []
     skipped_dependencies: list[dict] = []
     manifest_scan_errors: list[str] = []
 
+    if len(all_manifest_files) > len(manifest_files):
+        manifest_scan_errors.append(
+            f"Skipped {len(all_manifest_files) - len(manifest_files)} dependency manifests beyond the analysis limit."
+        )
+
     for file_name in manifest_files:
+        if zip_file.getinfo(file_name).file_size > MAX_DEPENDENCY_MANIFEST_BYTES:
+            manifest_scan_errors.append(f"Skipped oversized dependency manifest: {file_name}")
+            continue
         try:
             with zip_file.open(file_name) as file:
                 content = file.read().decode("utf-8", errors="ignore")
@@ -3016,6 +3119,15 @@ def stripe_reference_id(value) -> str:
     return str(reference_id or "").strip()
 
 
+def stripe_invoice_subscription_id(invoice) -> str:
+    direct = stripe_reference_id(stripe_object_value(invoice, "subscription"))
+    if direct:
+        return direct
+    parent = stripe_object_value(invoice, "parent")
+    subscription_details = stripe_object_value(parent, "subscription_details")
+    return stripe_reference_id(stripe_object_value(subscription_details, "subscription"))
+
+
 def supabase_admin_is_valid() -> bool:
     if not SUPABASE_URL or not SUPABASE_SECRET_KEY:
         return False
@@ -3249,6 +3361,7 @@ async def create_billing_portal_session(request: Request):
     access_token = await extract_request_access_token(request)
     access = get_request_access_context(request, access_token=access_token)
     access = enrich_access_with_admin_metadata(access)
+    enforce_rate_limit(request, access, "billing")
 
     if not access.get("authenticated") or not access.get("user_id"):
         raise HTTPException(status_code=401, detail="Log in before managing your subscription.")
@@ -3264,7 +3377,7 @@ async def create_billing_portal_session(request: Request):
     if not stripe_customer_id and stripe_subscription_id:
         try:
             subscription = stripe.Subscription.retrieve(stripe_subscription_id)
-            stripe_customer_id = str(subscription.get("customer") or "").strip() or None
+            stripe_customer_id = stripe_reference_id(stripe_object_value(subscription, "customer")) or None
         except Exception as exc:
             log_server_issue("Failed to resolve Stripe customer from subscription for billing portal", exc)
 
@@ -3288,6 +3401,7 @@ async def create_stripe_checkout_session(request: Request):
     access_token = await extract_request_access_token(request)
     access = get_request_access_context(request, access_token=access_token)
     access = enrich_access_with_admin_metadata(access)
+    enforce_rate_limit(request, access, "billing")
 
     if not access.get("authenticated") or not access.get("user_id") or not access.get("email"):
         raise HTTPException(status_code=401, detail="Log in before upgrading to Pro. Your session may need to be refreshed.")
@@ -3365,6 +3479,7 @@ async def stripe_checkout_session_status(request: Request, session_id: str):
     access_token = await extract_request_access_token(request)
     access = get_request_access_context(request, access_token=access_token)
     access = enrich_access_with_admin_metadata(access)
+    enforce_rate_limit(request, access, "billing")
 
     if not access.get("authenticated") or not access.get("user_id"):
         raise HTTPException(status_code=401, detail="Log in before verifying checkout status.")
@@ -3375,14 +3490,14 @@ async def stripe_checkout_session_status(request: Request, session_id: str):
         log_server_issue("Could not retrieve Stripe checkout session status", exc)
         raise HTTPException(status_code=500, detail="Could not verify checkout status right now.") from exc
 
-    session_status = str(session.get("status") or "").lower()
-    payment_status = str(session.get("payment_status") or "").lower()
-    subscription_id = session.get("subscription")
-    customer_id = session.get("customer")
-    metadata = session.get("metadata") or {}
+    session_status = str(stripe_object_value(session, "status") or "").lower()
+    payment_status = str(stripe_object_value(session, "payment_status") or "").lower()
+    subscription_id = stripe_reference_id(stripe_object_value(session, "subscription")) or None
+    customer_id = stripe_reference_id(stripe_object_value(session, "customer")) or None
+    metadata = stripe_object_value(session, "metadata", {}) or {}
 
     user_id = resolve_supabase_user_id_for_stripe_event(
-        explicit_user_id=metadata.get("user_id") or session.get("client_reference_id"),
+        explicit_user_id=stripe_object_value(metadata, "user_id") or stripe_object_value(session, "client_reference_id"),
         stripe_customer_id=str(customer_id) if customer_id else None,
         stripe_subscription_id=str(subscription_id) if subscription_id else None,
     )
@@ -3403,9 +3518,9 @@ async def stripe_checkout_session_status(request: Request, session_id: str):
         subscription_status = "checkout_completed"
         try:
             subscription = stripe.Subscription.retrieve(subscription_id)
-            subscription_status = str(subscription.get("status") or "active")
-            cancel_at_period_end = bool(subscription.get("cancel_at_period_end") or False)
-            current_period_end = subscription.get("current_period_end")
+            subscription_status = str(stripe_object_value(subscription, "status", "active") or "active")
+            cancel_at_period_end = bool(stripe_object_value(subscription, "cancel_at_period_end", False) or False)
+            current_period_end = stripe_object_value(subscription, "current_period_end")
             plan = plan_from_subscription_status(
                 subscription_status,
                 cancel_at_period_end=cancel_at_period_end,
@@ -3429,9 +3544,9 @@ async def stripe_checkout_session_status(request: Request, session_id: str):
     elif subscription_id:
         try:
             subscription = stripe.Subscription.retrieve(subscription_id)
-            subscription_status = str(subscription.get("status") or "")
-            cancel_at_period_end = bool(subscription.get("cancel_at_period_end") or False)
-            current_period_end = subscription.get("current_period_end")
+            subscription_status = str(stripe_object_value(subscription, "status") or "")
+            cancel_at_period_end = bool(stripe_object_value(subscription, "cancel_at_period_end", False) or False)
+            current_period_end = stripe_object_value(subscription, "current_period_end")
             plan = plan_from_subscription_status(
                 subscription_status,
                 cancel_at_period_end=cancel_at_period_end,
@@ -3442,7 +3557,7 @@ async def stripe_checkout_session_status(request: Request, session_id: str):
 
     refreshed_access = build_authenticated_access_payload_for_user(str(user_id), request=request)
     response_payload = {
-        "session_id": str(session.get("id") or session_id),
+        "session_id": str(stripe_object_value(session, "id") or session_id),
         "session_status": session_status,
         "payment_status": payment_status,
         "subscription_id": str(subscription_id) if subscription_id else None,
@@ -3468,6 +3583,7 @@ async def reconcile_stripe_subscription(request: Request):
     access_token = await extract_request_access_token(request)
     access = get_request_access_context(request, access_token=access_token)
     access = enrich_access_with_admin_metadata(access)
+    enforce_rate_limit(request, access, "billing")
 
     if not access.get("authenticated") or not access.get("user_id") or not access.get("email"):
         raise HTTPException(status_code=401, detail="Log in before restoring a paid subscription.")
@@ -3601,15 +3717,19 @@ async def stripe_webhook(request: Request):
     except Exception:
         return JSONResponse({"received": False, "error": "Invalid webhook payload."}, status_code=400)
 
-    event_type = str(event.get("type") or "")
-    event_object = (event.get("data") or {}).get("object") or {}
+    event_type = str(stripe_object_value(event, "type") or "")
+    event_data = stripe_object_value(event, "data", {}) or {}
+    event_object = stripe_object_value(event_data, "object", {}) or {}
 
     if event_type == "checkout.session.completed":
-        metadata = event_object.get("metadata") or {}
-        subscription_id = event_object.get("subscription")
-        customer_id = event_object.get("customer")
+        metadata = stripe_object_value(event_object, "metadata", {}) or {}
+        subscription_id = stripe_reference_id(stripe_object_value(event_object, "subscription")) or None
+        customer_id = stripe_reference_id(stripe_object_value(event_object, "customer")) or None
         user_id = resolve_supabase_user_id_for_stripe_event(
-            explicit_user_id=metadata.get("user_id") or event_object.get("client_reference_id"),
+            explicit_user_id=(
+                stripe_object_value(metadata, "user_id")
+                or stripe_object_value(event_object, "client_reference_id")
+            ),
             stripe_customer_id=str(customer_id) if customer_id else None,
             stripe_subscription_id=str(subscription_id) if subscription_id else None,
         )
@@ -3620,9 +3740,9 @@ async def stripe_webhook(request: Request):
             try:
                 if subscription_id:
                     subscription = stripe.Subscription.retrieve(subscription_id)
-                    subscription_status = str(subscription.get("status") or "active")
-                    cancel_at_period_end = bool(subscription.get("cancel_at_period_end") or False)
-                    current_period_end = subscription.get("current_period_end")
+                    subscription_status = str(stripe_object_value(subscription, "status", "active") or "active")
+                    cancel_at_period_end = bool(stripe_object_value(subscription, "cancel_at_period_end", False) or False)
+                    current_period_end = stripe_object_value(subscription, "current_period_end")
             except Exception as exc:
                 log_server_issue("Failed to retrieve subscription after checkout.session.completed", exc)
 
@@ -3641,18 +3761,18 @@ async def stripe_webhook(request: Request):
             )
 
     elif event_type in {"customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted"}:
-        metadata = event_object.get("metadata") or {}
-        customer_id = str(event_object.get("customer") or "") or None
-        subscription_id = str(event_object.get("id") or "") or None
+        metadata = stripe_object_value(event_object, "metadata", {}) or {}
+        customer_id = stripe_reference_id(stripe_object_value(event_object, "customer")) or None
+        subscription_id = stripe_reference_id(stripe_object_value(event_object, "id")) or None
         user_id = resolve_supabase_user_id_for_stripe_event(
-            explicit_user_id=metadata.get("user_id"),
+            explicit_user_id=stripe_object_value(metadata, "user_id"),
             stripe_customer_id=customer_id,
             stripe_subscription_id=subscription_id,
         )
         if user_id:
-            status = str(event_object.get("status") or "")
-            cancel_at_period_end = bool(event_object.get("cancel_at_period_end") or False)
-            current_period_end = event_object.get("current_period_end")
+            status = str(stripe_object_value(event_object, "status") or "")
+            cancel_at_period_end = bool(stripe_object_value(event_object, "cancel_at_period_end", False) or False)
+            current_period_end = stripe_object_value(event_object, "current_period_end")
             sync_user_plan_from_subscription(
                 user_id,
                 plan=plan_from_subscription_status(
@@ -3667,9 +3787,9 @@ async def stripe_webhook(request: Request):
                 current_period_end=current_period_end,
             )
 
-    elif event_type in {"invoice.payment_failed", "invoice.paid"}:
-        customer_id = str(event_object.get("customer") or "") or None
-        subscription_id = str(event_object.get("subscription") or "") or None
+    elif event_type in {"invoice.payment_failed", "invoice.paid", "invoice.payment_succeeded"}:
+        customer_id = stripe_reference_id(stripe_object_value(event_object, "customer")) or None
+        subscription_id = stripe_invoice_subscription_id(event_object) or None
         user_id = resolve_supabase_user_id_for_stripe_event(
             stripe_customer_id=customer_id,
             stripe_subscription_id=subscription_id,
@@ -3677,9 +3797,9 @@ async def stripe_webhook(request: Request):
         if user_id and subscription_id:
             try:
                 subscription = stripe.Subscription.retrieve(subscription_id)
-                status = str(subscription.get("status") or "")
-                cancel_at_period_end = bool(subscription.get("cancel_at_period_end") or False)
-                current_period_end = subscription.get("current_period_end")
+                status = str(stripe_object_value(subscription, "status") or "")
+                cancel_at_period_end = bool(stripe_object_value(subscription, "cancel_at_period_end", False) or False)
+                current_period_end = stripe_object_value(subscription, "current_period_end")
                 sync_user_plan_from_subscription(
                     user_id,
                     plan=plan_from_subscription_status(
@@ -3709,7 +3829,9 @@ def stripe_status():
         "supabase_admin_valid": supabase_admin_is_valid(),
         "app_base_url": APP_BASE_URL,
         "recovery_version": 4,
-        "scanner_version": 4,
+        "scanner_version": 5,
+        "security_version": 1,
+        "benchmark_cases": 51,
     }
 
 
@@ -3742,13 +3864,29 @@ def health():
 def scan(req: ScanRequest, request: Request):
     access = get_request_access_context(request)
     access = enrich_access_with_admin_metadata(access)
+    enforce_rate_limit(request, access, "scan")
+
+    plan = str(access.get("plan") or "free").lower()
+    max_code_bytes = MAX_PASTED_CODE_BYTES_PRO if plan in {"pro", "admin"} else MAX_PASTED_CODE_BYTES_FREE
+    code_size_bytes = len(req.code.encode("utf-8", errors="ignore"))
+    if code_size_bytes > max_code_bytes:
+        return private_json(
+            {"detail": f"Pasted code exceeds the {max_code_bytes // 1_000_000} MB request limit."},
+            status_code=413,
+        )
+    if len(req.intent) > 2000:
+        return private_json({"detail": "The intent description is too long."}, status_code=413)
 
     is_example_scan = bool(req.is_example)
 
     result = analyze_code(req.intent, req.code, plan=access["plan"])
     result["access"] = access
     result["is_example"] = is_example_scan
-    return result
+    result["privacy"] = {
+        "stored_by_scanner": False,
+        "response_cache_disabled": True,
+    }
+    return private_json(result)
 
 
 
@@ -3756,20 +3894,24 @@ def scan(req: ScanRequest, request: Request):
 def scan_repo(req: RepoScanRequest, request: Request):
     access = get_request_access_context(request)
     access = enrich_access_with_admin_metadata(access)
+    enforce_rate_limit(request, access, "repo")
+
+    if len(req.intent) > 2000 or len(req.repo_url) > 500:
+        return private_json({"error": "The repository request is too long."}, status_code=413)
 
     try:
         owner, repo = parse_github_repo(req.repo_url)
         zip_bytes = download_repo_zip(owner, repo)
     except ValueError as exc:
-        return {"error": str(exc)}
+        return private_json({"error": str(exc)}, status_code=400)
     except Exception:
-        return {"error": "Something went wrong while scanning this repository."}
+        return private_json({"error": "Something went wrong while scanning this repository."}, status_code=502)
 
     repo_file_limit = access["limits"].get("repo_file_limit")
     repo_size_limit_bytes = access["limits"].get("repo_size_limit_bytes")
 
     files_scanned = []
-    weighted_points_total = 0.0
+    repo_weighted_points: list[float] = []
     all_touches = set()
     all_behavior_summary = []
     highest_file_risk = "green"
@@ -3816,7 +3958,7 @@ def scan_repo(req: RepoScanRequest, request: Request):
             result = analyze_code(req.intent, code_text, plan=access["plan"])
             weight = file_weight_for_repo(file_name)
             weighted_file_points = result["risk_points"] * weight
-            weighted_points_total += weighted_file_points
+            repo_weighted_points.append(weighted_file_points)
 
             files_scanned.append({
                 "file": file_name,
@@ -3847,7 +3989,7 @@ def scan_repo(req: RepoScanRequest, request: Request):
     coverage_partial = len(code_files) < files_available_count
 
     if not files_scanned and not dependency_findings:
-        return {
+        return private_json({
             "repo_url": req.repo_url,
             "repo_name": f"{owner}/{repo}",
             "risk": "limited",
@@ -3886,7 +4028,8 @@ def scan_repo(req: RepoScanRequest, request: Request):
                 "lines": ["No supported source files were found. A safety rating was not produced."],
             },
             "access": access,
-        }
+            "privacy": {"stored_by_scanner": False, "response_cache_disabled": True},
+        })
 
     if dependency_findings:
         all_touches.add("dependencies")
@@ -3910,14 +4053,10 @@ def scan_repo(req: RepoScanRequest, request: Request):
         if extra_line not in all_behavior_summary:
             all_behavior_summary.append(extra_line)
 
-    file_count = max(1, len(files_scanned))
-    normalized_repo_points = weighted_points_total / file_count
-    normalized_repo_points += dependency_risk_points
-
-    if normalized_repo_points >= 35:
-        normalized_repo_points *= 0.85
-    elif normalized_repo_points >= 15:
-        normalized_repo_points *= 0.9
+    normalized_repo_points = calculate_repository_risk_points(
+        repo_weighted_points,
+        dependency_risk_points,
+    )
 
     overall_risk = risk_from_points(normalized_repo_points)
     trust_score = calculate_trust_score_from_points(normalized_repo_points)
@@ -3948,7 +4087,7 @@ def scan_repo(req: RepoScanRequest, request: Request):
         scan_error=dependency_scan.get("dependency_scan_error"),
     )
 
-    return {
+    return private_json({
         "repo_url": req.repo_url,
         "repo_name": f"{owner}/{repo}",
         "risk": overall_risk,
@@ -3987,7 +4126,8 @@ def scan_repo(req: RepoScanRequest, request: Request):
         "dependency_findings": dependency_findings,
         "dependency_skipped": dependency_scan["dependencies_skipped"][:25],
         "access": access,
-    }
+        "privacy": {"stored_by_scanner": False, "response_cache_disabled": True},
+    })
 
 
 @app.get("/badge/github/{owner}/{repo}.svg")
@@ -4003,7 +4143,7 @@ def github_repo_badge_svg(owner: str, repo: str):
         try:
             repo_url = f"https://github.com/{owner}/{repo}"
             zip_bytes = download_repo_zip(owner, repo)
-            weighted_points_total = 0.0
+            badge_weighted_points: list[float] = []
 
             with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
                 dependency_scan = analyze_dependency_manifests(zf)
@@ -4031,15 +4171,14 @@ def github_repo_badge_svg(owner: str, repo: str):
                         continue
 
                     result = analyze_code("Scan this public GitHub repo", code_text, plan="free")
-                    weighted_points_total += result["risk_points"] * file_weight_for_repo(file_name)
+                    badge_weighted_points.append(
+                        result["risk_points"] * file_weight_for_repo(file_name)
+                    )
 
-            file_count = max(1, len(code_files))
-            normalized_repo_points = (weighted_points_total / file_count) + dependency_risk_points
-
-            if normalized_repo_points >= 35:
-                normalized_repo_points *= 0.85
-            elif normalized_repo_points >= 15:
-                normalized_repo_points *= 0.9
+            normalized_repo_points = calculate_repository_risk_points(
+                badge_weighted_points,
+                dependency_risk_points,
+            )
 
             risk = risk_from_points(normalized_repo_points)
             trust_score = calculate_trust_score_from_points(normalized_repo_points)
