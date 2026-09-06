@@ -1593,6 +1593,53 @@ def find_environment_secret_sources(
     return secret_variables, secret_flags
 
 
+def call_expression_is_complete(text: str, opening_index: int) -> bool:
+    """Return True once the opening parenthesis has a matching close.
+
+    This deliberately ignores parentheses inside common quoted string forms so
+    multiline URLs and payload strings do not break the lightweight scanner.
+    """
+    depth = 0
+    quote = ""
+    escaped = False
+    index = opening_index
+
+    while index < len(text):
+        if quote:
+            if escaped:
+                escaped = False
+                index += 1
+                continue
+            if text[index] == "\\":
+                escaped = True
+                index += 1
+                continue
+            if text.startswith(quote, index):
+                index += len(quote)
+                quote = ""
+                continue
+            index += 1
+            continue
+
+        if text.startswith("'''", index) or text.startswith('\"\"\"', index):
+            quote = text[index:index + 3]
+            index += 3
+            continue
+        if text[index] in {"'", '\"', "`"}:
+            quote = text[index]
+            index += 1
+            continue
+        if text[index] == "(":
+            depth += 1
+        elif text[index] == ")":
+            depth -= 1
+            if depth == 0:
+                return True
+        index += 1
+
+    return False
+
+
 def add_secret_flow_heuristics(
     scannable_lines: list[tuple[int, str]],
     secret_variables: dict[str, int],
@@ -1609,15 +1656,32 @@ def add_secret_flow_heuristics(
     )
     findings: list[dict] = []
 
-    for line_number, line in scannable_lines:
-        if not network_sink.search(line):
+    for line_index, (line_number, line) in enumerate(scannable_lines):
+        sink_match = network_sink.search(line)
+        if not sink_match:
             continue
-        exposed = [name for name in secret_variables if re.search(rf"\b{re.escape(name)}\b", line)]
+
+        call_text = line
+        opening_index = call_text.find("(", sink_match.start())
+        next_index = line_index + 1
+        while (
+            opening_index >= 0
+            and not call_expression_is_complete(call_text, opening_index)
+            and next_index < len(scannable_lines)
+            and next_index <= line_index + 24
+        ):
+            call_text += "\n" + scannable_lines[next_index][1]
+            next_index += 1
+
+        exposed = [
+            name for name in secret_variables
+            if re.search(rf"\b{re.escape(name)}\b", call_text)
+        ]
         if not exposed:
             continue
 
-        uses_https = bool(re.search(r"['\"]https://[^'\"]+['\"]", line, re.IGNORECASE))
-        uses_auth_header = bool(re.search(r"\b(?:authorization|bearer|headers?)\b", line, re.IGNORECASE))
+        uses_https = bool(re.search(r"['\"]https://[^'\"]+['\"]", call_text, re.IGNORECASE))
+        uses_auth_header = bool(re.search(r"\b(?:authorization|bearer|headers?)\b", call_text, re.IGNORECASE))
         if authentication_expected and uses_https and uses_auth_header:
             findings.append(make_flag(
                 line=line_number,
@@ -4659,7 +4723,7 @@ def result_to_sarif(result: dict, filename: str = "snippet.py") -> dict:
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
         "version": "2.1.0",
         "runs": [{
-            "tool": {"driver": {"name": "AI Code Audit", "version": "14", "rules": list(rules.values())}},
+            "tool": {"driver": {"name": "AI Code Audit", "version": "15", "rules": list(rules.values())}},
             "results": sarif_results,
         }],
     }
@@ -5720,7 +5784,7 @@ def stripe_status():
         "supabase_admin_valid": supabase_admin_is_valid(),
         "app_base_url": APP_BASE_URL,
         "recovery_version": 4,
-        "scanner_version": 14,
+        "scanner_version": 15,
         "security_version": 1,
         "benchmark_cases": 1103,
         "benchmark_independent_cases": 300,
@@ -5834,7 +5898,7 @@ def submit_feedback(req: FeedbackRequest, request: Request):
         "verdict": verdict,
         "category": req.category.strip()[:80],
         "note": req.note.strip()[:500],
-        "scanner_version": 14,
+        "scanner_version": 15,
     }
     inserted = supabase_rest_request("POST", "scan_feedback", payload=payload, prefer="return=representation")
     if not inserted:

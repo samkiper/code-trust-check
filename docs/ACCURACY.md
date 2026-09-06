@@ -24,6 +24,10 @@ Every pull request and main-branch update runs unit tests, the pinned 750-case O
 
 The feedback control stores the signed-in user ID, a one-way scan fingerprint, a finding fingerprint, verdict, category, optional short note, and scanner version. It does not store source code. Feedback is evidence for adding a reviewed test case; it does not automatically retrain or weaken the scanner.
 
+## Scanner v15 regression
+
+Scanner v15 extends credential-flow analysis across multiline network calls. The regression suite includes both an unexpected multiline credential transmission and a legitimate multiline HTTPS authentication request, ensuring the former is flagged without turning the latter into an exfiltration false positive.
+
 ## Next accuracy work
 
 1. Preserve the no-hint holdout without tuning against its three misses; use a new development set for weak-randomness improvements.
