@@ -1052,6 +1052,17 @@ def file_weight_for_repo(file_name: str) -> float:
     return 1.0
 
 
+def weighted_repository_file_points(file_name: str, risk_points: float) -> float:
+    """Down-rank non-production examples without allowing them to look harmless."""
+    weight = file_weight_for_repo(file_name)
+    weighted = max(0.0, float(risk_points or 0)) * weight
+    if weight <= 0.35:
+        return round(min(25.0, weighted), 2)
+    if weight < 1.0:
+        return round(min(30.0, weighted), 2)
+    return round(weighted, 2)
+
+
 def dependency_file_weight(file_name: str) -> float:
     lower = file_name.lower()
 
@@ -3903,7 +3914,7 @@ def stripe_status():
         "supabase_admin_valid": supabase_admin_is_valid(),
         "app_base_url": APP_BASE_URL,
         "recovery_version": 4,
-        "scanner_version": 5,
+        "scanner_version": 6,
         "security_version": 1,
         "benchmark_cases": 53,
     }
@@ -4031,7 +4042,7 @@ def scan_repo(req: RepoScanRequest, request: Request):
 
             result = analyze_code(req.intent, code_text, plan=access["plan"])
             weight = file_weight_for_repo(file_name)
-            weighted_file_points = result["risk_points"] * weight
+            weighted_file_points = weighted_repository_file_points(file_name, result["risk_points"])
             repo_weighted_points.append(weighted_file_points)
 
             files_scanned.append({
@@ -4246,7 +4257,7 @@ def github_repo_badge_svg(owner: str, repo: str):
 
                     result = analyze_code("Scan this public GitHub repo", code_text, plan="free")
                     badge_weighted_points.append(
-                        result["risk_points"] * file_weight_for_repo(file_name)
+                        weighted_repository_file_points(file_name, result["risk_points"])
                     )
 
             normalized_repo_points = calculate_repository_risk_points(

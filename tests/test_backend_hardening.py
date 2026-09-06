@@ -63,9 +63,14 @@ class RepositoryScoringTests(unittest.TestCase):
         self.assertEqual(main.risk_from_points(points), "red")
 
     def test_test_fixture_weight_reduces_a_isolated_example(self):
-        weighted = 40.0 * main.file_weight_for_repo("project/tests/exploit_test.py")
+        weighted = main.weighted_repository_file_points("project/tests/exploit_test.py", 40.0)
         points = main.calculate_repository_risk_points([weighted] + [0.0] * 10)
         self.assertEqual(main.risk_from_points(points), "yellow")
+
+    def test_attack_fixtures_cannot_make_the_repo_red_by_themselves(self):
+        weighted = main.weighted_repository_file_points("project/tests/attack_benchmark.py", 100.0)
+        self.assertEqual(weighted, 25.0)
+        self.assertEqual(main.risk_from_points(weighted), "yellow")
 
     def test_dependency_risk_is_not_averaged_across_files(self):
         points = main.calculate_repository_risk_points([0.0] * 100, dependency_risk_points=20)
