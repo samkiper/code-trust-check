@@ -221,6 +221,51 @@ session["role"] = "member"'''
         self.assertEqual(safe_result["risk"], "green")
         self.assertTrue(any(item.get("pattern") == "untrusted_session_state" for item in unsafe_result["flags"]))
 
+    def test_command_injection_tracks_values_through_lists(self):
+        unsafe = '''import subprocess
+from flask import request
+values = request.form.getlist("name")
+param = values[0] if values else ""
+arguments = ["sh", "-c"]
+arguments.append(f"echo {param}")
+subprocess.run(arguments)'''
+        safe = unsafe.replace('arguments.append(f"echo {param}")', 'arguments.append("echo safe")')
+        unsafe_result = main.analyze_code("Run the requested operation", unsafe)
+        safe_result = main.analyze_code("Run the requested operation", safe)
+        self.assertEqual(unsafe_result["risk"], "red")
+        self.assertEqual(safe_result["risk"], "green")
+        self.assertTrue(any(item.get("pattern") == "subprocess" for item in unsafe_result["flags"]))
+
+    def test_code_execution_distinguishes_tainted_and_overwritten_values(self):
+        unsafe = '''from flask import request
+value = request.args.get("value")
+result = eval(value)'''
+        safe = unsafe.replace('result = eval(value)', 'value = "42"\nresult = eval(value)')
+        unsafe_result = main.analyze_code("Calculate a value", unsafe)
+        safe_result = main.analyze_code("Calculate a value", safe)
+        self.assertEqual(unsafe_result["risk"], "red")
+        self.assertEqual(safe_result["risk"], "green")
+        self.assertTrue(any(item.get("pattern") == "eval(" for item in unsafe_result["flags"]))
+        self.assertFalse(any(item.get("pattern") == "eval(" for item in safe_result["flags"]))
+
+    def test_html_escaping_does_not_sanitize_deserialization(self):
+        unsafe = '''import base64
+import html
+import pickle
+from flask import request
+payload = html.escape(request.args.get("payload"))
+value = pickle.loads(base64.urlsafe_b64decode(payload))'''
+        safe = unsafe.replace(
+            'payload = html.escape(request.args.get("payload"))',
+            'payload = "Zml4ZWQ="',
+        )
+        unsafe_result = main.analyze_code("Read the submitted data", unsafe)
+        safe_result = main.analyze_code("Read fixed application data", safe)
+        self.assertEqual(unsafe_result["risk"], "red")
+        self.assertEqual(safe_result["risk"], "green")
+        self.assertTrue(any(item.get("pattern") == "pickle.loads" for item in unsafe_result["flags"]))
+        self.assertFalse(any(item.get("pattern") == "pickle.loads" for item in safe_result["flags"]))
+
 
 class SarifTests(unittest.TestCase):
     def test_sarif_is_github_compatible_shape(self):

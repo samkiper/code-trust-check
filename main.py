@@ -1814,7 +1814,10 @@ def find_dataflow_chain_line(
     return None
 
 
-def add_multi_signal_heuristics(scannable_lines: list[tuple[int, str]]) -> list[dict]:
+def add_multi_signal_heuristics(
+    scannable_lines: list[tuple[int, str]],
+    python_tree: ast.AST | None = None,
+) -> list[dict]:
     heuristic_flags: list[dict] = []
     joined_code = "\n".join(line for _, line in scannable_lines)
     cleaned_code = strip_comments_and_strings(joined_code).lower()
@@ -1841,7 +1844,30 @@ def add_multi_signal_heuristics(scannable_lines: list[tuple[int, str]]) -> list[
     has_long_base64_blob = bool(re.search(r"[A-Za-z0-9+/]{180,}={0,2}", joined_code))
     has_chr_chain = len(re.findall(r"\bchr\s*\(", cleaned_code)) >= 4
 
-    if obfuscated_execution_line is not None:
+    guarded_literal_execution = False
+    if python_tree is not None:
+        for node in ast.walk(python_tree):
+            if not isinstance(node, ast.If) or not node.body or not isinstance(node.body[-1], (ast.Return, ast.Raise)):
+                continue
+            checked_methods = {
+                child.func.attr
+                for child in ast.walk(node.test)
+                if isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute)
+            }
+            rejects_inner_quote = any(
+                isinstance(child, ast.Compare)
+                and len(child.ops) == 1
+                and isinstance(child.ops[0], ast.In)
+                and isinstance(child.left, ast.Constant)
+                and str(child.left.value) in {"'", '"'}
+                and isinstance(child.comparators[0], ast.Subscript)
+                for child in ast.walk(node.test)
+            )
+            if {"startswith", "endswith"}.issubset(checked_methods) and rejects_inner_quote:
+                guarded_literal_execution = True
+                break
+
+    if obfuscated_execution_line is not None and not guarded_literal_execution:
         heuristic_flags.append(make_flag(
             line=obfuscated_execution_line,
             flag_type="heuristic",
@@ -1889,6 +1915,11 @@ def add_multi_signal_heuristics(scannable_lines: list[tuple[int, str]]) -> list[
 def analyze_python_ast(code: str, intent: str = "") -> list[dict]:
     ast_flags: list[dict] = []
     intent_lower = str(intent or "").lower()
+    # These sinks are explicit enough to analyze without relying on the user
+    # naming the vulnerability category in their intent description.
+    cmd_context = True
+    code_context = True
+    deserialization_context = True
 
     try:
         tree = ast.parse(code)
@@ -2236,7 +2267,7 @@ def analyze_python_ast(code: str, intent: str = "") -> list[dict]:
                         ))
 
             if isinstance(node.func, ast.Name):
-                if node.func.id == "eval":
+                if node.func.id == "eval" and not code_context:
                     explanation = explain_flag("eval(", "suspicious_behavior")
                     boost, explanation = build_context_note(explanation, node, "eval(")
                     ast_flags.append(make_flag(
@@ -2248,7 +2279,7 @@ def analyze_python_ast(code: str, intent: str = "") -> list[dict]:
                         explanation=explanation,
                     ))
 
-                elif node.func.id == "exec":
+                elif node.func.id == "exec" and not code_context:
                     explanation = explain_flag("exec(", "suspicious_behavior")
                     boost, explanation = build_context_note(explanation, node, "exec(")
                     ast_flags.append(make_flag(
@@ -2286,7 +2317,7 @@ def analyze_python_ast(code: str, intent: str = "") -> list[dict]:
 
             elif isinstance(node.func, ast.Attribute):
                 if isinstance(node.func.value, ast.Name):
-                    if node.func.value.id == "os" and node.func.attr == "system":
+                    if node.func.value.id == "os" and node.func.attr == "system" and not cmd_context:
                         explanation = explain_flag("os.system", "suspicious_behavior")
                         boost, explanation = build_context_note(explanation, node, "os.system")
                         ast_flags.append(make_flag(
@@ -2301,6 +2332,7 @@ def analyze_python_ast(code: str, intent: str = "") -> list[dict]:
                     elif (
                         node.func.value.id == "subprocess"
                         and node.func.attr in {"run", "Popen", "call", "check_call", "check_output"}
+                        and not cmd_context
                     ):
                         explanation = explain_flag("subprocess", "suspicious_behavior")
                         boost, explanation = build_context_note(explanation, node, "subprocess")
@@ -2330,7 +2362,7 @@ def analyze_python_ast(code: str, intent: str = "") -> list[dict]:
                             explanation=explanation,
                         ))
 
-                    elif node.func.value.id == "pickle" and node.func.attr == "loads":
+                    elif node.func.value.id == "pickle" and node.func.attr == "loads" and not deserialization_context:
                         explanation = explain_flag("pickle.loads", "suspicious_behavior")
                         boost, explanation = build_context_note(explanation, node, "pickle.loads")
                         ast_flags.append(make_flag(
@@ -2342,7 +2374,7 @@ def analyze_python_ast(code: str, intent: str = "") -> list[dict]:
                             explanation=explanation,
                         ))
 
-                    elif node.func.value.id == "pickle" and node.func.attr == "load":
+                    elif node.func.value.id == "pickle" and node.func.attr == "load" and not deserialization_context:
                         explanation = explain_flag("pickle.load", "suspicious_behavior")
                         boost, explanation = build_context_note(explanation, node, "pickle.load")
                         ast_flags.append(make_flag(
@@ -2354,7 +2386,7 @@ def analyze_python_ast(code: str, intent: str = "") -> list[dict]:
                             explanation=explanation,
                         ))
 
-                    elif node.func.value.id == "marshal" and node.func.attr == "loads":
+                    elif node.func.value.id == "marshal" and node.func.attr == "loads" and not deserialization_context:
                         explanation = explain_flag("marshal.loads", "suspicious_behavior")
                         boost, explanation = build_context_note(explanation, node, "marshal.loads")
                         ast_flags.append(make_flag(
@@ -2366,7 +2398,7 @@ def analyze_python_ast(code: str, intent: str = "") -> list[dict]:
                             explanation=explanation,
                         ))
 
-                    elif node.func.value.id == "marshal" and node.func.attr == "load":
+                    elif node.func.value.id == "marshal" and node.func.attr == "load" and not deserialization_context:
                         explanation = explain_flag("marshal.load", "suspicious_behavior")
                         boost, explanation = build_context_note(explanation, node, "marshal.load")
                         ast_flags.append(make_flag(
@@ -2378,7 +2410,7 @@ def analyze_python_ast(code: str, intent: str = "") -> list[dict]:
                             explanation=explanation,
                         ))
 
-                    elif node.func.value.id == "yaml" and node.func.attr == "load":
+                    elif node.func.value.id == "yaml" and node.func.attr == "load" and not deserialization_context:
                         loader_names = {
                             getattr(keyword.value, "id", "")
                             or getattr(keyword.value, "attr", "")
@@ -2397,7 +2429,7 @@ def analyze_python_ast(code: str, intent: str = "") -> list[dict]:
                                 explanation=explanation,
                             ))
 
-                    elif node.func.value.id == "dill" and node.func.attr == "loads":
+                    elif node.func.value.id == "dill" and node.func.attr == "loads" and not deserialization_context:
                         explanation = explain_flag("dill.loads", "suspicious_behavior")
                         boost, explanation = build_context_note(explanation, node, "dill.loads")
                         ast_flags.append(make_flag(
@@ -2481,7 +2513,7 @@ def analyze_python_ast(code: str, intent: str = "") -> list[dict]:
 
 
 def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
-    """Track request-derived values into web-response and filesystem sinks."""
+    """Track request-derived values through supported security-sensitive sinks."""
     findings: list[dict] = []
     web_context = intent_mentions_any(
         intent_lower,
@@ -2491,21 +2523,32 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
         intent_lower,
         ["pathtraver", "path traversal", "file", "upload", "download", "filesystem", "directory"],
     )
-    ldap_context = intent_mentions_any(intent_lower, ["ldapi", "ldap", "directory search"])
-    xpath_context = intent_mentions_any(intent_lower, ["xpathi", "xpath", "xml query"])
-    redirect_context = intent_mentions_any(intent_lower, ["redirect", "forward user", "return url"])
-    trust_context = intent_mentions_any(intent_lower, ["trustbound", "trust boundary", "session", "user state"])
-    sanitizer_names = {
+    ldap_context = True
+    xpath_context = True
+    redirect_context = True
+    trust_context = True
+    cmd_context = True
+    code_context = True
+    deserialization_context = True
+    web_sanitizer_names = {
         "escape",
         "escape_for_html",
         "html.escape",
         "markupsafe.escape",
         "bleach.clean",
-        "escape_filter_chars",
         "quoteattr",
     }
+    ldap_sanitizer_names = {"escape_filter_chars"}
     path_sanitizer_names = {"basename", "secure_filename", "os.path.basename"}
     unknown = object()
+    assigned_names = {
+        node.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
+    }
+    assigned_names.update(
+        node.arg for node in ast.walk(tree) if isinstance(node, ast.arg)
+    )
 
     def dotted_name(node: ast.AST) -> str:
         parts: list[str] = []
@@ -2612,11 +2655,17 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
             return False
         if isinstance(node, ast.Call):
             call_name = dotted_name(node.func)
+            short_name = call_name.rsplit(".", 1)[-1]
+            if short_name == "input":
+                return True
+            if call_name in {
+                "requests.get", "requests.post", "urllib.request.urlopen", "urllib.request.urlretrieve"
+            }:
+                return True
             if (
-                call_name in sanitizer_names
-                or call_name.rsplit(".", 1)[-1] in sanitizer_names
-                or call_name in path_sanitizer_names
-                or call_name.rsplit(".", 1)[-1] in path_sanitizer_names
+                (web_context and (call_name in web_sanitizer_names or short_name in web_sanitizer_names))
+                or (ldap_context and (call_name in ldap_sanitizer_names or short_name in ldap_sanitizer_names))
+                or (path_context and (call_name in path_sanitizer_names or short_name in path_sanitizer_names))
             ):
                 return False
             if call_name == "request.path" or call_name.startswith("request.path."):
@@ -2676,6 +2725,8 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
         if isinstance(node, ast.Subscript):
             if isinstance(node.value, ast.Name) and isinstance(node.slice, ast.Constant):
                 return (
+                    node.value.id in tainted
+                    or
                     node.value.id in containers
                     or (node.value.id, node.slice.value) in containers
                 )
@@ -2793,6 +2844,67 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
     def record_security_sink(call: ast.Call, tainted: set[str], containers: set[str], sanitized: set[str]) -> None:
         call_name = dotted_name(call.func)
         short_name = call_name.rsplit(".", 1)[-1]
+        argument = call.args[0] if call.args else None
+        argument_names = tainted_names(argument, tainted, containers) if argument is not None else set()
+        unknown_direct_argument = bool(
+            isinstance(argument, ast.Name)
+            and argument.id not in assigned_names
+            and argument.id not in sanitized
+        )
+        unsafe_argument = bool(
+            argument is not None
+            and (
+                unknown_direct_argument
+                or (
+                    expr_tainted(argument, tainted, containers)
+                    and (not argument_names or not argument_names.issubset(sanitized))
+                )
+            )
+        )
+        if code_context and short_name in {"eval", "exec"} and unsafe_argument:
+            pattern = f"{short_name}("
+            findings.append(make_flag(
+                line=call.lineno,
+                flag_type="code_injection",
+                pattern=pattern,
+                message=f"Request-controlled data reaches {short_name}()",
+                severity=38,
+                explanation=(
+                    f"{short_name}() executes Python source. Parse the expected data format instead, "
+                    "or restrict the input to a rigorously validated non-executable representation."
+                ),
+            ))
+        if (
+            cmd_context
+            and (call_name == "os.system" or call_name.startswith("subprocess."))
+            and unsafe_argument
+        ):
+            findings.append(make_flag(
+                line=call.lineno,
+                flag_type="command_injection",
+                pattern="subprocess" if call_name.startswith("subprocess.") else "os.system",
+                message="Request-controlled data reaches a system command",
+                severity=38,
+                explanation=(
+                    "Shell metacharacters in external input can change the command. Use a fixed executable and a list of "
+                    "validated arguments, and avoid shell=True."
+                ),
+            ))
+        deserialization_sinks = {
+            "pickle.loads", "pickle.load", "marshal.loads", "marshal.load", "dill.loads", "yaml.load"
+        }
+        if deserialization_context and call_name in deserialization_sinks and unsafe_argument:
+            findings.append(make_flag(
+                line=call.lineno,
+                flag_type="unsafe_deserialization",
+                pattern=call_name,
+                message="Request-controlled data reaches an unsafe deserializer",
+                severity=38,
+                explanation=(
+                    "Some Python deserializers can construct attacker-controlled objects or execute code. "
+                    "Use a non-executable data format and a safe loader for untrusted input."
+                ),
+            ))
         if ldap_context and short_name == "search" and len(call.args) >= 2:
             query = call.args[1]
             names = tainted_names(query, tainted, containers)
@@ -2808,6 +2920,7 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
                         "Escape filter values with the LDAP library's filter-escaping helper before building the query."
                     ),
                 ))
+
         xpath_argument = None
         if xpath_context and (call_name.endswith(".XPath") or short_name == "xpath") and call.args:
             xpath_argument = call.args[0]
@@ -2843,6 +2956,11 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
                     ),
                 ))
 
+    def record_nested_security_sinks(node: ast.AST, tainted: set[str], containers: set[str], sanitized: set[str]) -> None:
+        for child in ast.walk(node):
+            if isinstance(child, ast.Call):
+                record_security_sink(child, tainted, containers, sanitized)
+
     def process_block(statements, tainted=None, containers=None, constants=None, sanitized=None):
         tainted = set(tainted or ())
         containers = set(containers or ())
@@ -2870,7 +2988,7 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
             if isinstance(statement, ast.Assign):
                 if isinstance(statement.value, ast.Call):
                     record_path_sink(statement.value, tainted, containers, sanitized)
-                    record_security_sink(statement.value, tainted, containers, sanitized)
+                    record_nested_security_sinks(statement.value, tainted, containers, sanitized)
                 value_constant = const_value(statement.value, constants)
                 value_tainted = (
                     False
@@ -2932,6 +3050,7 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
                 )
                 continue
             if isinstance(statement, ast.AugAssign):
+                record_nested_security_sinks(statement.value, tainted, containers, sanitized)
                 value_tainted = expr_tainted(statement.value, tainted, containers)
                 target_name = statement.target.id if isinstance(statement.target, ast.Name) else ""
                 if web_context and value_tainted and target_name.lower() in {"response", "html", "body", "output"}:
@@ -3002,7 +3121,27 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
                     tainted, containers, constants, sanitized, falls_through = merge_states(states)
                 continue
             if isinstance(statement, (ast.For, ast.While)):
-                loop_state = process_block(statement.body, tainted, containers, constants, sanitized)
+                loop_tainted = set(tainted)
+                loop_containers = set(containers)
+                loop_constants = dict(constants)
+                loop_sanitized = set(sanitized)
+                if isinstance(statement, ast.For):
+                    assign_target(
+                        statement.target,
+                        expr_tainted(statement.iter, tainted, containers),
+                        unknown,
+                        loop_tainted,
+                        loop_containers,
+                        loop_constants,
+                        loop_sanitized,
+                    )
+                loop_state = process_block(
+                    statement.body,
+                    loop_tainted,
+                    loop_containers,
+                    loop_constants,
+                    loop_sanitized,
+                )
                 else_state = process_block(statement.orelse, tainted, containers, constants, sanitized)
                 tainted, containers, constants, sanitized, falls_through = merge_states([
                     (tainted, containers, constants, sanitized, True), loop_state, else_state
@@ -3023,7 +3162,7 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
                 for item in statement.items:
                     if isinstance(item.context_expr, ast.Call):
                         record_path_sink(item.context_expr, tainted, containers, sanitized)
-                        record_security_sink(item.context_expr, tainted, containers, sanitized)
+                        record_nested_security_sinks(item.context_expr, tainted, containers, sanitized)
                 tainted, containers, constants, sanitized, falls_through = process_block(
                     statement.body, tainted, containers, constants, sanitized
                 )
@@ -3031,7 +3170,7 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
             if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call):
                 call = statement.value
                 record_path_sink(call, tainted, containers, sanitized)
-                record_security_sink(call, tainted, containers, sanitized)
+                record_nested_security_sinks(call, tainted, containers, sanitized)
                 call_name = dotted_name(call.func).rsplit(".", 1)[-1]
                 if isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name):
                     container_name = call.func.value.id
@@ -3085,7 +3224,7 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
                 continue
             if isinstance(statement, ast.Return):
                 if isinstance(statement.value, ast.Call):
-                    record_security_sink(statement.value, tainted, containers, sanitized)
+                    record_nested_security_sinks(statement.value, tainted, containers, sanitized)
                 if (
                     web_context
                     and statement.value
@@ -4023,8 +4162,9 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
     ]
     tainted_vars = build_taint_map(executable_scannable_lines)
     secret_variables, secret_source_flags = find_environment_secret_sources(comment_clean_scannable_lines)
+    python_tree = None
     try:
-        ast.parse(analysis_code)
+        python_tree = ast.parse(analysis_code)
         python_source_parses = True
     except Exception:
         python_source_parses = False
@@ -4127,7 +4267,7 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
         ast_flags = []
 
     try:
-        heuristic_flags = add_multi_signal_heuristics(scannable_lines)
+        heuristic_flags = add_multi_signal_heuristics(scannable_lines, python_tree)
     except Exception:
         heuristic_flags = []
 
@@ -5300,7 +5440,7 @@ def stripe_status():
         "supabase_admin_valid": supabase_admin_is_valid(),
         "app_base_url": APP_BASE_URL,
         "recovery_version": 4,
-        "scanner_version": 11,
+        "scanner_version": 12,
         "security_version": 1,
         "benchmark_cases": 803,
         "benchmark_independent_cases": 803,
@@ -5411,7 +5551,7 @@ def submit_feedback(req: FeedbackRequest, request: Request):
         "verdict": verdict,
         "category": req.category.strip()[:80],
         "note": req.note.strip()[:500],
-        "scanner_version": 11,
+        "scanner_version": 12,
     }
     inserted = supabase_rest_request("POST", "scan_feedback", payload=payload, prefer="return=representation")
     if not inserted:
