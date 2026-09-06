@@ -72,6 +72,13 @@ class RepositoryScoringTests(unittest.TestCase):
         self.assertEqual(points, 20.0)
         self.assertEqual(main.risk_from_points(points), "yellow")
 
+    def test_repeated_low_severity_behavior_has_diminishing_weight(self):
+        flags = [
+            {"pattern": "fetch(", "severity": 4.0}
+            for _ in range(20)
+        ]
+        self.assertEqual(main.aggregate_flag_risk_points(flags), 7.0)
+
     def test_dependency_manifests_are_bounded_and_parsed(self):
         archive = io.BytesIO()
         with zipfile.ZipFile(archive, "w") as output:
