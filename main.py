@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import BackgroundTasks, FastAPI, Request, HTTPException
 from fastapi.responses import FileResponse, Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -12,13 +12,20 @@ import urllib.request
 import ssl
 import certifi
 import hashlib
+import hmac
+import shutil
+import subprocess
+import tempfile
+import difflib
 import time
 import threading
+from pathlib import Path
 from html import escape as html_escape
 from dotenv import load_dotenv
 from datetime import date, datetime, timezone
 from urllib.parse import urlparse, quote, urlencode
 import stripe
+import jwt
 
 load_dotenv()
 
@@ -64,6 +71,11 @@ class ScanRequest(BaseModel):
 class RepoScanRequest(BaseModel):
     intent: str
     repo_url: str
+
+
+class FixPreviewRequest(BaseModel):
+    intent: str
+    code: str
 
 
 # display_key, regex, label, base severity points
@@ -161,6 +173,11 @@ STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY", "").strip()
 STRIPE_PRICE_ID = os.getenv("STRIPE_PRICE_ID", "price_1TBryAEKmNfjd7YM13LoKYvs").strip()
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "").strip()
 APP_BASE_URL = os.getenv("APP_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+SEMGREP_ENABLED = os.getenv("SEMGREP_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
+SEMGREP_CONFIG_PATH = Path(__file__).with_name("semgrep.yml")
+GITHUB_APP_ID = os.getenv("GITHUB_APP_ID", "").strip()
+GITHUB_PRIVATE_KEY = os.getenv("GITHUB_PRIVATE_KEY", "").replace("\\n", "\n").strip()
+GITHUB_WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET", "").strip()
 
 if STRIPE_SECRET_KEY:
     stripe.api_key = STRIPE_SECRET_KEY
@@ -2860,6 +2877,182 @@ def build_focused_code_blocks(code: str, flags: list[dict], context_lines: int =
     return blocks
 
 
+def infer_code_filename(code: str) -> str:
+    lowered = code.lower()
+    if re.search(r"<\?(?:php|=)", lowered):
+        return "snippet.php"
+    if re.search(r"\b(?:const|let|var)\s+\w+|=>|require\s*\(", code):
+        return "snippet.js"
+    if re.search(r"^\s*(?:select|insert|update|delete|create\s+table)\b", lowered, re.MULTILINE):
+        return "snippet.sql"
+    if re.search(r"^\s*(?:#!/bin/(?:ba)?sh|curl\s|wget\s)", lowered, re.MULTILINE):
+        return "snippet.sh"
+    if re.search(r"<\/?(?:html|main|script|div|body|head)\b", lowered):
+        return "snippet.html"
+    return "snippet.py"
+
+
+def run_semgrep_scan(code: str, filename: str | None = None) -> dict:
+    """Run the local, pinned Semgrep rules without sending code over the network."""
+    started = time.monotonic()
+    executable = shutil.which("semgrep")
+    if not SEMGREP_ENABLED:
+        return {"name": "semgrep", "status": "disabled", "findings": [], "duration_ms": 0}
+    if not executable or not SEMGREP_CONFIG_PATH.exists():
+        return {"name": "semgrep", "status": "unavailable", "findings": [], "duration_ms": 0}
+
+    safe_name = Path(filename or infer_code_filename(code)).name
+    try:
+        with tempfile.TemporaryDirectory(prefix="ai-code-audit-") as temp_dir:
+            target = Path(temp_dir) / safe_name
+            target.write_text(code, encoding="utf-8")
+            completed = subprocess.run(
+                [
+                    executable,
+                    "scan",
+                    "--json",
+                    "--metrics=off",
+                    "--quiet",
+                    "--config",
+                    str(SEMGREP_CONFIG_PATH),
+                    str(target),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+                env={**os.environ, "SEMGREP_SEND_METRICS": "off"},
+            )
+        if completed.returncode not in {0, 1}:
+            raise RuntimeError("Semgrep returned a non-scan exit status")
+        payload = json.loads(completed.stdout or "{}")
+        findings = []
+        for item in payload.get("results") or []:
+            extra = item.get("extra") or {}
+            metadata = extra.get("metadata") or {}
+            raw_severity = str(extra.get("severity") or "WARNING").upper()
+            severity = {"ERROR": 18, "WARNING": 10, "INFO": 4}.get(raw_severity, 10)
+            findings.append({
+                "engine": "semgrep",
+                "rule_id": item.get("check_id") or "semgrep-rule",
+                "type": "semgrep",
+                "pattern": item.get("check_id") or "semgrep-rule",
+                "line": ((item.get("start") or {}).get("line")),
+                "message": extra.get("message") or "Semgrep detected code that needs review.",
+                "explanation": metadata.get("explanation") or extra.get("message") or "A structural code rule matched this line.",
+                "severity": severity,
+                "confidence": str(metadata.get("confidence") or "medium").lower(),
+            })
+        return {
+            "name": "semgrep",
+            "status": "complete",
+            "findings": findings,
+            "duration_ms": round((time.monotonic() - started) * 1000),
+        }
+    except subprocess.TimeoutExpired:
+        return {"name": "semgrep", "status": "timeout", "findings": [], "duration_ms": 20000}
+    except Exception as exc:
+        log_server_issue("Semgrep scan could not complete", exc)
+        return {
+            "name": "semgrep",
+            "status": "error",
+            "findings": [],
+            "duration_ms": round((time.monotonic() - started) * 1000),
+        }
+
+
+def build_evidence_profile(
+    flags: list[dict],
+    touches: list[str],
+    mismatches: list,
+    semgrep_findings: list[dict] | None = None,
+    dependency_points: float = 0,
+    coverage_partial: bool = False,
+) -> list[dict]:
+    semgrep_findings = semgrep_findings or []
+    combined = flags + semgrep_findings
+    category_patterns = {
+        "execution": {"eval(", "exec(", "os.system", "subprocess", "child_process", "download_execute_chain", "obfuscated_execution", "pickle.loads", "pickle.load", "marshal.loads", "marshal.load", "yaml.load", "dill.loads"},
+        "credentials": {"environment_secret_access", "secret_exfiltration_chain"},
+        "network": {"requests.post", "requests.get", "fetch(", "socket", "urllib.request.urlopen", "urllib.request.urlretrieve", "download helper"},
+    }
+
+    def category_points(category: str) -> float:
+        if category == "dependencies":
+            return float(dependency_points or 0)
+        if category == "intent":
+            return min(20.0, len(mismatches) * 5.0)
+        if category == "coverage":
+            return 10.0 if coverage_partial else 0.0
+        total = 0.0
+        for flag in combined:
+            pattern = str(flag.get("pattern") or flag.get("rule_id") or "")
+            flag_type = str(flag.get("type") or "")
+            if category == "credentials" and flag_type in {"secret", "secret_source", "secret_exfiltration"}:
+                total += float(flag.get("severity", 0) or 0)
+            elif pattern in category_patterns.get(category, set()) or any(token in pattern for token in category_patterns.get(category, set())):
+                total += float(flag.get("severity", 0) or 0)
+        return min(100.0, round(total, 1))
+
+    labels = {
+        "execution": "Code execution",
+        "credentials": "Credentials",
+        "network": "Network behavior",
+        "dependencies": "Dependencies",
+        "intent": "Intent match",
+        "coverage": "Scan coverage",
+    }
+    summaries = {
+        "execution": "Dynamic execution, shell commands, and unsafe deserialization.",
+        "credentials": "Secret access, hard-coded credentials, and credential flows.",
+        "network": "Outbound requests, downloads, and externally controlled destinations.",
+        "dependencies": "Known advisories found in declared packages.",
+        "intent": "Whether observed behavior matches the stated purpose.",
+        "coverage": "How much of the supplied code was actually analyzed.",
+    }
+    profile = []
+    for category in labels:
+        points = category_points(category)
+        status = "high" if points >= 18 else "review" if points > 0 else "clear"
+        signals = [
+            str(flag.get("message") or flag.get("pattern") or flag.get("rule_id"))
+            for flag in combined
+            if category == "execution" and str(flag.get("pattern") or flag.get("rule_id") or "") in category_patterns["execution"]
+        ][:3]
+        if category == "intent":
+            signals = [str(value) for value in mismatches[:3]]
+        profile.append({
+            "id": category,
+            "label": labels[category],
+            "status": status,
+            "risk_points": points,
+            "summary": summaries[category],
+            "confidence": "high" if category != "intent" else "medium",
+            "signals": signals,
+        })
+    return profile
+
+
+def build_fix_previews(code: str, flags: list[dict]) -> list[dict]:
+    patterns = {str(flag.get("pattern") or "") for flag in flags}
+    if "yaml.load" not in patterns or "yaml.load" not in code:
+        return []
+    patched = re.sub(r"\byaml\.load\s*\(", "yaml.safe_load(", code)
+    if patched == code:
+        return []
+    diff = "\n".join(difflib.unified_diff(
+        code.splitlines(), patched.splitlines(), fromfile="original", tofile="safer", lineterm=""
+    ))
+    return [{
+        "title": "Use PyYAML safe loading",
+        "confidence": "high",
+        "finding_pattern": "yaml.load",
+        "diff": diff,
+        "patched_code": patched,
+        "applies_automatically": False,
+    }]
+
+
 def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
     intent_lower = intent.lower()
     original_lines = code.splitlines()
@@ -3166,6 +3359,66 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
         "trust_badge": trust_badge,
         "risk_points": risk_points,
         "focused_code_blocks": focused_code_blocks,
+    }
+
+
+def analyze_code_product(intent: str, code: str, plan: str = "free", filename: str | None = None) -> dict:
+    result = analyze_code(intent, code, plan=plan)
+    semgrep = run_semgrep_scan(code, filename=filename)
+    semgrep_findings = semgrep.get("findings") or []
+    result["engine_findings"] = semgrep_findings
+    result["analysis_engines"] = [
+        {"name": "behavior", "status": "complete", "findings": len(result.get("flags") or [])},
+        {"name": "semgrep", "status": semgrep.get("status"), "findings": len(semgrep_findings), "duration_ms": semgrep.get("duration_ms", 0)},
+    ]
+    result["evidence"] = build_evidence_profile(
+        result.get("flags") or [],
+        result.get("touches") or [],
+        result.get("intent_mismatches") or [],
+        semgrep_findings=semgrep_findings,
+    )
+    result["fix_previews"] = build_fix_previews(code, result.get("flags") or [])
+    result["dynamic_sandbox"] = {
+        "status": "not_enabled",
+        "reason": "Untrusted code is never executed inside the web service.",
+    }
+    return result
+
+
+def result_to_sarif(result: dict, filename: str = "snippet.py") -> dict:
+    all_findings = list(result.get("flags") or []) + list(result.get("engine_findings") or [])
+    rules = {}
+    sarif_results = []
+    for finding in all_findings:
+        rule_id = str(finding.get("rule_id") or finding.get("pattern") or finding.get("type") or "audit-finding")
+        rule_id = re.sub(r"[^A-Za-z0-9._-]", "-", rule_id)[:120]
+        message = str(finding.get("message") or "Code behavior requires review.")
+        severity = float(finding.get("severity", 0) or 0)
+        level = "error" if severity >= 18 else "warning" if severity >= 8 else "note"
+        rules.setdefault(rule_id, {
+            "id": rule_id,
+            "shortDescription": {"text": message[:200]},
+            "help": {"text": str(finding.get("explanation") or message)[:1000]},
+        })
+        line = max(1, int(finding.get("line") or 1))
+        sarif_results.append({
+            "ruleId": rule_id,
+            "level": level,
+            "message": {"text": message},
+            "locations": [{
+                "physicalLocation": {
+                    "artifactLocation": {"uri": filename},
+                    "region": {"startLine": line},
+                }
+            }],
+        })
+    return {
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [{
+            "tool": {"driver": {"name": "AI Code Audit", "version": "7", "rules": list(rules.values())}},
+            "results": sarif_results,
+        }],
     }
 
 
@@ -3904,6 +4157,157 @@ async def stripe_webhook(request: Request):
     return {"received": True}
 
 
+def verify_github_webhook_signature(payload: bytes, signature: str) -> bool:
+    if not GITHUB_WEBHOOK_SECRET or not signature.startswith("sha256="):
+        return False
+    expected = hmac.new(GITHUB_WEBHOOK_SECRET.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(signature[7:], expected)
+
+
+def github_app_jwt() -> str:
+    now = int(time.time())
+    return jwt.encode(
+        {"iat": now - 30, "exp": now + 540, "iss": GITHUB_APP_ID},
+        GITHUB_PRIVATE_KEY,
+        algorithm="RS256",
+    )
+
+
+def github_api_request(method: str, url: str, token: str, body: dict | None = None) -> dict:
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    request = urllib.request.Request(
+        url,
+        data=data,
+        method=method,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "AI-Code-Audit",
+            "Content-Type": "application/json",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=20, context=ssl.create_default_context(cafile=certifi.where())) as response:
+        return json.loads(response.read().decode("utf-8") or "{}")
+
+
+def github_installation_token(installation_id: int) -> str:
+    payload = github_api_request(
+        "POST",
+        f"https://api.github.com/app/installations/{installation_id}/access_tokens",
+        github_app_jwt(),
+        {},
+    )
+    return str(payload.get("token") or "")
+
+
+def download_github_archive(full_name: str, sha: str, token: str) -> bytes:
+    request = urllib.request.Request(
+        f"https://api.github.com/repos/{quote(full_name, safe='/')}/zipball/{quote(sha, safe='')}",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "AI-Code-Audit",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=30, context=ssl.create_default_context(cafile=certifi.where())) as response:
+        data = response.read(MAX_REPOSITORY_ARCHIVE_BYTES + 1)
+    if len(data) > MAX_REPOSITORY_ARCHIVE_BYTES:
+        raise ValueError("Repository archive exceeds the 25 MB safety limit.")
+    return data
+
+
+def process_github_pull_request(installation_id: int, full_name: str, sha: str) -> None:
+    try:
+        token = github_installation_token(installation_id)
+        if not token:
+            raise RuntimeError("GitHub did not issue an installation token")
+        archive = download_github_archive(full_name, sha, token)
+        findings = []
+        files_scanned = 0
+        with zipfile.ZipFile(io.BytesIO(archive)) as zf:
+            candidates = sorted(
+                (name for name in zf.namelist() if not name.endswith("/") and is_supported_code_file(name)),
+                key=lambda name: (-file_weight_for_repo(name), name.lower()),
+            )[:PRO_REPO_FILE_LIMIT]
+            for path in candidates:
+                if zf.getinfo(path).file_size > MAX_PASTED_CODE_BYTES_PRO:
+                    continue
+                code = zf.read(path).decode("utf-8", errors="ignore")
+                result = analyze_code("Review this pull request for security risks.", code, plan="pro")
+                files_scanned += 1
+                relative_path = "/".join(path.split("/")[1:]) or path
+                for finding in result.get("flags") or []:
+                    findings.append((relative_path, finding))
+
+        high_count = sum(float(item.get("severity", 0) or 0) >= 18 for _, item in findings)
+        conclusion = "failure" if high_count else "neutral" if findings else "success"
+        annotations = []
+        for path, finding in findings[:50]:
+            line = max(1, int(finding.get("line") or 1))
+            severity = float(finding.get("severity", 0) or 0)
+            annotations.append({
+                "path": path,
+                "start_line": line,
+                "end_line": line,
+                "annotation_level": "failure" if severity >= 18 else "warning" if severity >= 8 else "notice",
+                "message": str(finding.get("message") or "Code behavior requires review.")[:1000],
+                "title": "AI Code Audit",
+            })
+        github_api_request(
+            "POST",
+            f"https://api.github.com/repos/{quote(full_name, safe='/')}/check-runs",
+            token,
+            {
+                "name": "AI Code Audit",
+                "head_sha": sha,
+                "status": "completed",
+                "conclusion": conclusion,
+                "output": {
+                    "title": f"{len(findings)} finding(s) across {files_scanned} file(s)",
+                    "summary": "No code was executed. Results combine intent-aware static checks with review annotations.",
+                    "annotations": annotations,
+                },
+            },
+        )
+    except Exception as exc:
+        log_server_issue("GitHub pull request scan failed", exc)
+
+
+@app.get("/github/status")
+def github_status():
+    return private_json({
+        "configured": bool(GITHUB_APP_ID and GITHUB_PRIVATE_KEY and GITHUB_WEBHOOK_SECRET),
+        "has_app_id": bool(GITHUB_APP_ID),
+        "has_private_key": bool(GITHUB_PRIVATE_KEY),
+        "has_webhook_secret": bool(GITHUB_WEBHOOK_SECRET),
+        "pull_request_checks": True,
+        "dynamic_sandbox": "not_enabled",
+    })
+
+
+@app.post("/github/webhook")
+async def github_webhook(request: Request, background_tasks: BackgroundTasks):
+    payload = await request.body()
+    signature = request.headers.get("x-hub-signature-256", "")
+    if not verify_github_webhook_signature(payload, signature):
+        raise HTTPException(status_code=401, detail="Invalid GitHub webhook signature.")
+    event = request.headers.get("x-github-event", "")
+    body = json.loads(payload.decode("utf-8") or "{}")
+    if event == "ping":
+        return private_json({"received": True, "event": "ping"})
+    if event != "pull_request" or body.get("action") not in {"opened", "reopened", "synchronize"}:
+        return private_json({"received": True, "ignored": True})
+    installation_id = int(((body.get("installation") or {}).get("id") or 0))
+    full_name = str(((body.get("repository") or {}).get("full_name") or ""))
+    sha = str(((((body.get("pull_request") or {}).get("head") or {}).get("sha")) or ""))
+    if not installation_id or not full_name or not sha:
+        raise HTTPException(status_code=400, detail="Incomplete pull request event.")
+    background_tasks.add_task(process_github_pull_request, installation_id, full_name, sha)
+    return private_json({"received": True, "queued": True})
+
+
 @app.get("/stripe/status")
 def stripe_status():
     return {
@@ -3914,9 +4318,9 @@ def stripe_status():
         "supabase_admin_valid": supabase_admin_is_valid(),
         "app_base_url": APP_BASE_URL,
         "recovery_version": 4,
-        "scanner_version": 6,
+        "scanner_version": 7,
         "security_version": 1,
-        "benchmark_cases": 53,
+        "benchmark_cases": 265,
     }
 
 
@@ -3964,7 +4368,7 @@ def scan(req: ScanRequest, request: Request):
 
     is_example_scan = bool(req.is_example)
 
-    result = analyze_code(req.intent, req.code, plan=access["plan"])
+    result = analyze_code_product(req.intent, req.code, plan=access["plan"])
     result["access"] = access
     result["is_example"] = is_example_scan
     result["privacy"] = {
@@ -3972,6 +4376,28 @@ def scan(req: ScanRequest, request: Request):
         "response_cache_disabled": True,
     }
     return private_json(result)
+
+
+@app.post("/scan/sarif")
+def scan_sarif(req: ScanRequest, request: Request):
+    access = enrich_access_with_admin_metadata(get_request_access_context(request))
+    enforce_rate_limit(request, access, "scan")
+    max_code_bytes = MAX_PASTED_CODE_BYTES_PRO if access.get("plan") in {"pro", "admin"} else MAX_PASTED_CODE_BYTES_FREE
+    if len(req.code.encode("utf-8", errors="ignore")) > max_code_bytes:
+        return private_json({"detail": "Pasted code exceeds this plan's request limit."}, status_code=413)
+    result = analyze_code_product(req.intent, req.code, plan=access.get("plan") or "free")
+    return private_json(result_to_sarif(result, infer_code_filename(req.code)))
+
+
+@app.post("/fix-preview")
+def fix_preview(req: FixPreviewRequest, request: Request):
+    access = enrich_access_with_admin_metadata(get_request_access_context(request))
+    enforce_rate_limit(request, access, "scan")
+    result = analyze_code(req.intent, req.code, plan=access.get("plan") or "free")
+    return private_json({
+        "fix_previews": build_fix_previews(req.code, result.get("flags") or []),
+        "applied": False,
+    })
 
 
 
@@ -4171,6 +4597,13 @@ def scan_repo(req: RepoScanRequest, request: Request):
         },
         scan_error=dependency_scan.get("dependency_scan_error"),
     )
+    evidence = build_evidence_profile(
+        flattened_repo_flags,
+        repo_behavior_categories,
+        repo_intent_mismatches,
+        dependency_points=dependency_risk_points,
+        coverage_partial=coverage_partial,
+    )
 
     return private_json({
         "repo_url": req.repo_url,
@@ -4189,6 +4622,12 @@ def scan_repo(req: RepoScanRequest, request: Request):
         "score_explanation": score_explanation,
         "score_explanation_lines": score_explanation_lines,
         "scan_confidence": scan_confidence,
+        "evidence": evidence,
+        "analysis_engines": [
+            {"name": "behavior", "status": "complete", "findings": len(flattened_repo_flags)},
+            {"name": "dependency-advisories", "status": "complete" if not dependency_scan.get("dependency_scan_error") else "partial", "findings": len(dependency_findings)},
+        ],
+        "dynamic_sandbox": {"status": "not_enabled", "reason": "Repository code is inspected but never executed."},
         "behavior_summary": all_behavior_summary or ["No obvious risky behavior was detected in this repo scan."],
         "summary": f"Weighted repo scan completed across {len(files_scanned)} files.",
         "risk_points": round(normalized_repo_points, 2),

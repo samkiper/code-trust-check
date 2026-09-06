@@ -1,4 +1,5 @@
 import unittest
+from functools import lru_cache
 
 from main import analyze_code
 
@@ -64,24 +65,42 @@ DANGEROUS_CASES = [
 ]
 
 
+def case_variants(name, language, intent, code, expected=None):
+    marker = "--" if language == "sql" else "//" if language in {"javascript", "typescript", "java", "go", "rust"} else "#"
+    variants = [
+        (name, language, intent, code),
+        (name + "_leading_blank", language, intent, "\n" + code),
+        (name + "_trailing_comment", language, intent, code + f"\n{marker} regression variant"),
+        (name + "_surrounding_blank", language, intent, "\n\n" + code + "\n"),
+        (name + "_crlf", language, intent, code.replace("\n", "\r\n")),
+    ]
+    if expected is not None:
+        return [(*item, expected) for item in variants]
+    return variants
+
+
+@lru_cache(maxsize=1)
 def benchmark_metrics():
-    safe_results = [(name, analyze_code(intent, code)) for name, _, intent, code in SAFE_CASES]
+    expanded_safe = [variant for case in SAFE_CASES for variant in case_variants(*case)]
+    expanded_dangerous = [variant for case in DANGEROUS_CASES for variant in case_variants(*case)]
+    safe_results = [(name, analyze_code(intent, code)) for name, _, intent, code in expanded_safe]
     dangerous_results = [
         (name, expected, analyze_code(intent, code))
-        for name, _, intent, code, expected in DANGEROUS_CASES
+        for name, _, intent, code, expected in expanded_dangerous
     ]
     false_positives = [name for name, result in safe_results if result["risk"] != "green"]
     missed = [name for name, expected, result in dangerous_results if result["risk"] not in expected]
     detected = [name for name, _, result in dangerous_results if result["risk"] in {"yellow", "red"}]
     languages = {case[1] for case in SAFE_CASES + DANGEROUS_CASES}
     return {
-        "cases": len(SAFE_CASES) + len(DANGEROUS_CASES),
-        "safe_cases": len(SAFE_CASES),
-        "dangerous_cases": len(DANGEROUS_CASES),
+        "cases": len(expanded_safe) + len(expanded_dangerous),
+        "base_cases": len(SAFE_CASES) + len(DANGEROUS_CASES),
+        "safe_cases": len(expanded_safe),
+        "dangerous_cases": len(expanded_dangerous),
         "false_positives": false_positives,
         "missed_expectations": missed,
-        "false_positive_rate": len(false_positives) / len(SAFE_CASES),
-        "dangerous_recall": len(detected) / len(DANGEROUS_CASES),
+        "false_positive_rate": len(false_positives) / len(expanded_safe),
+        "dangerous_recall": len(detected) / len(expanded_dangerous),
         "language_count": len(languages),
     }
 
@@ -89,7 +108,7 @@ def benchmark_metrics():
 class ScannerBenchmarkTests(unittest.TestCase):
     def test_benchmark_is_broad_enough(self):
         metrics = benchmark_metrics()
-        self.assertGreaterEqual(metrics["cases"], 50, metrics)
+        self.assertGreaterEqual(metrics["cases"], 250, metrics)
         self.assertGreaterEqual(metrics["language_count"], 8, metrics)
 
     def test_safe_false_positive_rate_is_below_five_percent(self):

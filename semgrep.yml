@@ -1,0 +1,80 @@
+rules:
+  - id: python.dynamic-eval
+    languages: [python]
+    severity: ERROR
+    message: Dynamic eval can execute attacker-controlled Python.
+    metadata:
+      confidence: high
+      explanation: Treat evaluated text as executable code and validate its source.
+    patterns:
+      - pattern-either:
+          - pattern: eval(...)
+          - pattern: exec(...)
+
+  - id: python.shell-true
+    languages: [python]
+    severity: ERROR
+    message: A subprocess uses shell=True, which can enable command injection.
+    metadata:
+      confidence: high
+      explanation: Pass an argument list and keep shell=False when input is not fully trusted.
+    patterns:
+      - pattern-either:
+          - pattern: subprocess.run(..., shell=True, ...)
+          - pattern: subprocess.Popen(..., shell=True, ...)
+          - pattern: subprocess.call(..., shell=True, ...)
+
+  - id: python.unsafe-deserialization
+    languages: [python]
+    severity: ERROR
+    message: Unsafe deserialization can execute code from untrusted input.
+    metadata:
+      confidence: high
+      explanation: Use a non-executable data format or a safe loader for untrusted data.
+    patterns:
+      - pattern-either:
+          - pattern: pickle.load(...)
+          - pattern: pickle.loads(...)
+          - pattern: marshal.load(...)
+          - pattern: marshal.loads(...)
+          - pattern: dill.load(...)
+          - pattern: dill.loads(...)
+
+  - id: python.yaml-unsafe-load
+    languages: [python]
+    severity: WARNING
+    message: yaml.load without a safe loader may construct unsafe Python objects.
+    metadata:
+      confidence: high
+      explanation: Prefer yaml.safe_load for data that is not completely trusted.
+    patterns:
+      - pattern: yaml.load($DATA)
+
+  - id: javascript.dynamic-eval
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: Dynamic eval can execute attacker-controlled JavaScript.
+    metadata:
+      confidence: high
+      explanation: Parse data explicitly instead of executing text as code.
+    pattern: eval(...)
+
+  - id: javascript.child-process-exec
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: child_process.exec invokes a shell and needs strict input control.
+    metadata:
+      confidence: medium
+      explanation: Prefer execFile or spawn with a fixed executable and argument list.
+    pattern-either:
+      - pattern: child_process.exec(...)
+      - pattern: $CP.exec(...)
+
+  - id: shell.download-pipe-execute
+    languages: [bash]
+    severity: ERROR
+    message: Downloaded content is piped directly into a shell.
+    metadata:
+      confidence: high
+      explanation: Download, verify, inspect, and only then execute a pinned artifact.
+    pattern-regex: '(?i)\b(curl|wget)\b[^\n|]*\|\s*(ba)?sh\b'

@@ -3,7 +3,7 @@ annotated-types==0.7.0
 anyio==4.12.1
 certifi==2026.2.25
 charset-normalizer==3.4.5
-click==8.5.0
+click==8.4.2
 fastapi==0.141.1
 h11==0.16.0
 idna==3.19
@@ -17,3 +17,5 @@ urllib3==2.7.0
 uvicorn==0.41.0
 python-dotenv
 stripe==15.6.1
+PyJWT[crypto]==2.13.0
+semgrep==1.176.1
