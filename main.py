@@ -3121,56 +3121,75 @@ async def reconcile_stripe_subscription(request: Request):
         )
 
     try:
-        customers = stripe.Customer.list(email=str(access["email"]), limit=10)
+        checkout_sessions = stripe.checkout.Session.list(limit=100)
+        session_records = list(getattr(checkout_sessions, "data", None) or checkout_sessions.get("data") or [])
     except Exception as exc:
-        log_server_issue("Could not search Stripe customers while restoring subscription", exc)
+        log_server_issue("Could not list Stripe Checkout Sessions while restoring subscription", exc)
         raise HTTPException(status_code=502, detail="Stripe could not be reached to restore the subscription right now.") from exc
 
-    active_match = None
-    try:
-        customer_records = list(customers.get("data") or [])
-        for customer in customer_records:
-            customer_id = str(customer.get("id") or "").strip()
-            if not customer_id:
-                continue
-            try:
-                subscriptions = stripe.Subscription.list(customer=customer_id, status="all", limit=20)
-                subscription_records = list(subscriptions.get("data") or [])
-            except Exception as exc:
-                log_server_issue(f"Could not list subscriptions for Stripe customer {customer_id}", exc)
-                continue
-            for subscription in subscription_records:
-                status = str(subscription.get("status") or "").lower()
-                cancel_at_period_end = bool(subscription.get("cancel_at_period_end") or False)
-                current_period_end = subscription.get("current_period_end")
-                if should_keep_pro_access(
-                    status,
-                    cancel_at_period_end=cancel_at_period_end,
-                    current_period_end=current_period_end,
-                ):
-                    active_match = (customer_id, subscription, status, cancel_at_period_end, current_period_end)
-                    break
-            if active_match:
-                break
-    except Exception as exc:
-        log_server_issue("Could not read Stripe customer subscription records", exc)
-        raise HTTPException(
-            status_code=502,
-            detail="Stripe returned the payment record, but the subscription details could not be read. Please try Restore paid subscription again.",
-        ) from exc
+    paid_session = None
+    expected_user_id = str(access["user_id"])
+    expected_email = str(access["email"]).strip().lower()
+    for session in session_records:
+        metadata = session.get("metadata") or {}
+        session_user_id = str(metadata.get("user_id") or session.get("client_reference_id") or "")
+        customer_details = session.get("customer_details") or {}
+        session_email = str(
+            metadata.get("user_email")
+            or customer_details.get("email")
+            or session.get("customer_email")
+            or ""
+        ).strip().lower()
+        belongs_to_user = session_user_id == expected_user_id or (
+            not session_user_id and session_email == expected_email
+        )
+        if (
+            belongs_to_user
+            and str(session.get("status") or "").lower() == "complete"
+            and str(session.get("payment_status") or "").lower() in {"paid", "no_payment_required"}
+            and session.get("subscription")
+        ):
+            paid_session = session
+            break
 
-    if not active_match:
+    if not paid_session:
         raise HTTPException(
             status_code=404,
-            detail="No active paid subscription was found for the email on this account. Confirm the Stripe receipt used the same email address.",
+            detail="No completed paid checkout was found for this account. Confirm you are signed in with the same email used at checkout.",
         )
 
-    customer_id, subscription, status, cancel_at_period_end, current_period_end = active_match
-    subscription_id = str(subscription.get("id") or "").strip()
+    raw_subscription = paid_session.get("subscription")
+    raw_customer = paid_session.get("customer")
+    subscription_id = str(
+        raw_subscription.get("id") if hasattr(raw_subscription, "get") else raw_subscription
+    ).strip()
+    customer_id = str(raw_customer.get("id") if hasattr(raw_customer, "get") else raw_customer).strip()
+    status = "active"
+    cancel_at_period_end = False
+    current_period_end = None
+    try:
+        subscription = stripe.Subscription.retrieve(subscription_id)
+        status = str(subscription.get("status") or "active").lower()
+        cancel_at_period_end = bool(subscription.get("cancel_at_period_end") or False)
+        current_period_end = subscription.get("current_period_end")
+    except Exception as exc:
+        log_server_issue("Could not retrieve subscription during paid Checkout Session recovery; applying paid access", exc)
+
+    restored_plan = plan_from_subscription_status(
+        status,
+        cancel_at_period_end=cancel_at_period_end,
+        current_period_end=current_period_end,
+    )
+    if restored_plan != "pro":
+        raise HTTPException(
+            status_code=409,
+            detail="The checkout was paid, but the associated subscription is no longer active.",
+        )
+
     synced = sync_user_plan_from_subscription(
         str(access["user_id"]),
-        plan="pro",
-        stripe_customer_id=customer_id,
+        plan=restored_plan,
+        stripe_customer_id=customer_id or None,
         stripe_subscription_id=subscription_id,
         subscription_status=status,
         cancel_at_period_end=cancel_at_period_end,
