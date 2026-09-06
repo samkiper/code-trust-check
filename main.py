@@ -1,10 +1,11 @@
-from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import FileResponse, Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import re
 import os
 import io
+import base64
 import ast
 import json
 import zipfile
@@ -12,9 +13,12 @@ import urllib.request
 import ssl
 import certifi
 import hashlib
+import time
+from html import escape as html_escape
 from dotenv import load_dotenv
-from datetime import date
+from datetime import date, datetime, timezone
 from urllib.parse import urlparse, quote, urlencode
+import stripe
 
 load_dotenv()
 
@@ -26,6 +30,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 class ScanRequest(BaseModel):
     intent: str
     code: str
+    is_example: bool = False
 
 
 class RepoScanRequest(BaseModel):
@@ -70,6 +75,28 @@ SECRET_PATTERNS = [
     (r"AIza[0-9A-Za-z\-_]{35}", "Possible Google API key", 25),
 ]
 
+# Environment-backed credentials are not literal secrets, but they are still
+# sensitive sources. Track the assigned variable so later network sinks can be
+# scored as a potential secret-exfiltration path.
+SENSITIVE_ENV_NAME_PATTERN = re.compile(
+    r"(?:secret|token|password|passwd|api[_-]?key|private[_-]?key|credential)",
+    re.IGNORECASE,
+)
+ENV_SECRET_ASSIGNMENT_PATTERNS = [
+    re.compile(
+        r"\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:os\.)?getenv\s*\(\s*['\"]([^'\"]+)['\"]",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*os\.environ(?:\.get\s*\(\s*['\"]([^'\"]+)['\"]|\s*\[\s*['\"]([^'\"]+)['\"])",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:process\.env\.|Deno\.env\.get\s*\(\s*['\"])([A-Za-z0-9_-]+)",
+        re.IGNORECASE,
+    ),
+]
+
 SUPPORTED_CODE_EXTENSIONS = {
     ".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".java", ".rb",
     ".php", ".cs", ".cpp", ".c", ".rs", ".sh", ".swift", ".kt",
@@ -79,14 +106,70 @@ SUPPORTED_CODE_EXTENSIONS = {
 FREE_LINE_LIMIT = 2000
 FREE_REPO_FILE_LIMIT = 25
 FREE_REPO_SIZE_LIMIT_BYTES = 1_000_000
-FREE_DAILY_SCAN_LIMIT = 5
+FREE_DAILY_SCAN_LIMIT = None
 PRO_LINE_LIMIT = 20000
 PRO_REPO_FILE_LIMIT = 200
 PRO_REPO_SIZE_LIMIT_BYTES = 10_000_000
-PRO_DAILY_SCAN_LIMIT = 50
+PRO_DAILY_SCAN_LIMIT = None
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_SECRET_KEY = os.getenv("SUPABASE_SECRET_KEY", "")
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "").strip()
+STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY", "").strip()
+STRIPE_PRICE_ID = os.getenv("STRIPE_PRICE_ID", "price_1TBryAEKmNfjd7YM13LoKYvs").strip()
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "").strip()
+APP_BASE_URL = os.getenv("APP_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+
+if STRIPE_SECRET_KEY:
+    stripe.api_key = STRIPE_SECRET_KEY
+    stripe.max_network_retries = 2
+
+
+def log_server_issue(context: str, exc: Exception | None = None):
+    message = f"[server] {context}"
+    if exc is not None:
+        message += f": {exc}"
+    print(message)
+
+
+def enrich_access_with_admin_metadata(access: dict) -> dict:
+    if not access.get("authenticated") or not access.get("user_id"):
+        return access
+
+    current_user = get_supabase_admin_user(str(access["user_id"])) or {}
+    app_metadata = current_user.get("app_metadata") or {}
+    role = str(app_metadata.get("role") or access.get("role") or "user").lower()
+    plan = str(app_metadata.get("plan") or ("admin" if role == "admin" else access.get("plan") or "free")).lower()
+
+    enriched = dict(access)
+    enriched["role"] = role
+    enriched["plan"] = "admin" if role == "admin" else plan
+    enriched["limits"] = get_plan_limits(enriched["plan"])
+    enriched["app_metadata"] = app_metadata
+    return enriched
+
+
+def build_access_payload(access: dict) -> dict:
+    limits = access.get("limits") or get_plan_limits(access.get("plan") or "free")
+    app_metadata = access.get("app_metadata") or {}
+    return {
+        "authenticated": bool(access.get("authenticated")),
+        "user_id": access.get("user_id"),
+        "email": access.get("email"),
+        "role": access.get("role") or "user",
+        "plan": access.get("plan") or "free",
+        "limits": limits,
+        "billing": {
+            "stripe_customer_id": app_metadata.get("stripe_customer_id"),
+            "stripe_subscription_id": app_metadata.get("stripe_subscription_id"),
+            "subscription_status": app_metadata.get("stripe_subscription_status"),
+            "cancel_at_period_end": app_metadata.get("stripe_cancel_at_period_end"),
+            "current_period_end": app_metadata.get("stripe_current_period_end"),
+            "current_period_end_iso": app_metadata.get("stripe_current_period_end_iso"),
+            "can_manage_billing": bool(app_metadata.get("stripe_customer_id")),
+        },
+        "debug": access.get("debug") or {},
+    }
 
 
 JS_EXAMPLE_FUNCTIONS = {
@@ -177,6 +260,57 @@ TRUSTED_INTERNAL_NETWORK_HINTS = (
 )
 
 
+BADGE_CACHE_TTL_SECONDS = 600
+BADGE_CACHE: dict[str, dict] = {}
+
+
+def badge_color_from_risk(risk: str, trust_score: int) -> str:
+    if risk == "green" or trust_score >= 75:
+        return "#22c55e"
+    if risk == "yellow" or trust_score >= 60:
+        return "#d4aa21"
+    return "#ef4444"
+
+
+def generate_readme_badge(base_url: str, owner: str, repo: str, trust_score: int, risk: str) -> dict:
+    base = str(base_url or "").rstrip("/")
+    badge_image_url = f"{base}/badge/github/{quote(owner)}/{quote(repo)}.svg" if base else f"/badge/github/{quote(owner)}/{quote(repo)}.svg"
+    report_url = f"{base}/?repo_url={quote(f'https://github.com/{owner}/{repo}', safe='')}" if base else "/"
+    badge_markdown = f"[![AI Code Audit]({badge_image_url})]({report_url})"
+    badge_html = f"<a href='{report_url}'><img src='{badge_image_url}' alt='AI Code Audit badge' /></a>"
+    return {
+        "badge_image_url": badge_image_url,
+        "badge_markdown": badge_markdown,
+        "badge_html": badge_html,
+    }
+
+
+def build_badge_svg(label: str, value: str, value_color: str) -> str:
+    label = str(label)
+    value = str(value)
+    left_width = max(150, 22 + len(label) * 13)
+    right_width = max(92, 20 + len(value) * 15)
+    total_width = left_width + right_width
+
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{total_width}" height="48" role="img" aria-label="{html_escape(label)}: {html_escape(value)}">
+  <defs>
+    <linearGradient id="badgeLeft" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#faf8ff"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-20%" width="120%" height="160%">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#111827" flood-opacity="0.12"/>
+    </filter>
+  </defs>
+  <g filter="url(#shadow)">
+    <rect x="0.5" y="0.5" rx="10" ry="10" width="{total_width-1}" height="47" fill="url(#badgeLeft)" stroke="rgba(98,76,188,0.12)"/>
+    <rect x="{left_width}" y="0.5" rx="10" ry="10" width="{right_width-0.5}" height="47" fill="{html_escape(value_color)}"/>
+    <text x="16" y="31" fill="#6d28d9" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif" font-size="17" font-weight="800">◉ {html_escape(label)}</text>
+    <text x="{left_width + right_width/2}" y="31" text-anchor="middle" fill="#ffffff" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif" font-size="16" font-weight="800">{html_escape(value)}</text>
+  </g>
+</svg>"""
+
+
 def get_plan_limits(plan: str) -> dict:
     normalized = str(plan or "free").lower()
 
@@ -214,27 +348,101 @@ def get_bearer_token(request: Request) -> str | None:
     return token or None
 
 
-def fetch_supabase_user(access_token: str) -> dict | None:
-    if not SUPABASE_URL or not SUPABASE_SECRET_KEY or not access_token:
+def normalize_possible_access_token(value) -> str | None:
+    if value is None:
         return None
+    token = str(value).strip()
+    if not token:
+        return None
+    if token.lower().startswith("bearer "):
+        token = token.split(" ", 1)[1].strip()
+    return token or None
 
-    auth_request = urllib.request.Request(
-        f"{SUPABASE_URL}/auth/v1/user",
-        headers={
-            "Authorization": f"Bearer {access_token}",
-            "apikey": SUPABASE_SECRET_KEY,
-        },
-    )
+
+async def extract_request_access_token(request: Request) -> str | None:
+    direct_token = normalize_possible_access_token(get_bearer_token(request))
+    if direct_token:
+        return direct_token
+
+    custom_header_token = normalize_possible_access_token(request.headers.get("x-access-token"))
+    if custom_header_token:
+        return custom_header_token
 
     try:
-        context = ssl.create_default_context(cafile=certifi.where())
-        with urllib.request.urlopen(auth_request, timeout=10, context=context) as response:
-            return json.loads(response.read().decode("utf-8"))
+        payload = await request.json()
+    except Exception:
+        payload = None
+
+    if isinstance(payload, dict):
+        body_token = normalize_possible_access_token(
+            payload.get("access_token")
+            or payload.get("accessToken")
+            or payload.get("token")
+        )
+        if body_token:
+            return body_token
+
+    return None
+
+
+def decode_supabase_access_token(access_token: str) -> dict | None:
+    if not access_token or access_token.count(".") < 2:
+        return None
+
+    try:
+        payload_segment = access_token.split(".")[1]
+        padding = "=" * (-len(payload_segment) % 4)
+        decoded = base64.urlsafe_b64decode(payload_segment + padding)
+        payload = json.loads(decoded.decode("utf-8"))
     except Exception:
         return None
 
+    user_id = payload.get("sub")
+    email = payload.get("email")
+    if not user_id or not email:
+        return None
 
-def get_request_access_context(request: Request) -> dict:
+    app_metadata = payload.get("app_metadata") or {}
+    role = str(app_metadata.get("role") or "user").lower()
+    plan = str(app_metadata.get("plan") or ("admin" if role == "admin" else "free")).lower()
+
+    return {
+        "id": user_id,
+        "email": email,
+        "app_metadata": app_metadata,
+        "role": role,
+        "plan": plan,
+    }
+
+
+def fetch_supabase_user(access_token: str) -> tuple[dict | None, bool]:
+    if not access_token:
+        return None, False
+
+    if SUPABASE_URL and SUPABASE_SECRET_KEY:
+        auth_request = urllib.request.Request(
+            f"{SUPABASE_URL}/auth/v1/user",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "apikey": SUPABASE_SECRET_KEY,
+            },
+        )
+
+        try:
+            context = ssl.create_default_context(cafile=certifi.where())
+            with urllib.request.urlopen(auth_request, timeout=10, context=context) as response:
+                return json.loads(response.read().decode("utf-8")), True
+        except Exception:
+            pass
+
+    decoded_user = decode_supabase_access_token(access_token)
+    if decoded_user:
+        return decoded_user, False
+
+    return None, False
+
+
+def get_request_access_context(request: Request, access_token: str | None = None) -> dict:
     access = {
         "authenticated": False,
         "user_id": None,
@@ -250,15 +458,18 @@ def get_request_access_context(request: Request) -> dict:
         },
     }
 
-    access_token = get_bearer_token(request)
+    if not access_token:
+        access_token = get_bearer_token(request)
+    access_token = normalize_possible_access_token(access_token)
     access["debug"]["has_bearer_token"] = bool(access_token)
 
-    user = fetch_supabase_user(access_token)
+    user, verified_with_supabase = fetch_supabase_user(access_token)
 
     if not user:
         return access
 
-    access["debug"]["user_fetch_succeeded"] = True
+    access["debug"]["user_fetch_succeeded"] = bool(verified_with_supabase)
+    access["debug"]["user_token_decoded_fallback"] = bool(user and not verified_with_supabase)
     app_metadata = user.get("app_metadata") or {}
     role = str(app_metadata.get("role") or "user").lower()
     plan = str(app_metadata.get("plan") or ("admin" if role == "admin" else "free")).lower()
@@ -270,9 +481,10 @@ def get_request_access_context(request: Request) -> dict:
         "role": role,
         "plan": plan,
         "limits": get_plan_limits(plan),
+        "app_metadata": app_metadata,
     })
 
-    return access
+    return enrich_access_with_admin_metadata(access)
 
 
 def supabase_rest_request(method: str, path: str, payload: dict | list | None = None, query: str = "", prefer: str | None = None) -> dict | list:
@@ -372,6 +584,15 @@ def build_limit_result(title: str, summary: str, plan: str, limits: dict) -> dic
         "trust_score": 0,
         "trust_badge": build_trust_badge(0, "red"),
         "risk_points": 100,
+        "score_explanation": {
+            "high_risk_findings": 0,
+            "review_findings": 0,
+            "dependency_vulnerabilities": 0,
+            "behavior_categories": 0,
+            "intent_mismatches": 0,
+        },
+        "score_explanation_lines": ["Usage limits affected this result before a full scan could run."],
+        "scan_confidence": {"level": "Limited", "lines": ["Usage limits prevented a full scan from completing."]},
         "focused_code_blocks": [],
         "plan_applied": normalized_plan,
         "limits_applied": limits,
@@ -439,6 +660,155 @@ def build_trust_badge(trust_score: int, risk: str) -> dict:
     }
 
 
+def summarize_score_explanation(
+    flags: list[dict],
+    dependency_findings: list[dict] | None = None,
+    behavior_categories: list[str] | None = None,
+    intent_mismatches: list[str] | None = None,
+) -> dict:
+    dependency_findings = dependency_findings or []
+    behavior_categories = behavior_categories or []
+    intent_mismatches = intent_mismatches or []
+
+    high_risk_count = 0
+    review_count = 0
+
+    for flag in flags:
+        severity = float(flag.get("severity", 0) or 0)
+        if severity >= 18:
+            high_risk_count += 1
+        elif severity >= 8:
+            review_count += 1
+
+    return {
+        "high_risk_findings": int(high_risk_count),
+        "review_findings": int(review_count),
+        "dependency_vulnerabilities": int(len(dependency_findings)),
+        "behavior_categories": int(len(behavior_categories)),
+        "intent_mismatches": int(len(intent_mismatches)),
+    }
+
+
+def build_score_explanation_lines(
+    score_explanation: dict,
+    scope_label: str = "repo",
+) -> list[str]:
+    scope_word = "repo" if str(scope_label or "").lower() == "repo" else "code"
+
+    lines: list[str] = []
+    high_risk_findings = int(score_explanation.get("high_risk_findings", 0) or 0)
+    review_findings = int(score_explanation.get("review_findings", 0) or 0)
+    dependency_vulnerabilities = int(score_explanation.get("dependency_vulnerabilities", 0) or 0)
+    behavior_categories = int(score_explanation.get("behavior_categories", 0) or 0)
+    intent_mismatches = int(score_explanation.get("intent_mismatches", 0) or 0)
+
+    if high_risk_findings:
+        noun = "finding" if high_risk_findings == 1 else "findings"
+        lines.append(f"{high_risk_findings} high-risk {noun} influenced this {scope_word} score.")
+    if review_findings:
+        noun = "finding" if review_findings == 1 else "findings"
+        lines.append(f"{review_findings} moderate-risk {noun} also contributed to the score.")
+    if dependency_vulnerabilities:
+        noun = "dependency vulnerability" if dependency_vulnerabilities == 1 else "dependency vulnerabilities"
+        lines.append(f"{dependency_vulnerabilities} {noun} were detected.")
+    if behavior_categories:
+        noun = "behavior category" if behavior_categories == 1 else "behavior categories"
+        lines.append(f"{behavior_categories} {noun} were triggered during analysis.")
+    if intent_mismatches:
+        noun = "intent mismatch" if intent_mismatches == 1 else "intent mismatches"
+        lines.append(f"{intent_mismatches} {noun} affected the final result.")
+
+    if not lines:
+        lines.append(f"No major risk signals were detected in this {scope_word} scan.")
+
+    return lines
+
+
+def build_scan_confidence(
+    scope_label: str,
+    *,
+    files_scanned_count: int = 0,
+    files_total: int = 0,
+    code_line_count: int = 0,
+    line_limit_applied: int | None = None,
+    dependency_summary: dict | None = None,
+    scan_error: str | None = None,
+    was_limited: bool = False,
+) -> dict:
+    dependency_summary = dependency_summary or {}
+    normalized_scope = str(scope_label or "repo").lower()
+
+    level = "High"
+    lines: list[str] = []
+
+    if normalized_scope == "repo":
+        files_scanned_count = int(files_scanned_count or 0)
+        files_total = int(files_total or files_scanned_count or 0)
+        dependencies_queried = int(dependency_summary.get("dependencies_queried", 0) or 0)
+        dependencies_skipped_count = int(dependency_summary.get("dependencies_skipped_count", 0) or 0)
+
+        if files_total and files_scanned_count and files_total != files_scanned_count:
+            lines.append(f"{files_scanned_count} of {files_total} files were analyzed.")
+        else:
+            noun = "file" if files_scanned_count == 1 else "files"
+            lines.append(f"{files_scanned_count} {noun} were analyzed.")
+
+        if scan_error or dependency_summary.get("scan_error"):
+            lines.append("Dependency scan was only partially completed.")
+        elif dependencies_queried > 0:
+            lines.append("Dependency scan completed.")
+        else:
+            lines.append("No dependency manifests with resolvable versions were analyzed.")
+
+        if dependencies_skipped_count > 0:
+            noun = "entry was" if dependencies_skipped_count == 1 else "entries were"
+            lines.append(f"{dependencies_skipped_count} dependency {noun} skipped.")
+
+        if was_limited or files_scanned_count == 0:
+            level = "Limited"
+        elif files_total > files_scanned_count:
+            level = "Medium"
+            lines.append("Only part of the repo could be analyzed.")
+        elif scan_error:
+            level = "Medium"
+        elif files_scanned_count >= 50 and dependencies_skipped_count == 0:
+            level = "High"
+            lines.append("Coverage was broad enough for a high-confidence repo result.")
+        elif files_scanned_count >= 15:
+            level = "Medium"
+            lines.append("Coverage was partial, so confidence is moderate.")
+        else:
+            level = "Limited"
+            lines.append("Only a smaller portion of the repo was analyzed.")
+    else:
+        code_line_count = int(code_line_count or 0)
+        noun = "line" if code_line_count == 1 else "lines"
+        lines.append(f"{code_line_count} {noun} of code were analyzed.")
+
+        if line_limit_applied is not None and code_line_count >= int(line_limit_applied):
+            lines.append(f"This scan used the current line limit of {line_limit_applied} lines.")
+
+        if was_limited or code_line_count == 0:
+            level = "Limited"
+        elif line_limit_applied is not None and code_line_count >= int(line_limit_applied):
+            level = "Medium"
+            lines.append("The scan likely covered only part of the full file.")
+        elif code_line_count >= 50:
+            level = "High"
+            lines.append("The scan covered enough code for a high-confidence result.")
+        elif code_line_count >= 15:
+            level = "Medium"
+            lines.append("The scan covered a moderate amount of code.")
+        else:
+            level = "Limited"
+            lines.append("The scan covered only a small amount of code.")
+
+    return {
+        "level": level,
+        "lines": lines,
+    }
+
+
 def risk_from_points(points: float) -> str:
     if points >= 35:
         return "red"
@@ -498,44 +868,37 @@ def parse_github_repo(repo_url: str) -> tuple[str, str]:
     repo = parts[1].replace(".git", "")
     return owner, repo
 
-def generate_readme_badge(repo_name, score, risk):
-    if score >= 90:
-        color = "brightgreen"
-    elif score >= 75:
-        color = "green"
-    elif score >= 60:
-        color = "yellow"
-    elif score >= 40:
-        color = "orange"
-    else:
-        color = "red"
-
-    badge_image = f"https://img.shields.io/badge/AI%20Code%20Audit-{score}%2F100-{color}"
-
-    repo_link = f"https://ai-code-audit.com/report/{repo_name}"
-
-    markdown = f"[![AI Code Audit]({badge_image})]({repo_link})"
-
-    html = f"<a href='{repo_link}'><img src='{badge_image}'/></a>"
-
-    return {
-        "badge_image_url": badge_image,
-        "badge_markdown": markdown,
-        "badge_html": html
-    }
 
 def download_repo_zip(owner: str, repo: str) -> bytes:
-    urls = [
-        f"https://codeload.github.com/{owner}/{repo}/zip/refs/heads/main",
-        f"https://codeload.github.com/{owner}/{repo}/zip/refs/heads/master",
-    ]
-
     ssl_context = ssl.create_default_context(cafile=certifi.where())
-    last_error = None
+    candidate_branches: list[str] = []
 
-    for url in urls:
+    try:
+        metadata_request = urllib.request.Request(
+            f"https://api.github.com/repos/{owner}/{repo}",
+            headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "AI-Code-Audit/1.0",
+            },
+        )
+        with urllib.request.urlopen(metadata_request, timeout=15, context=ssl_context) as response:
+            metadata = json.loads(response.read().decode("utf-8", errors="ignore"))
+            default_branch = str(metadata.get("default_branch") or "").strip()
+            if default_branch:
+                candidate_branches.append(default_branch)
+    except Exception:
+        pass
+
+    for fallback in ("main", "master"):
+        if fallback not in candidate_branches:
+            candidate_branches.append(fallback)
+
+    last_error = None
+    for branch in candidate_branches:
+        url = f"https://codeload.github.com/{owner}/{repo}/zip/refs/heads/{quote(branch, safe='')}"
         try:
-            with urllib.request.urlopen(url, context=ssl_context) as response:
+            zip_request = urllib.request.Request(url, headers={"User-Agent": "AI-Code-Audit/1.0"})
+            with urllib.request.urlopen(zip_request, timeout=30, context=ssl_context) as response:
                 return response.read()
         except Exception as exc:
             last_error = exc
@@ -664,6 +1027,22 @@ def build_finding_guidance(pattern: str) -> dict:
             "what_to_check": "Determine whether the secret is real, still active, already committed publicly, or duplicated elsewhere in the project history.",
             "when_legitimate": "Real secrets generally should not live in source files. The main exception is clearly fake demo data used for examples or tests.",
             "suggested_fix": "Rotate the secret if it may be real, remove it from source code, and load credentials from environment variables or a dedicated secrets manager.",
+        }
+
+    if pattern == "environment_secret_access":
+        return {
+            "why_risky": "Environment variables commonly contain live credentials. Reading one is sensitive even when the secret is not hard-coded.",
+            "what_to_check": "Trace every use of the resulting variable and confirm it is only sent to the intended trusted service.",
+            "when_legitimate": "Applications routinely read credentials from environment variables to authenticate with an expected provider.",
+            "suggested_fix": "Keep the credential server-side, use the narrowest required scope, and never log or forward it to an unrelated destination.",
+        }
+
+    if pattern == "secret_exfiltration_chain":
+        return {
+            "why_risky": "A credential-derived value appears in an outbound request and could leave the trusted environment.",
+            "what_to_check": "Verify the destination, request body, headers, redirects, and whether the credential is required by the stated task.",
+            "when_legitimate": "This can be legitimate only when the credential is intentionally sent to its own trusted authentication service.",
+            "suggested_fix": "Remove the credential from the outbound payload. If authentication is required, send it only to the approved provider using the expected authorization mechanism.",
         }
 
     return {
@@ -834,6 +1213,75 @@ def build_taint_map(scannable_lines: list[tuple[int, str]]) -> dict[str, str]:
                 break
 
     return tainted
+
+
+def find_environment_secret_sources(
+    scannable_lines: list[tuple[int, str]],
+) -> tuple[dict[str, int], list[dict]]:
+    secret_variables: dict[str, int] = {}
+    secret_flags: list[dict] = []
+
+    for line_number, line in scannable_lines:
+        for pattern in ENV_SECRET_ASSIGNMENT_PATTERNS:
+            match = pattern.search(line)
+            if not match:
+                continue
+
+            variable_name = match.group(1)
+            env_name = next((group for group in match.groups()[1:] if group), "")
+            if not SENSITIVE_ENV_NAME_PATTERN.search(env_name):
+                continue
+
+            secret_variables[variable_name] = line_number
+            secret_flags.append(make_flag(
+                line=line_number,
+                flag_type="secret_source",
+                pattern="environment_secret_access",
+                message=f"Sensitive environment credential accessed: {env_name}",
+                severity=25,
+                explanation=(
+                    "The code reads a credential from the environment. That can be legitimate, "
+                    "but it becomes high risk when the value is transmitted, logged, written, or executed."
+                ),
+            ))
+            break
+
+    return secret_variables, secret_flags
+
+
+def add_secret_flow_heuristics(
+    scannable_lines: list[tuple[int, str]],
+    secret_variables: dict[str, int],
+) -> list[dict]:
+    if not secret_variables:
+        return []
+
+    network_sink = re.compile(
+        r"requests\.(?:post|put|patch|request)\s*\(|(?<![\w.])fetch\s*\(|"
+        r"axios\.(?:post|put|patch|request)\s*\(|urllib\.request\.(?:urlopen|Request)\s*\(",
+        re.IGNORECASE,
+    )
+    findings: list[dict] = []
+
+    for line_number, line in scannable_lines:
+        if not network_sink.search(line):
+            continue
+        exposed = [name for name in secret_variables if re.search(rf"\b{re.escape(name)}\b", line)]
+        if not exposed:
+            continue
+        findings.append(make_flag(
+            line=line_number,
+            flag_type="secret_exfiltration",
+            pattern="secret_exfiltration_chain",
+            message="Sensitive credential may be sent to an external service",
+            severity=25,
+            explanation=(
+                f"This network request includes environment-derived credential data ({', '.join(exposed)}). "
+                "That behavior is high risk unless the destination and transmission are explicitly expected."
+            ),
+        ))
+
+    return findings
 
 
 def get_call_arguments(line: str, display_key: str) -> str:
@@ -1386,6 +1834,14 @@ def has_meaningful_intent(intent: str) -> bool:
     if len(normalized) < 12:
         return False
     return True
+
+
+def intent_mentions_any(intent_lower: str, terms: list[str]) -> bool:
+    """Match whole intent terms so words like 'report' do not count as 'repo'."""
+    return any(
+        re.search(rf"(?<![a-z0-9_]){re.escape(term.lower())}(?![a-z0-9_])", intent_lower)
+        for term in terms
+    )
 
 
 def normalize_manifest_version(raw_version: str) -> tuple[str | None, str]:
@@ -1960,6 +2416,13 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
             "trust_score": 0,
             "trust_badge": build_trust_badge(0, "red"),
             "risk_points": 100,
+            "scan_confidence": {
+                "label": "Limited",
+                "lines": [
+                    f"Only the first {line_limit} lines can be analyzed on this plan.",
+                    "Upgrade to scan larger code files without truncation.",
+                ],
+            },
             "focused_code_blocks": [],
             "plan_applied": plan_name,
             "line_limit_applied": line_limit,
@@ -1967,6 +2430,7 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
 
     scannable_lines = extract_scannable_lines(code)
     tainted_vars = build_taint_map(scannable_lines)
+    secret_variables, secret_source_flags = find_environment_secret_sources(scannable_lines)
 
     regex_flags: list[dict] = []
     ast_flags: list[dict] = []
@@ -2032,7 +2496,21 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
     except Exception:
         heuristic_flags = []
 
-    flags = dedupe_flags(regex_flags + ast_flags + heuristic_flags)
+    try:
+        secret_flow_flags = add_secret_flow_heuristics(scannable_lines, secret_variables)
+    except Exception:
+        secret_flow_flags = []
+
+    flags = dedupe_flags(regex_flags + ast_flags + heuristic_flags + secret_source_flags + secret_flow_flags)
+    secret_access_expected = intent_mentions_any(
+        intent_lower,
+        ["credential", "credentials", "secret", "api key", "token", "password", "authenticate", "authentication", "authorization"],
+    )
+    if secret_access_expected:
+        for flag in flags:
+            if flag.get("pattern") == "environment_secret_access":
+                flag["severity"] = 5.0
+                flag["explanation"] += " The stated intent appears to expect credential access, so this finding was reduced."
     risk_points = round(sum(float(flag["severity"]) for flag in flags), 2)
 
     cleaned_code = "\n".join(line for _, line in scannable_lines)
@@ -2074,7 +2552,7 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
     ):
         touches.append("obfuscation")
 
-    if any(flag["type"] == "secret" for flag in flags):
+    if any(flag["type"] in {"secret", "secret_source", "secret_exfiltration"} for flag in flags):
         touches.append("secrets")
 
     touches = list(dict.fromkeys(touches))
@@ -2082,37 +2560,40 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
     mismatch_flags = []
     meaningful_intent = has_meaningful_intent(intent)
 
-    if meaningful_intent and "network" in touches and not any(
-        word in intent_lower for word in ["api", "fetch", "request", "http", "network", "online", "web", "repo", "github", "download"]
+    if meaningful_intent and "network" in touches and not intent_mentions_any(
+        intent_lower, ["api", "fetch", "request", "http", "network", "online", "web", "repo", "github", "download"]
     ):
         mismatch_flags.append("Code uses network behavior not clearly mentioned in the intent.")
-        risk_points += 1.0
+        risk_points += 3.0
 
-    if meaningful_intent and "files" in touches and not any(
-        word in intent_lower for word in ["file", "save", "write", "export", "download", "upload", "repo", "github", "read"]
+    if meaningful_intent and "files" in touches and not intent_mentions_any(
+        intent_lower, ["file", "save", "write", "export", "download", "upload", "repo", "github", "read"]
     ):
         mismatch_flags.append("Code reads or writes files not clearly mentioned in the intent.")
         risk_points += 1.0
 
-    if meaningful_intent and "system execution" in touches and not any(
-        word in intent_lower for word in ["terminal", "shell", "command", "system", "script", "execute", "cli"]
+    if meaningful_intent and "system execution" in touches and not intent_mentions_any(
+        intent_lower, ["terminal", "shell", "command", "system", "script", "execute", "cli"]
     ):
         mismatch_flags.append("Code runs system-level commands not clearly mentioned in the intent.")
         risk_points += 2.5
 
-    if meaningful_intent and "dynamic imports" in touches and not any(
-        word in intent_lower for word in ["plugin", "module", "import", "extension", "dynamic"]
+    if meaningful_intent and "dynamic imports" in touches and not intent_mentions_any(
+        intent_lower, ["plugin", "module", "import", "extension", "dynamic"]
     ):
         mismatch_flags.append("Code dynamically loads modules in a way that is not clearly mentioned in the intent.")
         risk_points += 2.0
 
-    if meaningful_intent and "deserialization" in touches and not any(
-        word in intent_lower for word in ["pickle", "yaml", "deserialize", "serialization", "load saved model", "cache"]
+    if meaningful_intent and "deserialization" in touches and not intent_mentions_any(
+        intent_lower, ["pickle", "yaml", "deserialize", "serialization", "load saved model", "cache"]
     ):
         mismatch_flags.append("Code deserializes data in a way that is not clearly mentioned in the intent.")
         risk_points += 2.0
 
-    if "secrets" in touches:
+    has_literal_or_exfiltrated_secret = any(
+        flag.get("type") in {"secret", "secret_exfiltration"} for flag in flags
+    )
+    if "secrets" in touches and (has_literal_or_exfiltrated_secret or not secret_access_expected):
         mismatch_flags.append("Code appears to contain secrets or credentials, which may be unsafe.")
         risk_points += 8
 
@@ -2172,6 +2653,567 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
     }
 
 
+def get_app_base_url(request: Request | None = None) -> str:
+    configured = str(APP_BASE_URL or "").strip().rstrip("/")
+    if configured:
+        return configured
+    if request is None:
+        return "http://127.0.0.1:8000"
+    return str(request.base_url).rstrip("/")
+
+
+def stripe_is_configured() -> bool:
+    return bool(STRIPE_SECRET_KEY and STRIPE_PRICE_ID)
+
+
+def supabase_auth_admin_request(method: str, path: str, payload: dict | None = None) -> dict:
+    if not SUPABASE_URL or not SUPABASE_SECRET_KEY:
+        return {}
+
+    url = f"{SUPABASE_URL}/auth/v1/admin/{path.lstrip('/')}"
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    headers = {
+        "Authorization": f"Bearer {SUPABASE_SECRET_KEY}",
+        "apikey": SUPABASE_SECRET_KEY,
+        "Content-Type": "application/json",
+    }
+    req = urllib.request.Request(url, data=data, headers=headers, method=method.upper())
+    context = ssl.create_default_context(cafile=certifi.where())
+
+    try:
+        with urllib.request.urlopen(req, timeout=20, context=context) as response:
+            raw = response.read().decode("utf-8", errors="ignore")
+            return json.loads(raw) if raw.strip() else {}
+    except Exception as exc:
+        log_server_issue(f"Supabase admin request failed ({method.upper()} {path})", exc)
+        return {}
+
+
+def get_supabase_admin_user(user_id: str) -> dict | None:
+    if not user_id:
+        return None
+    response = supabase_auth_admin_request("GET", f"users/{user_id}")
+    if isinstance(response, dict) and response.get("id"):
+        return response
+    user = response.get("user") if isinstance(response, dict) else None
+    return user if isinstance(user, dict) and user.get("id") else None
+
+
+def update_supabase_user_app_metadata(user_id: str, metadata_updates: dict) -> bool:
+    if not user_id:
+        return False
+
+    current_user = get_supabase_admin_user(user_id)
+    if not current_user:
+        return False
+
+    existing_app_metadata = current_user.get("app_metadata") or {}
+    merged_app_metadata = dict(existing_app_metadata)
+    merged_app_metadata.update(metadata_updates)
+
+    payload = {
+        "app_metadata": merged_app_metadata,
+        "user_metadata": current_user.get("user_metadata") or {},
+    }
+    updated = supabase_auth_admin_request("PUT", f"users/{user_id}", payload=payload)
+    if isinstance(updated, dict) and (updated.get("id") == user_id or (updated.get("user") or {}).get("id") == user_id):
+        return True
+    log_server_issue(f"Failed to update Supabase app metadata for user {user_id}")
+    return False
+
+
+def unix_to_iso8601(unix_ts) -> str | None:
+    try:
+        if unix_ts in (None, "", 0, "0"):
+            return None
+        return datetime.fromtimestamp(int(unix_ts), tz=timezone.utc).isoformat()
+    except Exception:
+        return None
+
+
+def should_keep_pro_access(
+    status: str,
+    *,
+    cancel_at_period_end: bool = False,
+    current_period_end = None,
+) -> bool:
+    normalized = str(status or "").lower().strip()
+
+    if normalized in {"active", "trialing", "past_due"}:
+        return True
+
+    if cancel_at_period_end and current_period_end not in (None, "", 0, "0"):
+        try:
+            return int(current_period_end) > int(time.time())
+        except Exception:
+            return False
+
+    return False
+
+
+def plan_from_subscription_status(
+    status: str,
+    *,
+    cancel_at_period_end: bool = False,
+    current_period_end = None,
+) -> str:
+    if should_keep_pro_access(
+        status,
+        cancel_at_period_end=cancel_at_period_end,
+        current_period_end=current_period_end,
+    ):
+        return "pro"
+    return "free"
+
+
+def get_supabase_admin_user_by_metadata_field(field_name: str, field_value: str) -> dict | None:
+    if not field_name or not field_value:
+        return None
+
+    response = supabase_auth_admin_request("GET", "users")
+    users = []
+    if isinstance(response, dict):
+        if isinstance(response.get("users"), list):
+            users = response.get("users") or []
+        elif isinstance(response.get("data"), list):
+            users = response.get("data") or []
+    elif isinstance(response, list):
+        users = response
+
+    lookup_value = str(field_value)
+    for user in users:
+        if not isinstance(user, dict):
+            continue
+        app_metadata = user.get("app_metadata") or {}
+        if str(app_metadata.get(field_name) or "") == lookup_value and user.get("id"):
+            return user
+    return None
+
+
+def resolve_supabase_user_id_for_stripe_event(
+    *,
+    explicit_user_id: str | None = None,
+    stripe_customer_id: str | None = None,
+    stripe_subscription_id: str | None = None,
+) -> str | None:
+    if explicit_user_id:
+        return str(explicit_user_id)
+
+    if stripe_subscription_id:
+        user = get_supabase_admin_user_by_metadata_field("stripe_subscription_id", str(stripe_subscription_id))
+        if user and user.get("id"):
+            return str(user["id"])
+
+    if stripe_customer_id:
+        user = get_supabase_admin_user_by_metadata_field("stripe_customer_id", str(stripe_customer_id))
+        if user and user.get("id"):
+            return str(user["id"])
+
+    return None
+
+
+def sync_user_plan_from_subscription(
+    user_id: str,
+    *,
+    plan: str,
+    stripe_customer_id: str | None = None,
+    stripe_subscription_id: str | None = None,
+    subscription_status: str | None = None,
+    cancel_at_period_end: bool | None = None,
+    current_period_end = None,
+) -> bool:
+    metadata_updates = {"plan": str(plan or "free").lower()}
+    if stripe_customer_id is not None:
+        metadata_updates["stripe_customer_id"] = stripe_customer_id
+    if stripe_subscription_id is not None:
+        metadata_updates["stripe_subscription_id"] = stripe_subscription_id
+    if subscription_status is not None:
+        metadata_updates["stripe_subscription_status"] = subscription_status
+    if cancel_at_period_end is not None:
+        metadata_updates["stripe_cancel_at_period_end"] = bool(cancel_at_period_end)
+    if current_period_end is not None:
+        metadata_updates["stripe_current_period_end"] = int(current_period_end) if str(current_period_end).strip() else None
+        metadata_updates["stripe_current_period_end_iso"] = unix_to_iso8601(current_period_end)
+    return update_supabase_user_app_metadata(user_id, metadata_updates)
+
+
+def build_authenticated_access_payload_for_user(user_id: str, request: Request | None = None) -> dict | None:
+    current_user = get_supabase_admin_user(str(user_id))
+    if not current_user:
+        return None
+
+    app_metadata = current_user.get("app_metadata") or {}
+    role = str(app_metadata.get("role") or "user").lower()
+    plan = str(app_metadata.get("plan") or ("admin" if role == "admin" else "free")).lower()
+    effective_plan = "admin" if role == "admin" else plan
+
+    access = {
+        "authenticated": True,
+        "user_id": str(current_user.get("id") or user_id),
+        "email": current_user.get("email"),
+        "role": role,
+        "plan": effective_plan,
+        "limits": get_plan_limits(effective_plan),
+        "app_metadata": app_metadata,
+        "debug": {
+            "has_supabase_url": bool(SUPABASE_URL),
+            "has_supabase_secret_key": bool(SUPABASE_SECRET_KEY),
+            "has_bearer_token": bool(request is not None),
+            "user_fetch_succeeded": True,
+            "resolved_via": "supabase_admin",
+        },
+    }
+    return build_access_payload(access)
+
+
+@app.get("/auth/access")
+async def auth_access(request: Request):
+    access_token = await extract_request_access_token(request)
+    access = get_request_access_context(request, access_token=access_token)
+    access = enrich_access_with_admin_metadata(access)
+    return JSONResponse(build_access_payload(access), headers={"Cache-Control": "no-store"})
+
+
+@app.post("/stripe/create-billing-portal-session")
+async def create_billing_portal_session(request: Request):
+    access_token = await extract_request_access_token(request)
+    access = get_request_access_context(request, access_token=access_token)
+    access = enrich_access_with_admin_metadata(access)
+
+    if not access.get("authenticated") or not access.get("user_id"):
+        raise HTTPException(status_code=401, detail="Log in before managing your subscription.")
+
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=503, detail="Stripe billing is not configured on the server yet.")
+
+    current_user = get_supabase_admin_user(str(access["user_id"])) or {}
+    app_metadata = current_user.get("app_metadata") or {}
+    stripe_customer_id = str(app_metadata.get("stripe_customer_id") or "").strip() or None
+    stripe_subscription_id = str(app_metadata.get("stripe_subscription_id") or "").strip() or None
+
+    if not stripe_customer_id and stripe_subscription_id:
+        try:
+            subscription = stripe.Subscription.retrieve(stripe_subscription_id)
+            stripe_customer_id = str(subscription.get("customer") or "").strip() or None
+        except Exception as exc:
+            log_server_issue("Failed to resolve Stripe customer from subscription for billing portal", exc)
+
+    if not stripe_customer_id:
+        raise HTTPException(status_code=400, detail="No active Stripe customer record was found for this account yet.")
+
+    try:
+        session = stripe.billing_portal.Session.create(
+            customer=stripe_customer_id,
+            return_url=f"{get_app_base_url(request)}/",
+        )
+    except Exception as exc:
+        log_server_issue("Could not start Stripe billing portal", exc)
+        raise HTTPException(status_code=500, detail="Could not open billing management right now.") from exc
+
+    return {"url": session.url}
+
+
+@app.post("/stripe/create-checkout-session")
+async def create_stripe_checkout_session(request: Request):
+    access_token = await extract_request_access_token(request)
+    access = get_request_access_context(request, access_token=access_token)
+    access = enrich_access_with_admin_metadata(access)
+
+    if not access.get("authenticated") or not access.get("user_id") or not access.get("email"):
+        raise HTTPException(status_code=401, detail="Log in before upgrading to Pro. Your session may need to be refreshed.")
+
+    current_plan = str(access.get("plan") or "free").lower()
+    current_role = str(access.get("role") or "user").lower()
+    if current_role == "admin":
+        raise HTTPException(status_code=400, detail="Admin accounts already have elevated access.")
+    if current_plan == "pro":
+        raise HTTPException(status_code=400, detail="Your account is already on Pro.")
+
+    if not stripe_is_configured():
+        raise HTTPException(status_code=503, detail="Stripe is not fully configured on the server yet.")
+
+    current_user = get_supabase_admin_user(str(access["user_id"])) or {}
+    existing_app_metadata = current_user.get("app_metadata") or {}
+    existing_customer_id = str(existing_app_metadata.get("stripe_customer_id") or "").strip() or None
+
+    checkout_kwargs = {
+        "mode": "subscription",
+        "line_items": [{"price": STRIPE_PRICE_ID, "quantity": 1}],
+        "success_url": f"{get_app_base_url(request)}/?checkout=success&session_id={{CHECKOUT_SESSION_ID}}",
+        "cancel_url": f"{get_app_base_url(request)}/?checkout=cancel",
+        "client_reference_id": str(access["user_id"]),
+        "metadata": {
+            "user_id": str(access["user_id"]),
+            "user_email": str(access["email"]),
+        },
+        "subscription_data": {
+            "metadata": {
+                "user_id": str(access["user_id"]),
+                "user_email": str(access["email"]),
+            }
+        },
+        "allow_promotion_codes": False,
+    }
+
+    if existing_customer_id:
+        checkout_kwargs["customer"] = existing_customer_id
+    else:
+        checkout_kwargs["customer_email"] = str(access["email"])
+
+    try:
+        session = stripe.checkout.Session.create(**checkout_kwargs)
+    except Exception as exc:
+        log_server_issue("Could not start Stripe checkout", exc)
+        raise HTTPException(status_code=500, detail="Could not start Stripe checkout.") from exc
+
+    return {
+        "url": session.url,
+        "session_id": session.id,
+    }
+
+
+@app.get("/stripe/checkout-session-status")
+async def stripe_checkout_session_status(request: Request, session_id: str):
+    if not stripe_is_configured():
+        raise HTTPException(status_code=503, detail="Stripe is not fully configured on the server yet.")
+
+    if not session_id or not str(session_id).strip():
+        raise HTTPException(status_code=400, detail="A checkout session ID is required.")
+
+    access_token = await extract_request_access_token(request)
+    access = get_request_access_context(request, access_token=access_token)
+    access = enrich_access_with_admin_metadata(access)
+
+    if not access.get("authenticated") or not access.get("user_id"):
+        raise HTTPException(status_code=401, detail="Log in before verifying checkout status.")
+
+    try:
+        session = stripe.checkout.Session.retrieve(str(session_id).strip())
+    except Exception as exc:
+        log_server_issue("Could not retrieve Stripe checkout session status", exc)
+        raise HTTPException(status_code=500, detail="Could not verify checkout status right now.") from exc
+
+    session_status = str(session.get("status") or "").lower()
+    payment_status = str(session.get("payment_status") or "").lower()
+    subscription_id = session.get("subscription")
+    customer_id = session.get("customer")
+    metadata = session.get("metadata") or {}
+
+    user_id = resolve_supabase_user_id_for_stripe_event(
+        explicit_user_id=metadata.get("user_id") or session.get("client_reference_id"),
+        stripe_customer_id=str(customer_id) if customer_id else None,
+        stripe_subscription_id=str(subscription_id) if subscription_id else None,
+    )
+
+    if not user_id or str(user_id) != str(access.get("user_id")):
+        raise HTTPException(status_code=403, detail="This checkout session does not belong to the current account.")
+
+    synced = False
+    plan = str(access.get("plan") or "free").lower()
+    subscription_status = None
+    cancel_at_period_end = False
+    current_period_end = None
+    checkout_completed = session_status == "complete"
+    payment_completed = payment_status in {"paid", "no_payment_required"}
+
+    if subscription_id and checkout_completed and payment_completed:
+        provisional_plan = "pro"
+        subscription_status = "checkout_completed"
+        try:
+            subscription = stripe.Subscription.retrieve(subscription_id)
+            subscription_status = str(subscription.get("status") or "active")
+            cancel_at_period_end = bool(subscription.get("cancel_at_period_end") or False)
+            current_period_end = subscription.get("current_period_end")
+            plan = plan_from_subscription_status(
+                subscription_status,
+                cancel_at_period_end=cancel_at_period_end,
+                current_period_end=current_period_end,
+            )
+            if plan != "pro":
+                plan = provisional_plan
+        except Exception as exc:
+            log_server_issue("Could not retrieve subscription during checkout verification; applying provisional Pro access", exc)
+            plan = provisional_plan
+
+        synced = sync_user_plan_from_subscription(
+            user_id,
+            plan=plan,
+            stripe_customer_id=str(customer_id) if customer_id else None,
+            stripe_subscription_id=str(subscription_id) if subscription_id else None,
+            subscription_status=subscription_status,
+            cancel_at_period_end=cancel_at_period_end,
+            current_period_end=current_period_end,
+        )
+    elif subscription_id:
+        try:
+            subscription = stripe.Subscription.retrieve(subscription_id)
+            subscription_status = str(subscription.get("status") or "")
+            cancel_at_period_end = bool(subscription.get("cancel_at_period_end") or False)
+            current_period_end = subscription.get("current_period_end")
+            plan = plan_from_subscription_status(
+                subscription_status,
+                cancel_at_period_end=cancel_at_period_end,
+                current_period_end=current_period_end,
+            )
+        except Exception as exc:
+            log_server_issue("Could not retrieve subscription while reporting checkout status", exc)
+
+    refreshed_access = build_authenticated_access_payload_for_user(str(user_id), request=request)
+    response_payload = {
+        "session_id": str(session.get("id") or session_id),
+        "session_status": session_status,
+        "payment_status": payment_status,
+        "subscription_id": str(subscription_id) if subscription_id else None,
+        "customer_id": str(customer_id) if customer_id else None,
+        "user_id": str(user_id),
+        "synced": bool(synced),
+        "plan": (refreshed_access or {}).get("plan") or plan,
+        "subscription_status": subscription_status,
+        "cancel_at_period_end": cancel_at_period_end,
+        "current_period_end": current_period_end,
+        "access": refreshed_access,
+    }
+    return JSONResponse(response_payload, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/stripe/webhook")
+async def stripe_webhook(request: Request):
+    if not STRIPE_SECRET_KEY or not STRIPE_WEBHOOK_SECRET:
+        return JSONResponse({"received": False, "error": "Stripe webhook is not configured yet."}, status_code=503)
+
+    payload = await request.body()
+    signature = request.headers.get("stripe-signature", "")
+
+    try:
+        event = stripe.Webhook.construct_event(payload=payload, sig_header=signature, secret=STRIPE_WEBHOOK_SECRET)
+    except stripe.error.SignatureVerificationError:
+        return JSONResponse({"received": False, "error": "Invalid webhook signature."}, status_code=400)
+    except Exception:
+        return JSONResponse({"received": False, "error": "Invalid webhook payload."}, status_code=400)
+
+    event_type = str(event.get("type") or "")
+    event_object = (event.get("data") or {}).get("object") or {}
+
+    if event_type == "checkout.session.completed":
+        metadata = event_object.get("metadata") or {}
+        subscription_id = event_object.get("subscription")
+        customer_id = event_object.get("customer")
+        user_id = resolve_supabase_user_id_for_stripe_event(
+            explicit_user_id=metadata.get("user_id") or event_object.get("client_reference_id"),
+            stripe_customer_id=str(customer_id) if customer_id else None,
+            stripe_subscription_id=str(subscription_id) if subscription_id else None,
+        )
+        if user_id:
+            subscription_status = "active"
+            cancel_at_period_end = False
+            current_period_end = None
+            try:
+                if subscription_id:
+                    subscription = stripe.Subscription.retrieve(subscription_id)
+                    subscription_status = str(subscription.get("status") or "active")
+                    cancel_at_period_end = bool(subscription.get("cancel_at_period_end") or False)
+                    current_period_end = subscription.get("current_period_end")
+            except Exception as exc:
+                log_server_issue("Failed to retrieve subscription after checkout.session.completed", exc)
+
+            sync_user_plan_from_subscription(
+                user_id,
+                plan=plan_from_subscription_status(
+                    subscription_status,
+                    cancel_at_period_end=cancel_at_period_end,
+                    current_period_end=current_period_end,
+                ),
+                stripe_customer_id=str(customer_id) if customer_id else None,
+                stripe_subscription_id=str(subscription_id) if subscription_id else None,
+                subscription_status=subscription_status,
+                cancel_at_period_end=cancel_at_period_end,
+                current_period_end=current_period_end,
+            )
+
+    elif event_type in {"customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted"}:
+        metadata = event_object.get("metadata") or {}
+        customer_id = str(event_object.get("customer") or "") or None
+        subscription_id = str(event_object.get("id") or "") or None
+        user_id = resolve_supabase_user_id_for_stripe_event(
+            explicit_user_id=metadata.get("user_id"),
+            stripe_customer_id=customer_id,
+            stripe_subscription_id=subscription_id,
+        )
+        if user_id:
+            status = str(event_object.get("status") or "")
+            cancel_at_period_end = bool(event_object.get("cancel_at_period_end") or False)
+            current_period_end = event_object.get("current_period_end")
+            sync_user_plan_from_subscription(
+                user_id,
+                plan=plan_from_subscription_status(
+                    status,
+                    cancel_at_period_end=cancel_at_period_end,
+                    current_period_end=current_period_end,
+                ),
+                stripe_customer_id=customer_id,
+                stripe_subscription_id=subscription_id,
+                subscription_status=status,
+                cancel_at_period_end=cancel_at_period_end,
+                current_period_end=current_period_end,
+            )
+
+    elif event_type in {"invoice.payment_failed", "invoice.paid"}:
+        customer_id = str(event_object.get("customer") or "") or None
+        subscription_id = str(event_object.get("subscription") or "") or None
+        user_id = resolve_supabase_user_id_for_stripe_event(
+            stripe_customer_id=customer_id,
+            stripe_subscription_id=subscription_id,
+        )
+        if user_id and subscription_id:
+            try:
+                subscription = stripe.Subscription.retrieve(subscription_id)
+                status = str(subscription.get("status") or "")
+                cancel_at_period_end = bool(subscription.get("cancel_at_period_end") or False)
+                current_period_end = subscription.get("current_period_end")
+                sync_user_plan_from_subscription(
+                    user_id,
+                    plan=plan_from_subscription_status(
+                        status,
+                        cancel_at_period_end=cancel_at_period_end,
+                        current_period_end=current_period_end,
+                    ),
+                    stripe_customer_id=customer_id,
+                    stripe_subscription_id=subscription_id,
+                    subscription_status=status,
+                    cancel_at_period_end=cancel_at_period_end,
+                    current_period_end=current_period_end,
+                )
+            except Exception as exc:
+                log_server_issue("Failed to sync invoice event subscription state", exc)
+
+    return {"received": True}
+
+
+@app.get("/stripe/status")
+def stripe_status():
+    return {
+        "configured": stripe_is_configured(),
+        "has_publishable_key": bool(STRIPE_PUBLISHABLE_KEY),
+        "has_price_id": bool(STRIPE_PRICE_ID),
+        "has_webhook_secret": bool(STRIPE_WEBHOOK_SECRET),
+    }
+
+
+@app.get("/favicon.ico")
+def favicon_ico():
+    return FileResponse("static/favicon.png")
+
+
+@app.get("/apple-touch-icon.png")
+def apple_touch_icon():
+    return FileResponse("static/favicon.png")
+
+
+@app.get("/apple-touch-icon-precomposed.png")
+def apple_touch_icon_precomposed():
+    return FileResponse("static/favicon.png")
+
+
 @app.get("/")
 def home():
     return FileResponse("static/index.html")
@@ -2185,23 +3227,21 @@ def health():
 @app.post("/scan")
 def scan(req: ScanRequest, request: Request):
     access = get_request_access_context(request)
-    limit_result = check_and_record_daily_limit(request, access)
-    if limit_result:
-        limit_result["access"] = access
-        return limit_result
+    access = enrich_access_with_admin_metadata(access)
+
+    is_example_scan = bool(req.is_example)
 
     result = analyze_code(req.intent, req.code, plan=access["plan"])
     result["access"] = access
+    result["is_example"] = is_example_scan
     return result
+
 
 
 @app.post("/scan-repo")
 def scan_repo(req: RepoScanRequest, request: Request):
     access = get_request_access_context(request)
-    limit_result = check_and_record_daily_limit(request, access)
-    if limit_result:
-        limit_result["access"] = access
-        return limit_result
+    access = enrich_access_with_admin_metadata(access)
 
     try:
         owner, repo = parse_github_repo(req.repo_url)
@@ -2231,57 +3271,25 @@ def scan_repo(req: RepoScanRequest, request: Request):
             "unique_vulnerability_ids": 0,
         })
 
-        code_files = [
+        all_code_files = [
             name for name in zf.namelist()
             if not name.endswith("/") and is_supported_code_file(name)
         ]
+        all_code_files.sort(key=lambda name: (-file_weight_for_repo(name), name.lower()))
+        code_files = all_code_files[:repo_file_limit] if repo_file_limit is not None else list(all_code_files)
 
-        if repo_file_limit is not None and len(code_files) > repo_file_limit:
-            result = build_limit_result(
-                "Repo file limit reached",
-                f"{str(access['plan']).capitalize()} scans are limited to {repo_file_limit} code files per repository. Upgrade for larger repo scans.",
-                access.get("plan", "free"),
-                access.get("limits", {}),
-            )
-            result["repo_name"] = f"{owner}/{repo}"
-            result["files_scanned_count"] = 0
-            result["files_scanned_limit"] = repo_file_limit
-            result["highest_file_risk"] = "green"
-            result["files"] = []
-            result["touches"] = []
-            result["dependency_summary"] = None
-            result["dependency_findings"] = []
-            result["dependency_skipped"] = []
-            result["repo_size_bytes"] = sum((zf.getinfo(name).file_size for name in code_files if name in zf.namelist()), 0)
-            result["repo_size_limit_bytes"] = repo_size_limit_bytes
-            result["access"] = access
-            return result
+        if repo_size_limit_bytes is not None:
+            size_limited_files = []
+            selected_size = 0
+            for name in code_files:
+                file_size = zf.getinfo(name).file_size
+                if selected_size + file_size > repo_size_limit_bytes:
+                    continue
+                size_limited_files.append(name)
+                selected_size += file_size
+            code_files = size_limited_files
 
-        repo_code_size_bytes = sum((zf.getinfo(name).file_size for name in code_files if name in zf.namelist()), 0)
-
-        if repo_size_limit_bytes is not None and repo_code_size_bytes > repo_size_limit_bytes:
-            result = build_limit_result(
-                "Repo size limit reached",
-                f"{str(access['plan']).capitalize()} scans are limited to about {repo_size_limit_bytes // 1_000_000 if repo_size_limit_bytes >= 1_000_000 else repo_size_limit_bytes:,}{' MB' if repo_size_limit_bytes >= 1_000_000 else ' bytes'} of code per repository. Upgrade for larger repo scans.",
-                access.get("plan", "free"),
-                access.get("limits", {}),
-            )
-            result["repo_name"] = f"{owner}/{repo}"
-            result["files_scanned_count"] = 0
-            result["files_scanned_limit"] = repo_file_limit
-            result["highest_file_risk"] = "green"
-            result["files"] = []
-            result["touches"] = []
-            result["dependency_summary"] = None
-            result["dependency_findings"] = []
-            result["dependency_skipped"] = []
-            result["repo_size_bytes"] = repo_code_size_bytes
-            result["repo_size_limit_bytes"] = repo_size_limit_bytes
-            result["access"] = access
-            return result
-
-        if repo_file_limit is not None:
-            code_files = code_files[:repo_file_limit]
+        repo_code_size_bytes = sum(zf.getinfo(name).file_size for name in all_code_files)
 
         for file_name in code_files:
             try:
@@ -2321,6 +3329,51 @@ def scan_repo(req: RepoScanRequest, request: Request):
             elif result["risk"] == "yellow" and highest_file_risk != "red":
                 highest_file_risk = "yellow"
 
+    files_available_count = len(all_code_files)
+    coverage_partial = len(code_files) < files_available_count
+
+    if not files_scanned and not dependency_findings:
+        return {
+            "repo_url": req.repo_url,
+            "repo_name": f"{owner}/{repo}",
+            "risk": "limited",
+            "trust_score": 0,
+            "trust_badge": {
+                "label": "No scannable code",
+                "emoji": "⚪",
+                "color": "gray",
+                "message": "No supported source files or dependency findings were available, so this repository was not rated safe.",
+            },
+            "readme_badge": None,
+            "files_scanned_count": 0,
+            "files_available_count": files_available_count,
+            "files_scanned_limit": repo_file_limit if repo_file_limit is not None else "Unlimited",
+            "coverage_partial": coverage_partial,
+            "touches": [],
+            "behavior_summary": ["No supported source files were available for analysis."],
+            "summary": "Repository downloaded successfully, but no scannable code was found.",
+            "risk_points": 0,
+            "highest_file_risk": "unknown",
+            "files": [],
+            "dependency_summary": {
+                "manifests_scanned": dependency_scan["manifests_scanned"],
+                "dependencies_parsed": dependency_scan["dependencies_parsed"],
+                "dependencies_queried": dependency_scan["dependencies_queried"],
+                "dependencies_skipped_count": len(dependency_scan["dependencies_skipped"]),
+                "vulnerabilities_found": 0,
+                "risk_points": 0,
+                "summary_lines": dependency_scan.get("dependency_summary_lines", []),
+                "scan_error": dependency_scan.get("dependency_scan_error"),
+            },
+            "dependency_findings": [],
+            "dependency_skipped": dependency_scan["dependencies_skipped"][:25],
+            "scan_confidence": {
+                "level": "Insufficient",
+                "lines": ["No supported source files were found. A safety rating was not produced."],
+            },
+            "access": access,
+        }
+
     if dependency_findings:
         all_touches.add("dependencies")
         dep_summary_line = (
@@ -2355,20 +3408,49 @@ def scan_repo(req: RepoScanRequest, request: Request):
     overall_risk = risk_from_points(normalized_repo_points)
     trust_score = calculate_trust_score_from_points(normalized_repo_points)
     trust_badge = build_trust_badge(trust_score, overall_risk)
-
-    repo_name = f"{owner}/{repo}"
-    readme_badge = generate_readme_badge(repo_name, trust_score, overall_risk)
+    flattened_repo_flags = [flag for file_result in files_scanned for flag in file_result.get("flags", [])]
+    repo_behavior_categories = sorted(list(all_touches))
+    repo_intent_mismatches = [
+        mismatch
+        for file_result in files_scanned
+        for mismatch in file_result.get("intent_mismatches", [])
+    ]
+    score_explanation = summarize_score_explanation(
+        flattened_repo_flags,
+        dependency_findings,
+        repo_behavior_categories,
+        repo_intent_mismatches,
+    )
+    score_explanation_lines = build_score_explanation_lines(score_explanation, "repo")
+    scan_confidence = build_scan_confidence(
+        "repo",
+        files_scanned_count=len(files_scanned),
+        files_total=files_available_count,
+        dependency_summary={
+            "dependencies_queried": dependency_scan["dependencies_queried"],
+            "dependencies_skipped_count": len(dependency_scan["dependencies_skipped"]),
+            "scan_error": dependency_scan.get("dependency_scan_error"),
+        },
+        scan_error=dependency_scan.get("dependency_scan_error"),
+    )
 
     return {
         "repo_url": req.repo_url,
-        "repo_name": repo_name,
+        "repo_name": f"{owner}/{repo}",
         "risk": overall_risk,
         "trust_score": trust_score,
         "trust_badge": trust_badge,
-        "readme_badge": readme_badge,
+        "readme_badge": generate_readme_badge(str(request.base_url), owner, repo, trust_score, overall_risk),
         "files_scanned_count": len(files_scanned),
+        "files_available_count": files_available_count,
         "files_scanned_limit": repo_file_limit if repo_file_limit is not None else "Unlimited",
+        "coverage_partial": coverage_partial,
+        "repo_size_bytes": repo_code_size_bytes,
+        "repo_size_limit_bytes": repo_size_limit_bytes,
         "touches": sorted(list(all_touches)),
+        "score_explanation": score_explanation,
+        "score_explanation_lines": score_explanation_lines,
+        "scan_confidence": scan_confidence,
         "behavior_summary": all_behavior_summary or ["No obvious risky behavior was detected in this repo scan."],
         "summary": f"Weighted repo scan completed across {len(files_scanned)} files.",
         "risk_points": round(normalized_repo_points, 2),
@@ -2390,4 +3472,80 @@ def scan_repo(req: RepoScanRequest, request: Request):
         },
         "dependency_findings": dependency_findings,
         "dependency_skipped": dependency_scan["dependencies_skipped"][:25],
+        "access": access,
     }
+
+
+@app.get("/badge/github/{owner}/{repo}.svg")
+def github_repo_badge_svg(owner: str, repo: str):
+    cache_key = f"{owner}/{repo}".lower()
+    now = time.time()
+    cached = BADGE_CACHE.get(cache_key)
+
+    if cached and now - cached.get("timestamp", 0) < BADGE_CACHE_TTL_SECONDS:
+        trust_score = cached["trust_score"]
+        risk = cached["risk"]
+    else:
+        try:
+            repo_url = f"https://github.com/{owner}/{repo}"
+            zip_bytes = download_repo_zip(owner, repo)
+            weighted_points_total = 0.0
+
+            with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+                dependency_scan = analyze_dependency_manifests(zf)
+                dependency_risk_points = float(dependency_scan["dependency_risk_points"])
+
+                code_files = [
+                    name for name in zf.namelist()
+                    if not name.endswith("/") and is_supported_code_file(name)
+                ][:FREE_REPO_FILE_LIMIT]
+
+                if not code_files and not dependency_scan.get("dependency_findings"):
+                    svg = build_badge_svg("AI Code Audit", "not rated", "#6b7280")
+                    return Response(
+                        content=svg,
+                        media_type="image/svg+xml",
+                        headers={"Cache-Control": "public, max-age=120"},
+                    )
+
+                for file_name in code_files:
+                    try:
+                        with zf.open(file_name) as file:
+                            raw = file.read()
+                            code_text = raw.decode("utf-8", errors="ignore")
+                    except Exception:
+                        continue
+
+                    result = analyze_code("Scan this public GitHub repo", code_text, plan="free")
+                    weighted_points_total += result["risk_points"] * file_weight_for_repo(file_name)
+
+            file_count = max(1, len(code_files))
+            normalized_repo_points = (weighted_points_total / file_count) + dependency_risk_points
+
+            if normalized_repo_points >= 35:
+                normalized_repo_points *= 0.85
+            elif normalized_repo_points >= 15:
+                normalized_repo_points *= 0.9
+
+            risk = risk_from_points(normalized_repo_points)
+            trust_score = calculate_trust_score_from_points(normalized_repo_points)
+
+            BADGE_CACHE[cache_key] = {
+                "timestamp": now,
+                "trust_score": trust_score,
+                "risk": risk,
+            }
+        except Exception:
+            svg = build_badge_svg("AI Code Audit", "scan failed", "#ef4444")
+            return Response(
+                content=svg,
+                media_type="image/svg+xml",
+                headers={"Cache-Control": "public, max-age=120"},
+            )
+
+    svg = build_badge_svg("AI Code Audit", f"{trust_score}/100", badge_color_from_risk(risk, trust_score))
+    return Response(
+        content=svg,
+        media_type="image/svg+xml",
+        headers={"Cache-Control": f"public, max-age={BADGE_CACHE_TTL_SECONDS}"},
+    )
