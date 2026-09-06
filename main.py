@@ -1919,12 +1919,17 @@ def analyze_python_ast(code: str) -> list[dict]:
                     ):
                         explanation = explain_flag("subprocess", "suspicious_behavior")
                         boost, explanation = build_context_note(explanation, node, "subprocess")
+                        subprocess_severity = 15 + boost
                         ast_flags.append(make_flag(
                             line=node.lineno,
-                            flag_type="suspicious_behavior",
+                            flag_type="review_note" if subprocess_severity <= 5 else "suspicious_behavior",
                             pattern="subprocess",
-                            message="Suspicious usage detected: subprocess",
-                            severity=15 + boost,
+                            message=(
+                                "Process execution detected with fixed arguments"
+                                if subprocess_severity <= 5
+                                else "Suspicious usage detected: subprocess"
+                            ),
+                            severity=subprocess_severity,
                             explanation=explanation,
                         ))
 
@@ -2949,7 +2954,7 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
         "flags": flags,
         "intent_mismatches": mismatch_flags,
         "behavior_summary": behavior_summary,
-        "summary": f"{len(flags)} suspicious patterns detected and {len(mismatch_flags)} intent mismatch warnings",
+        "summary": f"{len(flags)} review findings detected and {len(mismatch_flags)} intent mismatch warnings",
         "code": code,
         "trust_score": trust_score,
         "trust_badge": trust_badge,
@@ -3686,7 +3691,7 @@ def stripe_status():
         "supabase_admin_valid": supabase_admin_is_valid(),
         "app_base_url": APP_BASE_URL,
         "recovery_version": 4,
-        "scanner_version": 2,
+        "scanner_version": 3,
     }
 
 
