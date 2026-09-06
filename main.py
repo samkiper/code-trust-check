@@ -56,14 +56,13 @@ SUSPICIOUS_PATTERNS = [
     ("eval(", r"(?<![\w.])eval\s*\(", "Suspicious usage detected: eval(", 25),
     ("exec(", r"(?<![\w.])exec\s*\(", "Suspicious usage detected: exec(", 25),
     ("os.system", r"\bos\.system\s*\(", "Suspicious usage detected: os.system", 30),
-    ("subprocess", r"\bsubprocess\b", "Suspicious usage detected: subprocess", 15),
-    ("child_process", r"\bchild_process\b", "Suspicious usage detected: child_process", 15),
+    ("subprocess", r"\bsubprocess\.(?:run|Popen|call|check_call|check_output)\s*\(", "Suspicious usage detected: subprocess", 15),
+    ("child_process", r"\bchild_process\.(?:exec|execFile|spawn|fork)\s*\(", "Suspicious usage detected: child_process", 15),
     ("requests.post", r"\brequests\.post\s*\(", "Suspicious usage detected: requests.post", 4),
     ("requests.get", r"\brequests\.get\s*\(", "Suspicious usage detected: requests.get", 2),
-    ("socket", r"\bsocket\b", "Suspicious usage detected: socket", 8),
-    ("fetch(", r"(?<![\w.])fetch\s*\(", "Suspicious usage detected: fetch(", 0.5),
+    ("socket", r"\bsocket\.(?:socket|create_connection)\s*\(", "Suspicious usage detected: socket", 8),
+    ("fetch(", r"(?<![\w.])fetch\s*\(", "Suspicious usage detected: fetch(", 0),
     ("open(", r"(?<![\w.])open\s*\(", "Suspicious usage detected: open(", 0.5),
-    ("base64", r"\bbase64\b", "Suspicious usage detected: base64", 0.25),
     ("__import__", r"(?<![\w.])__import__\s*\(", "Suspicious usage detected: __import__", 8),
     ("importlib.import_module", r"\bimportlib\.import_module\s*\(", "Suspicious usage detected: importlib.import_module", 6),
     ("pickle.loads", r"\bpickle\.loads\s*\(", "Suspicious usage detected: pickle.loads", 20),
@@ -76,7 +75,7 @@ SUSPICIOUS_PATTERNS = [
     ("urllib.request.urlopen", r"\burllib\.request\.urlopen\s*\(", "Suspicious usage detected: urllib.request.urlopen", 3),
     ("urllib.request.urlretrieve", r"\burllib\.request\.urlretrieve\s*\(", "Suspicious usage detected: urllib.request.urlretrieve", 5),
     ("urllib.request.Request", r"\burllib\.request\.Request\s*\(", "Suspicious usage detected: urllib.request.Request", 2),
-    ("download helper", r"\b(curl|wget)\b", "Suspicious usage detected: download helper", 8),
+    ("download helper", r"\b(?:curl|wget)\s+(?:-[^\s]+\s+)*https?://", "Suspicious usage detected: download helper", 8),
     ("bytes.fromhex", r"\bbytes\.fromhex\s*\(", "Suspicious usage detected: bytes.fromhex", 4),
 ]
 
@@ -222,6 +221,34 @@ DANGEROUS_SINK_KEYS = {
     "dill.loads",
     "__import__",
     "importlib.import_module",
+    "requests.get",
+    "requests.post",
+    "fetch(",
+    "open(",
+    "urllib.request.urlopen",
+    "urllib.request.urlretrieve",
+    "urllib.request.Request",
+}
+
+PYTHON_AST_PATTERN_KEYS = {
+    "eval(",
+    "exec(",
+    "open(",
+    "os.system",
+    "subprocess",
+    "__import__",
+    "importlib.import_module",
+    "pickle.loads",
+    "pickle.load",
+    "marshal.loads",
+    "marshal.load",
+    "yaml.load",
+    "dill.loads",
+    "requests.get",
+    "requests.post",
+    "urllib.request.urlopen",
+    "urllib.request.urlretrieve",
+    "urllib.request.Request",
 }
 
 GENERIC_INTENTS = {
@@ -645,6 +672,110 @@ def strip_string_literals(text: str) -> str:
     return text
 
 
+def strip_comments_and_strings(text: str, *, mask_strings: bool = True) -> str:
+    """Mask comments and string literals while preserving line numbers."""
+    output = list(text)
+    index = 0
+    state = "code"
+    quote = ""
+
+    def mask(position: int):
+        if output[position] not in {"\n", "\r"}:
+            output[position] = " "
+
+    while index < len(text):
+        char = text[index]
+        next_two = text[index:index + 2]
+        next_three = text[index:index + 3]
+
+        if state == "line_comment":
+            if char in {"\n", "\r"}:
+                state = "code"
+            else:
+                mask(index)
+            index += 1
+            continue
+
+        if state == "block_comment":
+            mask(index)
+            if next_two == "*/":
+                if index + 1 < len(text):
+                    mask(index + 1)
+                index += 2
+                state = "code"
+            else:
+                index += 1
+            continue
+
+        if state == "string":
+            if mask_strings:
+                mask(index)
+            if char == "\\":
+                if mask_strings and index + 1 < len(text):
+                    mask(index + 1)
+                index += 2
+                continue
+            if char == quote:
+                state = "code"
+            index += 1
+            continue
+
+        if state == "triple_string":
+            if mask_strings:
+                mask(index)
+            if next_three == quote * 3:
+                if mask_strings:
+                    for offset in (1, 2):
+                        if index + offset < len(text):
+                            mask(index + offset)
+                index += 3
+                state = "code"
+            else:
+                index += 1
+            continue
+
+        if next_two == "//":
+            mask(index)
+            mask(index + 1)
+            index += 2
+            state = "line_comment"
+            continue
+        if char == "#":
+            mask(index)
+            index += 1
+            state = "line_comment"
+            continue
+        if next_two == "/*":
+            mask(index)
+            mask(index + 1)
+            index += 2
+            state = "block_comment"
+            continue
+        if next_three in {"'''", '\"\"\"'}:
+            quote = char
+            if mask_strings:
+                for offset in (0, 1, 2):
+                    mask(index + offset)
+            index += 3
+            state = "triple_string"
+            continue
+        if char in {"'", '\"', "`"}:
+            quote = char
+            if mask_strings:
+                mask(index)
+            index += 1
+            state = "string"
+            continue
+
+        index += 1
+
+    return "".join(output)
+
+
+def strip_comments(text: str) -> str:
+    return strip_comments_and_strings(text, mask_strings=False)
+
+
 def calculate_trust_score_from_points(points: float) -> int:
     score = int(round(100 - points))
     return max(0, min(100, score))
@@ -666,10 +797,10 @@ def build_trust_badge(trust_score: int, risk: str) -> dict:
             "message": "Some caution is warranted before trusting this code."
         }
     return {
-        "label": "Safe",
+        "label": "No Major Risks Found",
         "emoji": "🟢",
         "color": "green",
-        "message": "Looks relatively safe based on this scan."
+        "message": "No major risk signals were found in this static scan. This is not a guarantee that the code is safe."
     }
 
 
@@ -1053,6 +1184,14 @@ def build_finding_guidance(pattern: str) -> dict:
             "suggested_fix": "Remove the credential from the outbound payload. If authentication is required, send it only to the approved provider using the expected authorization mechanism.",
         }
 
+    if pattern == "credential_authentication":
+        return {
+            "why_risky": "Credentials should only be sent to the service they are intended to authenticate with.",
+            "what_to_check": "Confirm the HTTPS destination belongs to the expected provider and that redirects cannot forward the authorization header elsewhere.",
+            "when_legitimate": "Using a server-side environment credential in an HTTPS authorization header is normal for authenticated API clients.",
+            "suggested_fix": "Keep the credential server-side, restrict it to the expected provider, and use the provider's documented authentication format.",
+        }
+
     return {
         "why_risky": "This finding may introduce behavior or exposure that deserves manual review before the code is trusted.",
         "what_to_check": "Inspect the surrounding lines, the inputs reaching this behavior, and whether the behavior matches the stated purpose of the code.",
@@ -1260,6 +1399,8 @@ def find_environment_secret_sources(
 def add_secret_flow_heuristics(
     scannable_lines: list[tuple[int, str]],
     secret_variables: dict[str, int],
+    *,
+    authentication_expected: bool = False,
 ) -> list[dict]:
     if not secret_variables:
         return []
@@ -1277,6 +1418,23 @@ def add_secret_flow_heuristics(
         exposed = [name for name in secret_variables if re.search(rf"\b{re.escape(name)}\b", line)]
         if not exposed:
             continue
+
+        uses_https = bool(re.search(r"['\"]https://[^'\"]+['\"]", line, re.IGNORECASE))
+        uses_auth_header = bool(re.search(r"\b(?:authorization|bearer|headers?)\b", line, re.IGNORECASE))
+        if authentication_expected and uses_https and uses_auth_header:
+            findings.append(make_flag(
+                line=line_number,
+                flag_type="credential_use",
+                pattern="credential_authentication",
+                message="Environment credential used for expected API authentication",
+                severity=3,
+                explanation=(
+                    f"This HTTPS request uses environment-derived credential data ({', '.join(exposed)}) "
+                    "in an authentication context that matches the stated intent. Verify the destination belongs to the intended provider."
+                ),
+            ))
+            continue
+
         findings.append(make_flag(
             line=line_number,
             flag_type="secret_exfiltration",
@@ -1406,32 +1564,65 @@ def find_first_matching_line(scannable_lines: list[tuple[int, str]], pattern: st
     return 1
 
 
+def find_dataflow_chain_line(
+    scannable_lines: list[tuple[int, str]],
+    source_pattern: str,
+    sink_pattern: str,
+) -> int | None:
+    source_regex = re.compile(source_pattern, re.IGNORECASE)
+    sink_regex = re.compile(sink_pattern, re.IGNORECASE)
+    source_variables: set[str] = set()
+
+    for line_number, line in scannable_lines:
+        cleaned_line = strip_comments_and_strings(line)
+        has_source = bool(source_regex.search(cleaned_line))
+        has_sink = bool(sink_regex.search(cleaned_line))
+
+        if has_source and has_sink:
+            return line_number
+
+        assigned_variable = extract_assigned_variable(cleaned_line)
+        references_source = any(
+            re.search(rf"\b{re.escape(variable_name)}\b", cleaned_line)
+            for variable_name in source_variables
+        )
+        if assigned_variable and (has_source or references_source):
+            source_variables.add(assigned_variable)
+
+        if has_sink and references_source:
+            return line_number
+
+    return None
+
+
 def add_multi_signal_heuristics(scannable_lines: list[tuple[int, str]]) -> list[dict]:
     heuristic_flags: list[dict] = []
     joined_code = "\n".join(line for _, line in scannable_lines)
-    cleaned_code = strip_string_literals(joined_code).lower()
+    cleaned_code = strip_comments_and_strings(joined_code).lower()
 
-    has_exec = bool(re.search(r"(?<![\w.])exec\s*\(|(?<![\w.])eval\s*\(", cleaned_code))
-    has_base64_decode = bool(re.search(r"base64\.(b64decode|standard_b64decode|urlsafe_b64decode)\s*\(", cleaned_code))
-    has_hex_decode = bool(re.search(r"bytes\.fromhex\s*\(", cleaned_code))
-    has_download = bool(re.search(
-        r"requests\.(get|post)\s*\(|urllib\.request\.(urlopen|urlretrieve|request)\s*\(|(?<![\w.])fetch\s*\(|\b(curl|wget)\b",
-        cleaned_code,
-    ))
-    has_system_exec = bool(re.search(
-        r"\bos\.system\s*\(|\bsubprocess\b|\bchild_process\b|(?<![\w.])exec\s*\(|(?<![\w.])eval\s*\(",
-        cleaned_code,
-    ))
+    obfuscated_execution_line = find_dataflow_chain_line(
+        scannable_lines,
+        r"base64\.(?:b64decode|standard_b64decode|urlsafe_b64decode)\s*\(|bytes\.fromhex\s*\(",
+        r"(?<![\w.])exec\s*\(|(?<![\w.])eval\s*\(|\bos\.system\s*\(|\bsubprocess\.(?:run|Popen|call|check_call|check_output)\s*\(",
+    )
+    download_execute_line = find_dataflow_chain_line(
+        scannable_lines,
+        r"requests\.(?:get|post)\s*\(|urllib\.request\.(?:urlopen|urlretrieve|Request)\s*\(|(?<![\w.])fetch\s*\(",
+        r"\bos\.system\s*\(|\bsubprocess\.(?:run|Popen|call|check_call|check_output)\s*\(|\bchild_process\.(?:exec|execFile|spawn|fork)\s*\(|(?<![\w.])exec\s*\(|(?<![\w.])eval\s*\(",
+    )
+    if download_execute_line is None:
+        for line_number, line in scannable_lines:
+            cleaned_line = strip_comments_and_strings(line)
+            if re.search(r"\b(?:curl|wget)\b[^|\n]*\|\s*(?:sh|bash|zsh|python|node)\b", cleaned_line, re.IGNORECASE):
+                download_execute_line = line_number
+                break
+
     has_long_base64_blob = bool(re.search(r"[A-Za-z0-9+/]{180,}={0,2}", joined_code))
     has_chr_chain = len(re.findall(r"\bchr\s*\(", cleaned_code)) >= 4
 
-    if has_exec and (has_base64_decode or has_hex_decode):
-        line_number = find_first_matching_line(
-            scannable_lines,
-            r"base64\.(b64decode|standard_b64decode|urlsafe_b64decode)\s*\(|bytes\.fromhex\s*\(",
-        )
+    if obfuscated_execution_line is not None:
         heuristic_flags.append(make_flag(
-            line=line_number,
+            line=obfuscated_execution_line,
             flag_type="heuristic",
             pattern="obfuscated_execution",
             message="Suspicious behavior detected: encoded data appears to be executed",
@@ -1439,13 +1630,9 @@ def add_multi_signal_heuristics(scannable_lines: list[tuple[int, str]]) -> list[
             explanation=explain_flag("obfuscated_execution", "heuristic"),
         ))
 
-    if has_download and has_system_exec:
-        line_number = find_first_matching_line(
-            scannable_lines,
-            r"os\.system\s*\(|subprocess|child_process|(?<![\w.])exec\s*\(|(?<![\w.])eval\s*\(",
-        )
+    if download_execute_line is not None:
         heuristic_flags.append(make_flag(
-            line=line_number,
+            line=download_execute_line,
             flag_type="heuristic",
             pattern="download_execute_chain",
             message="Suspicious behavior detected: remote content may be downloaded and then executed",
@@ -1487,6 +1674,7 @@ def analyze_python_ast(code: str) -> list[dict]:
         return ast_flags
 
     tainted_vars: set[str] = set()
+    fixed_literal_vars: set[str] = set()
     current_function_stack: list[str] = []
 
     def is_tainted_value(node: ast.AST) -> bool:
@@ -1494,10 +1682,19 @@ def analyze_python_ast(code: str) -> list[dict]:
             return node.id in tainted_vars
 
         if isinstance(node, ast.JoinedStr):
-            return True
+            return any(
+                isinstance(value, ast.FormattedValue) and is_tainted_value(value.value)
+                for value in node.values
+            )
 
         if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Mod)):
-            return True
+            return is_tainted_value(node.left) or is_tainted_value(node.right)
+
+        if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+            return any(is_tainted_value(element) for element in node.elts)
+
+        if isinstance(node, ast.Dict):
+            return any(is_tainted_value(value) for value in node.values)
 
         if isinstance(node, ast.Call):
             if isinstance(node.func, ast.Name) and node.func.id in {"input", "__import__"}:
@@ -1506,23 +1703,38 @@ def analyze_python_ast(code: str) -> list[dict]:
                 return True
             if isinstance(node.func, ast.Attribute):
                 attr_base = getattr(node.func.value, "id", "")
-                if attr_base in {"os", "request", "sys", "importlib"}:
+                if attr_base in {"requests", "request"}:
                     return True
+                if attr_base == "os" and node.func.attr == "getenv":
+                    return True
+            return any(is_tainted_value(argument) for argument in node.args)
 
         if isinstance(node, ast.Attribute):
             attr_base = getattr(node.value, "id", "")
-            if attr_base in {"request", "sys", "os"}:
+            if (attr_base, node.attr) in {
+                ("request", "args"),
+                ("request", "form"),
+                ("request", "json"),
+                ("request", "data"),
+                ("sys", "argv"),
+                ("os", "environ"),
+            }:
                 return True
+            return is_tainted_value(node.value)
 
         if isinstance(node, ast.Subscript):
-            if isinstance(node.value, ast.Attribute):
-                attr_base = getattr(node.value.value, "id", "")
-                if attr_base in {"request", "os"}:
-                    return True
-            if isinstance(node.value, ast.Name) and node.value.id in {"argv", "environ"}:
-                return True
+            return is_tainted_value(node.value)
 
         return False
+
+    def is_fixed_literal_collection(node: ast.AST) -> bool:
+        if not isinstance(node, (ast.List, ast.Tuple)):
+            return False
+        return bool(node.elts) and all(
+            isinstance(element, ast.Constant)
+            and isinstance(element.value, (str, int, float, bool, type(None)))
+            for element in node.elts
+        )
 
     def current_function_name() -> str:
         if not current_function_stack:
@@ -1542,11 +1754,27 @@ def analyze_python_ast(code: str) -> list[dict]:
             notes.append("The argument appears to be derived from external or user-controlled input.")
 
         if isinstance(first_arg, ast.Name):
-            boost += 4
-            notes.append("It appears to be called with a variable instead of a fixed literal.")
+            if first_arg.id in fixed_literal_vars:
+                if pattern_key == "os.system":
+                    boost -= 8
+                elif pattern_key in {"eval(", "exec("}:
+                    boost -= 2
+                elif pattern_key in {"pickle.loads", "pickle.load", "marshal.loads", "marshal.load", "dill.loads"}:
+                    boost -= 1
+                elif pattern_key == "subprocess":
+                    boost -= 10
+                else:
+                    boost -= 4
+                notes.append("The variable is assigned from a fixed literal value, which lowers the risk.")
+            else:
+                boost += 4
+                notes.append("It appears to be called with a variable instead of a fixed literal.")
         elif isinstance(first_arg, (ast.JoinedStr, ast.BinOp)):
             boost += 4
             notes.append("The value appears to be dynamically constructed.")
+        elif is_fixed_literal_collection(first_arg):
+            boost -= 10 if pattern_key == "subprocess" else 4
+            notes.append("The call uses a fixed argument list, which lowers injection risk.")
         elif isinstance(first_arg, ast.Constant) and isinstance(first_arg.value, str):
             if pattern_key == "os.system":
                 boost -= 8
@@ -1554,9 +1782,20 @@ def analyze_python_ast(code: str) -> list[dict]:
                 boost -= 2
             elif pattern_key in {"pickle.loads", "pickle.load", "marshal.loads", "marshal.load", "dill.loads"}:
                 boost -= 1
+            elif pattern_key == "subprocess":
+                boost -= 10
             else:
                 boost -= 4
             notes.append("This appears to use a fixed literal value, which lowers the risk somewhat.")
+
+        if pattern_key == "subprocess" and any(
+            keyword.arg == "shell"
+            and isinstance(keyword.value, ast.Constant)
+            and keyword.value.value is True
+            for keyword in node.keywords
+        ):
+            boost += 12
+            notes.append("shell=True enables shell parsing and increases command-injection risk.")
 
         fn_name = current_function_name()
         if pattern_key in {"urllib.request.urlopen", "urllib.request.Request"} and fn_name in TRUSTED_INTERNAL_NETWORK_FUNCTION_NAMES:
@@ -1580,15 +1819,34 @@ def analyze_python_ast(code: str) -> list[dict]:
             current_function_stack.pop()
 
         def visit_Assign(self, node: ast.Assign):
-            if is_tainted_value(node.value):
-                for target in node.targets:
-                    if isinstance(target, ast.Name):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    if is_tainted_value(node.value):
                         tainted_vars.add(target.id)
+                        fixed_literal_vars.discard(target.id)
+                    elif (
+                        isinstance(node.value, ast.Constant)
+                        and isinstance(node.value.value, (str, int, float, bool, type(None)))
+                    ) or is_fixed_literal_collection(node.value):
+                        fixed_literal_vars.add(target.id)
+                        tainted_vars.discard(target.id)
+                    else:
+                        fixed_literal_vars.discard(target.id)
             self.generic_visit(node)
 
         def visit_AnnAssign(self, node: ast.AnnAssign):
-            if node.value and isinstance(node.target, ast.Name) and is_tainted_value(node.value):
-                tainted_vars.add(node.target.id)
+            if node.value and isinstance(node.target, ast.Name):
+                if is_tainted_value(node.value):
+                    tainted_vars.add(node.target.id)
+                    fixed_literal_vars.discard(node.target.id)
+                elif (
+                    isinstance(node.value, ast.Constant)
+                    and isinstance(node.value.value, (str, int, float, bool, type(None)))
+                ) or is_fixed_literal_collection(node.value):
+                    fixed_literal_vars.add(node.target.id)
+                    tainted_vars.discard(node.target.id)
+                else:
+                    fixed_literal_vars.discard(node.target.id)
             self.generic_visit(node)
 
         def visit_Call(self, node: ast.Call):
@@ -1655,7 +1913,10 @@ def analyze_python_ast(code: str) -> list[dict]:
                             explanation=explanation,
                         ))
 
-                    elif node.func.value.id == "subprocess":
+                    elif (
+                        node.func.value.id == "subprocess"
+                        and node.func.attr in {"run", "Popen", "call", "check_call", "check_output"}
+                    ):
                         explanation = explain_flag("subprocess", "suspicious_behavior")
                         boost, explanation = build_context_note(explanation, node, "subprocess")
                         ast_flags.append(make_flag(
@@ -1728,16 +1989,23 @@ def analyze_python_ast(code: str) -> list[dict]:
                         ))
 
                     elif node.func.value.id == "yaml" and node.func.attr == "load":
-                        explanation = explain_flag("yaml.load", "suspicious_behavior")
-                        boost, explanation = build_context_note(explanation, node, "yaml.load")
-                        ast_flags.append(make_flag(
-                            line=node.lineno,
-                            flag_type="suspicious_behavior",
-                            pattern="yaml.load",
-                            message="Suspicious usage detected: yaml.load",
-                            severity=14 + boost,
-                            explanation=explanation,
-                        ))
+                        loader_names = {
+                            getattr(keyword.value, "id", "")
+                            or getattr(keyword.value, "attr", "")
+                            for keyword in node.keywords
+                            if str(keyword.arg or "").lower() == "loader"
+                        }
+                        if not loader_names.intersection({"SafeLoader", "CSafeLoader"}):
+                            explanation = explain_flag("yaml.load", "suspicious_behavior")
+                            boost, explanation = build_context_note(explanation, node, "yaml.load")
+                            ast_flags.append(make_flag(
+                                line=node.lineno,
+                                flag_type="suspicious_behavior",
+                                pattern="yaml.load",
+                                message="Suspicious usage detected: yaml.load",
+                                severity=14 + boost,
+                                explanation=explanation,
+                            ))
 
                     elif node.func.value.id == "dill" and node.func.attr == "loads":
                         explanation = explain_flag("dill.loads", "suspicious_behavior")
@@ -2437,8 +2705,28 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
         }
 
     scannable_lines = extract_scannable_lines(code)
-    tainted_vars = build_taint_map(scannable_lines)
-    secret_variables, secret_source_flags = find_environment_secret_sources(scannable_lines)
+    code_without_comments = strip_comments(code).splitlines()
+    executable_code_lines = strip_comments_and_strings(code).splitlines()
+    comment_clean_scannable_lines = [
+        (line_number, code_without_comments[line_number - 1] if line_number <= len(code_without_comments) else "")
+        for line_number, _ in scannable_lines
+    ]
+    executable_scannable_lines = [
+        (line_number, executable_code_lines[line_number - 1] if line_number <= len(executable_code_lines) else "")
+        for line_number, _ in scannable_lines
+    ]
+    tainted_vars = build_taint_map(executable_scannable_lines)
+    secret_variables, secret_source_flags = find_environment_secret_sources(comment_clean_scannable_lines)
+    try:
+        ast.parse(code)
+        python_source_parses = True
+    except Exception:
+        python_source_parses = False
+
+    secret_access_expected = intent_mentions_any(
+        intent_lower,
+        ["credential", "credentials", "secret", "api key", "token", "password", "authenticate", "authentication", "authorization"],
+    )
 
     regex_flags: list[dict] = []
     ast_flags: list[dict] = []
@@ -2454,10 +2742,15 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
         if function_match:
             current_function_name = function_match.group(1)
 
-        line_lower = line.lower()
-        line_without_strings = strip_string_literals(line_lower)
+        line_without_strings = (
+            executable_code_lines[line_number - 1].lower()
+            if line_number <= len(executable_code_lines)
+            else ""
+        )
 
         for display_key, regex_pattern, label, base_severity in SUSPICIOUS_PATTERNS:
+            if python_source_parses and display_key in PYTHON_AST_PATTERN_KEYS:
+                continue
             if re.search(regex_pattern, line_without_strings):
                 adjusted_severity = float(base_severity)
                 extra_boost, context_note = assess_sink_context(display_key, line, tainted_vars)
@@ -2505,15 +2798,19 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
         heuristic_flags = []
 
     try:
-        secret_flow_flags = add_secret_flow_heuristics(scannable_lines, secret_variables)
+        secret_flow_flags = add_secret_flow_heuristics(
+            comment_clean_scannable_lines,
+            secret_variables,
+            authentication_expected=secret_access_expected,
+        )
     except Exception:
         secret_flow_flags = []
 
-    flags = dedupe_flags(regex_flags + ast_flags + heuristic_flags + secret_source_flags + secret_flow_flags)
-    secret_access_expected = intent_mentions_any(
-        intent_lower,
-        ["credential", "credentials", "secret", "api key", "token", "password", "authenticate", "authentication", "authorization"],
-    )
+    flags = [
+        flag
+        for flag in dedupe_flags(regex_flags + ast_flags + heuristic_flags + secret_source_flags + secret_flow_flags)
+        if float(flag.get("severity", 0) or 0) > 0
+    ]
     if secret_access_expected:
         for flag in flags:
             if flag.get("pattern") == "environment_secret_access":
@@ -2521,11 +2818,11 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
                 flag["explanation"] += " The stated intent appears to expect credential access, so this finding was reduced."
     risk_points = round(sum(float(flag["severity"]) for flag in flags), 2)
 
-    cleaned_code = "\n".join(line for _, line in scannable_lines)
-    cleaned_code_lower = strip_string_literals(cleaned_code).lower()
+    cleaned_code = "\n".join(line for _, line in executable_scannable_lines)
+    cleaned_code_lower = cleaned_code.lower()
 
     if re.search(
-        r"https?://|(?<![\w.])fetch\s*\(|\brequests\.(get|post|put|delete|patch|request)\s*\(|\burllib\.request\.(urlopen|request|urlretrieve)\b|\bsocket\b|\b(curl|wget)\b",
+        r"(?<![\w.])fetch\s*\(|\brequests\.(get|post|put|delete|patch|request)\s*\(|\burllib\.request\.(urlopen|request|urlretrieve)\b|\bsocket\.(?:socket|create_connection)\s*\(|\b(?:curl|wget)\s+",
         cleaned_code_lower,
     ):
         touches.append("network")
@@ -2537,7 +2834,7 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
         touches.append("files")
 
     if re.search(
-        r"(?<![\w.])exec\s*\(|(?<![\w.])eval\s*\(|\bos\.system\s*\(|\bsubprocess\b|\bchild_process\b",
+        r"(?<![\w.])exec\s*\(|(?<![\w.])eval\s*\(|\bos\.system\s*\(|\bsubprocess\.(?:run|Popen|call|check_call|check_output)\s*\(|\bchild_process\.(?:exec|execFile|spawn|fork)\s*\(",
         cleaned_code_lower,
     ):
         touches.append("system execution")
@@ -2558,7 +2855,7 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
         r"\bbase64\b|\bbytes\.fromhex\s*\(|\bchr\s*\(",
         cleaned_code_lower,
     ):
-        touches.append("obfuscation")
+        touches.append("encoding")
 
     if any(flag["type"] in {"secret", "secret_source", "secret_exfiltration"} for flag in flags):
         touches.append("secrets")
@@ -2575,7 +2872,7 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
         risk_points += 3.0
 
     if meaningful_intent and "files" in touches and not intent_mentions_any(
-        intent_lower, ["file", "save", "write", "export", "download", "upload", "repo", "github", "read"]
+        intent_lower, ["file", "save", "write", "export", "download", "upload", "repo", "github", "read", "load", "config"]
     ):
         mismatch_flags.append("Code reads or writes files not clearly mentioned in the intent.")
         risk_points += 1.0
@@ -2622,8 +2919,8 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
     if "deserialization" in touches:
         behavior_summary.append("Loads serialized data that may be unsafe if the source is untrusted.")
 
-    if "obfuscation" in touches:
-        behavior_summary.append("Contains encoding or obfuscation signals that may hide behavior.")
+    if "encoding" in touches:
+        behavior_summary.append("Uses encoded data; this is not dangerous by itself unless the decoded value is executed or otherwise trusted blindly.")
 
     if "secrets" in touches:
         behavior_summary.append("Contains possible credentials or secret values.")
@@ -3389,6 +3686,7 @@ def stripe_status():
         "supabase_admin_valid": supabase_admin_is_valid(),
         "app_base_url": APP_BASE_URL,
         "recovery_version": 4,
+        "scanner_version": 2,
     }
 
 
