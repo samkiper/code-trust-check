@@ -2661,6 +2661,26 @@ def stripe_is_configured() -> bool:
     return bool(STRIPE_SECRET_KEY and STRIPE_PRICE_ID)
 
 
+def supabase_admin_is_valid() -> bool:
+    if not SUPABASE_URL or not SUPABASE_SECRET_KEY:
+        return False
+
+    req = urllib.request.Request(
+        f"{SUPABASE_URL}/auth/v1/admin/users?page=1&per_page=1",
+        headers={
+            "Authorization": f"Bearer {SUPABASE_SECRET_KEY}",
+            "apikey": SUPABASE_SECRET_KEY,
+        },
+    )
+    try:
+        context = ssl.create_default_context(cafile=certifi.where())
+        with urllib.request.urlopen(req, timeout=15, context=context) as response:
+            return 200 <= int(response.status) < 300
+    except Exception as exc:
+        log_server_issue("Supabase admin credential validation failed", exc)
+        return False
+
+
 def supabase_auth_admin_request(method: str, path: str, payload: dict | None = None) -> dict:
     if not SUPABASE_URL or not SUPABASE_SECRET_KEY:
         return {}
@@ -3083,6 +3103,88 @@ async def stripe_checkout_session_status(request: Request, session_id: str):
     return JSONResponse(response_payload, headers={"Cache-Control": "no-store"})
 
 
+@app.post("/stripe/reconcile-subscription")
+async def reconcile_stripe_subscription(request: Request):
+    if not stripe_is_configured():
+        raise HTTPException(status_code=503, detail="Stripe is not fully configured on the server yet.")
+
+    access_token = await extract_request_access_token(request)
+    access = get_request_access_context(request, access_token=access_token)
+    access = enrich_access_with_admin_metadata(access)
+
+    if not access.get("authenticated") or not access.get("user_id") or not access.get("email"):
+        raise HTTPException(status_code=401, detail="Log in before restoring a paid subscription.")
+    if not (access.get("debug") or {}).get("user_fetch_succeeded"):
+        raise HTTPException(
+            status_code=503,
+            detail="Your payment is safe, but the server cannot securely update your account. Replace SUPABASE_SECRET_KEY in Render with the current Supabase secret key, redeploy, then select Restore paid subscription.",
+        )
+
+    try:
+        customers = stripe.Customer.list(email=str(access["email"]), limit=10)
+    except Exception as exc:
+        log_server_issue("Could not search Stripe customers while restoring subscription", exc)
+        raise HTTPException(status_code=502, detail="Stripe could not be reached to restore the subscription right now.") from exc
+
+    active_match = None
+    for customer in customers.auto_paging_iter():
+        customer_id = str(customer.get("id") or "").strip()
+        if not customer_id:
+            continue
+        try:
+            subscriptions = stripe.Subscription.list(customer=customer_id, status="all", limit=20)
+        except Exception as exc:
+            log_server_issue(f"Could not list subscriptions for Stripe customer {customer_id}", exc)
+            continue
+        for subscription in subscriptions.auto_paging_iter():
+            status = str(subscription.get("status") or "").lower()
+            cancel_at_period_end = bool(subscription.get("cancel_at_period_end") or False)
+            current_period_end = subscription.get("current_period_end")
+            if should_keep_pro_access(
+                status,
+                cancel_at_period_end=cancel_at_period_end,
+                current_period_end=current_period_end,
+            ):
+                active_match = (customer_id, subscription, status, cancel_at_period_end, current_period_end)
+                break
+        if active_match:
+            break
+
+    if not active_match:
+        raise HTTPException(
+            status_code=404,
+            detail="No active paid subscription was found for the email on this account. Confirm the Stripe receipt used the same email address.",
+        )
+
+    customer_id, subscription, status, cancel_at_period_end, current_period_end = active_match
+    subscription_id = str(subscription.get("id") or "").strip()
+    synced = sync_user_plan_from_subscription(
+        str(access["user_id"]),
+        plan="pro",
+        stripe_customer_id=customer_id,
+        stripe_subscription_id=subscription_id,
+        subscription_status=status,
+        cancel_at_period_end=cancel_at_period_end,
+        current_period_end=current_period_end,
+    )
+    if not synced:
+        raise HTTPException(
+            status_code=503,
+            detail="Stripe confirmed the paid subscription, but Supabase could not update the account. Replace SUPABASE_SECRET_KEY in Render, redeploy, then try Restore paid subscription again.",
+        )
+
+    refreshed_access = build_authenticated_access_payload_for_user(str(access["user_id"]), request=request)
+    return JSONResponse(
+        {
+            "restored": True,
+            "plan": "pro",
+            "subscription_status": status,
+            "access": refreshed_access,
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @app.post("/stripe/webhook")
 async def stripe_webhook(request: Request):
     if not STRIPE_SECRET_KEY or not STRIPE_WEBHOOK_SECRET:
@@ -3203,6 +3305,8 @@ def stripe_status():
         "has_publishable_key": bool(STRIPE_PUBLISHABLE_KEY),
         "has_price_id": bool(STRIPE_PRICE_ID),
         "has_webhook_secret": bool(STRIPE_WEBHOOK_SECRET),
+        "supabase_admin_valid": supabase_admin_is_valid(),
+        "app_base_url": APP_BASE_URL,
     }
 
 
