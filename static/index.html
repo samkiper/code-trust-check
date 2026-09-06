@@ -65,6 +65,9 @@
     .repo-note{display:flex;gap:12px;background:#0a201a;border:1px solid #1d473a;padding:17px;border-radius:9px;margin-top:18px;color:var(--mint)}
     .repo-note div{display:flex;flex-direction:column;gap:6px}
     .repo-note span{color:#8daf9f;font-size:.84rem;line-height:1.5}
+    .github-app-card{display:flex;align-items:center;justify-content:space-between;gap:16px;background:#101e1a;border:1px solid #315348;padding:14px 15px;border-radius:9px;margin-top:12px}
+    .github-app-card div{display:flex;flex-direction:column;gap:4px}.github-app-card b{font-size:.8rem}.github-app-card span{color:#8daf9f;font-size:.7rem;line-height:1.4}
+    .github-app-card a{flex:none;background:var(--mint);color:var(--ink);text-decoration:none;font-size:.72rem;font-weight:800;padding:9px 11px;border-radius:7px}
     .scan-error{display:none;align-items:flex-start;gap:10px;margin-top:18px;padding:13px;border:1px solid #713c36;background:#2c1715;color:#ffaaa4;border-radius:8px;font-size:.8rem;line-height:1.45}
     .scan-button{width:100%;height:50px;border:0;border-radius:9px;background:var(--acid);color:var(--ink);font-weight:800;display:flex;align-items:center;justify-content:center;gap:10px;margin-top:21px}
     .privacy{text-align:center;color:#617a72;font-size:.7rem;margin-top:13px}
@@ -210,6 +213,7 @@ def build_report(data):
         <label for="repoUrl">Public GitHub repository</label>
         <div class="repo-field"><span>▣</span><input id="repoUrl" type="url" placeholder="https://github.com/owner/repository"></div>
         <div class="repo-note"><span>◈</span><div><b>Public repositories only</b><span>We inspect supported source files, package manifests, and known dependency vulnerabilities.</span></div></div>
+        <div class="github-app-card hidden" id="githubAppCard"><div><b>Automatic pull-request checks</b><span>Scan only changed supported files. Monitor-only results never block merging.</span></div><a id="githubInstallLink" href="#" target="_blank" rel="noopener noreferrer">Connect GitHub</a></div>
       </div>
 
       <div class="scan-error" id="scanError"><span>⚠</span><span id="scanErrorText"></span></div>
@@ -290,6 +294,7 @@ def build_report(data):
 
     async function buildApiHeaders(){const headers={"Content-Type":"application/json"};const session=await supabaseClient.auth.getSession();const token=session.data&&session.data.session?session.data.session.access_token:null;if(token)headers.Authorization="Bearer "+token;return headers}
     async function fetchAccess(){try{const response=await fetch("/auth/access",{headers:await buildApiHeaders(),cache:"no-store"});if(response.ok)currentAccess=await response.json()}catch(error){currentAccess={plan:"free",role:"user",billing:{}}}updateAuthUi()}
+    async function loadGithubIntegration(){try{const response=await fetch("/github/status",{cache:"no-store"});if(!response.ok)return;const data=await response.json();if(data.install_url){byId("githubInstallLink").href=data.install_url;byId("githubAppCard").classList.remove("hidden")}}catch(_error){}}
     function updateAuthUi(){const loggedIn=Boolean(currentUser);byId("loginBtn").classList.toggle("hidden",loggedIn);byId("accountWrap").classList.toggle("hidden",!loggedIn);byId("signedOutView").classList.toggle("hidden",loggedIn);byId("signedInView").classList.toggle("hidden",!loggedIn);const plan=currentAccess.role==="admin"?"Admin":currentAccess.plan==="pro"?"Pro":"Free";if(loggedIn){byId("accountLabel").textContent=plan+" account";byId("accountEmail").textContent=currentUser.email||"";byId("modalEmail").textContent=currentUser.email||"";byId("modalPlan").textContent=plan+" plan";byId("managePlanBtn").classList.toggle("hidden",!currentAccess.billing||!currentAccess.billing.can_manage_billing);byId("restorePlanBtn").classList.toggle("hidden",currentAccess.plan==="pro"||currentAccess.role==="admin");byId("modalManageBtn").textContent=currentAccess.plan==="pro"?"Manage subscription":"Upgrade to Pro";byId("proPlanBtn").textContent=currentAccess.plan==="pro"?"Manage subscription":"Start Pro →"}else{byId("restorePlanBtn").classList.add("hidden");byId("proPlanBtn").textContent="Start Pro →"}}
     function openAuth(message){byId("authModal").style.display="flex";document.body.style.overflow="hidden";byId("authMessage").textContent=message||"";byId("authMessage").className="auth-message";if(!currentUser)setTimeout(function(){byId("authEmail").focus()},40)}
     function closeAuth(){byId("authModal").style.display="none";document.body.style.overflow=""}
@@ -337,7 +342,7 @@ def build_report(data):
     document.addEventListener("keydown",function(event){if(event.key==="Escape"){closeAuth();byId("accountMenu").classList.add("hidden")}});
     document.addEventListener("click",function(event){if(!byId("accountWrap").contains(event.target))byId("accountMenu").classList.add("hidden")});
     supabaseClient.auth.onAuthStateChange(function(_event,session){currentUser=session?session.user:null;setTimeout(fetchAccess,0)});
-    document.addEventListener("DOMContentLoaded",async function(){updateLineNumbers();const session=await supabaseClient.auth.getSession();currentUser=session.data&&session.data.session?session.data.session.user:null;await fetchAccess();await handleCheckoutReturn()});
+    document.addEventListener("DOMContentLoaded",async function(){updateLineNumbers();loadGithubIntegration();const session=await supabaseClient.auth.getSession();currentUser=session.data&&session.data.session?session.data.session.user:null;await fetchAccess();await handleCheckoutReturn()});
   </script>
 </body>
 </html>

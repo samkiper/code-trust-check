@@ -2,11 +2,14 @@ import hashlib
 import hmac
 import json
 import io
+import asyncio
 import unittest
 import zipfile
 from unittest.mock import patch
 
 import main
+from fastapi import BackgroundTasks, HTTPException
+from starlette.requests import Request
 
 
 class EvidenceModelTests(unittest.TestCase):
@@ -369,6 +372,104 @@ class GitHubWebhookTests(unittest.TestCase):
             digest = hmac.new(b"test-secret", payload, hashlib.sha256).hexdigest()
             self.assertTrue(main.verify_github_webhook_signature(payload, "sha256=" + digest))
             self.assertFalse(main.verify_github_webhook_signature(payload, "sha256=wrong"))
+
+    def test_signed_malformed_webhook_payload_returns_bad_request(self):
+        payload = b"{not-json"
+        digest = hmac.new(b"test-secret", payload, hashlib.sha256).hexdigest()
+        delivered = False
+
+        async def receive():
+            nonlocal delivered
+            if delivered:
+                return {"type": "http.request", "body": b"", "more_body": False}
+            delivered = True
+            return {"type": "http.request", "body": payload, "more_body": False}
+
+        request = Request({
+            "type": "http",
+            "method": "POST",
+            "path": "/github/webhook",
+            "headers": [
+                (b"x-hub-signature-256", f"sha256={digest}".encode("ascii")),
+                (b"x-github-event", b"pull_request"),
+            ],
+            "query_string": b"",
+            "scheme": "https",
+            "server": ("testserver", 443),
+            "client": ("203.0.113.10", 1234),
+        }, receive=receive)
+        with patch.object(main, "GITHUB_WEBHOOK_SECRET", "test-secret"):
+            with self.assertRaises(HTTPException) as caught:
+                asyncio.run(main.github_webhook(request, BackgroundTasks()))
+        self.assertEqual(caught.exception.status_code, 400)
+
+    def test_pull_request_event_is_validated_and_parsed(self):
+        sha = "a" * 40
+        body = {
+            "installation": {"id": 123},
+            "number": 42,
+            "repository": {"full_name": "owner/repo"},
+            "pull_request": {"head": {"sha": sha}},
+        }
+        self.assertEqual(main.parse_github_pull_request_event(body), (123, "owner/repo", 42, sha))
+        body["repository"]["full_name"] = "owner/repo/extra"
+        with self.assertRaises(ValueError):
+            main.parse_github_pull_request_event(body)
+
+    def test_pull_request_file_listing_paginates_and_filters(self):
+        first_page = [{"filename": f"docs/page-{index}.md", "status": "modified"} for index in range(100)]
+        second_page = [
+            {"filename": "src/app.py", "status": "modified"},
+            {"filename": "src/old.py", "status": "removed"},
+        ]
+        with patch.object(main, "github_api_request", side_effect=[first_page, second_page]) as request:
+            files = main.list_github_pull_request_files("owner/repo", 7, "token")
+        self.assertEqual([item["filename"] for item in files], ["src/app.py"])
+        self.assertEqual(request.call_count, 2)
+
+    def test_changed_file_scan_does_not_scan_unchanged_source(self):
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as output:
+            output.writestr("owner-repo-sha/src/changed.py", "eval(user_input)")
+            output.writestr("owner-repo-sha/src/unchanged.py", "print('safe')")
+        changed_files = [{"filename": "src/changed.py", "status": "modified"}]
+        with patch.object(main, "analyze_code", return_value={"flags": [{"line": 1, "severity": 25}]}) as analyze:
+            findings, scanned, skipped = main.scan_github_changed_files(archive.getvalue(), changed_files)
+        self.assertEqual(scanned, 1)
+        self.assertEqual(skipped, 0)
+        self.assertEqual(findings[0][0], "src/changed.py")
+        analyze.assert_called_once()
+
+    def test_existing_check_is_updated_instead_of_duplicated(self):
+        existing = {"check_runs": [{"id": 77, "external_id": main.github_check_external_id("owner/repo", 9, "b" * 40)}]}
+        with patch.object(main, "github_api_request", side_effect=[existing, {"id": 77}]) as request:
+            main.upsert_github_check("owner/repo", 9, "b" * 40, "token", {"status": "in_progress"})
+        self.assertEqual(request.call_args_list[1].args[0], "PATCH")
+        self.assertTrue(request.call_args_list[1].args[1].endswith("/check-runs/77"))
+
+    def test_findings_are_monitor_only_and_never_fail_the_pull_request(self):
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as output:
+            output.writestr("owner-repo-sha/app.py", "eval(user_input)")
+        with patch.object(main, "github_installation_token", return_value="token"), \
+                patch.object(main, "list_github_pull_request_files", return_value=[{"filename": "app.py"}]), \
+                patch.object(main, "download_github_archive", return_value=archive.getvalue()), \
+                patch.object(main, "analyze_code", return_value={"flags": [{"line": 1, "severity": 25, "message": "Risk"}]}), \
+                patch.object(main, "upsert_github_check", return_value={}) as upsert:
+            main.process_github_pull_request(1, "owner/repo", 5, "c" * 40)
+        final_payload = upsert.call_args_list[-1].args[4]
+        self.assertEqual(final_payload["status"], "completed")
+        self.assertEqual(final_payload["conclusion"], "neutral")
+        self.assertIn("does not block merging", final_payload["output"]["summary"])
+
+    def test_scan_failure_is_reported_as_non_blocking_neutral(self):
+        with patch.object(main, "github_installation_token", return_value="token"), \
+                patch.object(main, "list_github_pull_request_files", side_effect=RuntimeError("temporary")), \
+                patch.object(main, "upsert_github_check", return_value={}) as upsert:
+            main.process_github_pull_request(1, "owner/repo", 5, "d" * 40)
+        failure_payload = upsert.call_args_list[-1].args[4]
+        self.assertEqual(failure_payload["conclusion"], "neutral")
+        self.assertIn("could not complete", failure_payload["output"]["title"].lower())
 
 
 if __name__ == "__main__":

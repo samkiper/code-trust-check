@@ -194,6 +194,12 @@ SEMGREP_CONFIG_PATH = Path(__file__).with_name("semgrep.yml")
 GITHUB_APP_ID = os.getenv("GITHUB_APP_ID", "").strip()
 GITHUB_PRIVATE_KEY = os.getenv("GITHUB_PRIVATE_KEY", "").replace("\\n", "\n").strip()
 GITHUB_WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET", "").strip()
+GITHUB_APP_SLUG = os.getenv("GITHUB_APP_SLUG", "").strip()
+
+GITHUB_REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+GITHUB_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
+GITHUB_APP_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9-]+$")
+GITHUB_CHECK_NAME = "AI Code Audit"
 
 if STRIPE_SECRET_KEY:
     stripe.api_key = STRIPE_SECRET_KEY
@@ -4653,7 +4659,7 @@ def result_to_sarif(result: dict, filename: str = "snippet.py") -> dict:
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
         "version": "2.1.0",
         "runs": [{
-            "tool": {"driver": {"name": "AI Code Audit", "version": "7", "rules": list(rules.values())}},
+            "tool": {"driver": {"name": "AI Code Audit", "version": "14", "rules": list(rules.values())}},
             "results": sarif_results,
         }],
     }
@@ -5410,7 +5416,7 @@ def github_app_jwt() -> str:
     )
 
 
-def github_api_request(method: str, url: str, token: str, body: dict | None = None) -> dict:
+def github_api_request(method: str, url: str, token: str, body: dict | None = None) -> dict | list:
     data = json.dumps(body).encode("utf-8") if body is not None else None
     request = urllib.request.Request(
         url,
@@ -5435,7 +5441,130 @@ def github_installation_token(installation_id: int) -> str:
         github_app_jwt(),
         {},
     )
-    return str(payload.get("token") or "")
+    return str(payload.get("token") or "") if isinstance(payload, dict) else ""
+
+
+def parse_github_pull_request_event(body: dict) -> tuple[int, str, int, str]:
+    try:
+        installation_id = int(((body.get("installation") or {}).get("id") or 0))
+        pull_request_number = int(body.get("number") or 0)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Incomplete pull request event.") from exc
+    full_name = str(((body.get("repository") or {}).get("full_name") or "")).strip()
+    sha = str(((((body.get("pull_request") or {}).get("head") or {}).get("sha")) or "")).strip()
+    if (
+        installation_id <= 0
+        or pull_request_number <= 0
+        or not GITHUB_REPOSITORY_PATTERN.fullmatch(full_name)
+        or not GITHUB_SHA_PATTERN.fullmatch(sha)
+    ):
+        raise ValueError("Incomplete pull request event.")
+    return installation_id, full_name, pull_request_number, sha
+
+
+def list_github_pull_request_files(full_name: str, pull_request_number: int, token: str) -> list[dict]:
+    changed_files: list[dict] = []
+    page = 1
+    while len(changed_files) < PRO_REPO_FILE_LIMIT and page <= 30:
+        payload = github_api_request(
+            "GET",
+            (
+                f"https://api.github.com/repos/{quote(full_name, safe='/')}"
+                f"/pulls/{pull_request_number}/files?per_page=100&page={page}"
+            ),
+            token,
+        )
+        if not isinstance(payload, list):
+            raise RuntimeError("GitHub returned an unreadable pull request file list")
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            filename = str(item.get("filename") or "").strip()
+            if item.get("status") == "removed" or not filename or not is_supported_code_file(filename):
+                continue
+            changed_files.append(item)
+            if len(changed_files) >= PRO_REPO_FILE_LIMIT:
+                break
+        if len(payload) < 100:
+            break
+        page += 1
+    return changed_files
+
+
+def scan_github_changed_files(archive: bytes, changed_files: list[dict]) -> tuple[list[tuple[str, dict]], int, int]:
+    findings: list[tuple[str, dict]] = []
+    files_scanned = 0
+    files_skipped = 0
+    with zipfile.ZipFile(io.BytesIO(archive)) as zf:
+        archive_paths = {
+            ("/".join(name.split("/")[1:]) or name): name
+            for name in zf.namelist()
+            if not name.endswith("/")
+        }
+        candidates = sorted(
+            (str(item.get("filename") or "") for item in changed_files),
+            key=lambda name: (-file_weight_for_repo(name), name.lower()),
+        )
+        for relative_path in candidates:
+            archive_path = archive_paths.get(relative_path)
+            if not archive_path or zf.getinfo(archive_path).file_size > MAX_PASTED_CODE_BYTES_PRO:
+                files_skipped += 1
+                continue
+            code = zf.read(archive_path).decode("utf-8", errors="ignore")
+            result = analyze_code("Review this pull request for security risks.", code, plan="pro")
+            files_scanned += 1
+            for finding in result.get("flags") or []:
+                findings.append((relative_path, finding))
+    return findings, files_scanned, files_skipped
+
+
+def github_check_external_id(full_name: str, pull_request_number: int, sha: str) -> str:
+    return f"ai-code-audit:{full_name}:{pull_request_number}:{sha}"
+
+
+def upsert_github_check(
+    full_name: str,
+    pull_request_number: int,
+    sha: str,
+    token: str,
+    check_payload: dict,
+) -> dict | list:
+    external_id = github_check_external_id(full_name, pull_request_number, sha)
+    checks = github_api_request(
+        "GET",
+        (
+            f"https://api.github.com/repos/{quote(full_name, safe='/')}/commits/{quote(sha, safe='')}"
+            f"/check-runs?check_name={quote(GITHUB_CHECK_NAME, safe='')}"
+        ),
+        token,
+    )
+    existing_id = None
+    if isinstance(checks, dict):
+        for check in checks.get("check_runs") or []:
+            if isinstance(check, dict) and check.get("external_id") == external_id:
+                existing_id = check.get("id")
+                break
+    if existing_id:
+        update_payload = dict(check_payload)
+        update_payload["external_id"] = external_id
+        return github_api_request(
+            "PATCH",
+            f"https://api.github.com/repos/{quote(full_name, safe='/')}/check-runs/{int(existing_id)}",
+            token,
+            update_payload,
+        )
+    create_payload = {
+        "name": GITHUB_CHECK_NAME,
+        "head_sha": sha,
+        "external_id": external_id,
+        **check_payload,
+    }
+    return github_api_request(
+        "POST",
+        f"https://api.github.com/repos/{quote(full_name, safe='/')}/check-runs",
+        token,
+        create_payload,
+    )
 
 
 def download_github_archive(full_name: str, sha: str, token: str) -> bytes:
@@ -5455,31 +5584,29 @@ def download_github_archive(full_name: str, sha: str, token: str) -> bytes:
     return data
 
 
-def process_github_pull_request(installation_id: int, full_name: str, sha: str) -> None:
+def process_github_pull_request(installation_id: int, full_name: str, pull_request_number: int, sha: str) -> None:
+    token = ""
     try:
         token = github_installation_token(installation_id)
         if not token:
             raise RuntimeError("GitHub did not issue an installation token")
+        upsert_github_check(
+            full_name,
+            pull_request_number,
+            sha,
+            token,
+            {
+                "status": "in_progress",
+                "output": {
+                    "title": "Scanning changed files",
+                    "summary": "Monitor-only scan in progress. This check does not block merging.",
+                },
+            },
+        )
+        changed_files = list_github_pull_request_files(full_name, pull_request_number, token)
         archive = download_github_archive(full_name, sha, token)
-        findings = []
-        files_scanned = 0
-        with zipfile.ZipFile(io.BytesIO(archive)) as zf:
-            candidates = sorted(
-                (name for name in zf.namelist() if not name.endswith("/") and is_supported_code_file(name)),
-                key=lambda name: (-file_weight_for_repo(name), name.lower()),
-            )[:PRO_REPO_FILE_LIMIT]
-            for path in candidates:
-                if zf.getinfo(path).file_size > MAX_PASTED_CODE_BYTES_PRO:
-                    continue
-                code = zf.read(path).decode("utf-8", errors="ignore")
-                result = analyze_code("Review this pull request for security risks.", code, plan="pro")
-                files_scanned += 1
-                relative_path = "/".join(path.split("/")[1:]) or path
-                for finding in result.get("flags") or []:
-                    findings.append((relative_path, finding))
-
-        high_count = sum(float(item.get("severity", 0) or 0) >= 18 for _, item in findings)
-        conclusion = "failure" if high_count else "neutral" if findings else "success"
+        findings, files_scanned, files_skipped = scan_github_changed_files(archive, changed_files)
+        conclusion = "neutral" if findings else "success"
         annotations = []
         for path, finding in findings[:50]:
             line = max(1, int(finding.get("line") or 1))
@@ -5492,34 +5619,62 @@ def process_github_pull_request(installation_id: int, full_name: str, sha: str) 
                 "message": str(finding.get("message") or "Code behavior requires review.")[:1000],
                 "title": "AI Code Audit",
             })
-        github_api_request(
-            "POST",
-            f"https://api.github.com/repos/{quote(full_name, safe='/')}/check-runs",
+        upsert_github_check(
+            full_name,
+            pull_request_number,
+            sha,
             token,
             {
-                "name": "AI Code Audit",
-                "head_sha": sha,
                 "status": "completed",
                 "conclusion": conclusion,
                 "output": {
                     "title": f"{len(findings)} finding(s) across {files_scanned} file(s)",
-                    "summary": "No code was executed. Results combine intent-aware static checks with review annotations.",
+                    "summary": (
+                        "Monitor-only: this check does not block merging. No code was executed. "
+                        f"Scanned {files_scanned} changed supported file(s); skipped {files_skipped}."
+                    ),
                     "annotations": annotations,
                 },
             },
         )
     except Exception as exc:
         log_server_issue("GitHub pull request scan failed", exc)
+        if token:
+            try:
+                upsert_github_check(
+                    full_name,
+                    pull_request_number,
+                    sha,
+                    token,
+                    {
+                        "status": "completed",
+                        "conclusion": "neutral",
+                        "output": {
+                            "title": "Scan could not complete",
+                            "summary": (
+                                "AI Code Audit could not complete this monitor-only scan. "
+                                "This result does not block merging; retry the check or review the service logs."
+                            ),
+                        },
+                    },
+                )
+            except Exception as reporting_exc:
+                log_server_issue("GitHub pull request failure check could not be published", reporting_exc)
 
 
 @app.get("/github/status")
 def github_status():
+    valid_slug = GITHUB_APP_SLUG if GITHUB_APP_SLUG_PATTERN.fullmatch(GITHUB_APP_SLUG) else ""
     return private_json({
         "configured": bool(GITHUB_APP_ID and GITHUB_PRIVATE_KEY and GITHUB_WEBHOOK_SECRET),
         "has_app_id": bool(GITHUB_APP_ID),
         "has_private_key": bool(GITHUB_PRIVATE_KEY),
         "has_webhook_secret": bool(GITHUB_WEBHOOK_SECRET),
+        "has_app_slug": bool(valid_slug),
+        "install_url": f"https://github.com/apps/{valid_slug}/installations/new" if valid_slug else "",
         "pull_request_checks": True,
+        "monitor_only": True,
+        "scans_changed_files_only": True,
         "dynamic_sandbox": "not_enabled",
     })
 
@@ -5531,17 +5686,27 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
     if not verify_github_webhook_signature(payload, signature):
         raise HTTPException(status_code=401, detail="Invalid GitHub webhook signature.")
     event = request.headers.get("x-github-event", "")
-    body = json.loads(payload.decode("utf-8") or "{}")
+    try:
+        body = json.loads(payload.decode("utf-8") or "{}")
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="Malformed GitHub webhook payload.") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Malformed GitHub webhook payload.")
     if event == "ping":
         return private_json({"received": True, "event": "ping"})
     if event != "pull_request" or body.get("action") not in {"opened", "reopened", "synchronize"}:
         return private_json({"received": True, "ignored": True})
-    installation_id = int(((body.get("installation") or {}).get("id") or 0))
-    full_name = str(((body.get("repository") or {}).get("full_name") or ""))
-    sha = str(((((body.get("pull_request") or {}).get("head") or {}).get("sha")) or ""))
-    if not installation_id or not full_name or not sha:
-        raise HTTPException(status_code=400, detail="Incomplete pull request event.")
-    background_tasks.add_task(process_github_pull_request, installation_id, full_name, sha)
+    try:
+        installation_id, full_name, pull_request_number, sha = parse_github_pull_request_event(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    background_tasks.add_task(
+        process_github_pull_request,
+        installation_id,
+        full_name,
+        pull_request_number,
+        sha,
+    )
     return private_json({"received": True, "queued": True})
 
 
@@ -5555,7 +5720,7 @@ def stripe_status():
         "supabase_admin_valid": supabase_admin_is_valid(),
         "app_base_url": APP_BASE_URL,
         "recovery_version": 4,
-        "scanner_version": 13,
+        "scanner_version": 14,
         "security_version": 1,
         "benchmark_cases": 1103,
         "benchmark_independent_cases": 300,
@@ -5669,7 +5834,7 @@ def submit_feedback(req: FeedbackRequest, request: Request):
         "verdict": verdict,
         "category": req.category.strip()[:80],
         "note": req.note.strip()[:500],
-        "scanner_version": 13,
+        "scanner_version": 14,
     }
     inserted = supabase_rest_request("POST", "scan_feedback", payload=payload, prefer="return=representation")
     if not inserted:

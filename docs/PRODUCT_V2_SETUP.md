@@ -5,7 +5,7 @@
 - The intent-aware behavior engine remains the source of the calibrated trust score.
 - A local Semgrep engine independently checks structural security rules. Code is written only to a temporary directory for the scan and is not sent to Semgrep's registry or telemetry service.
 - Results include six evidence categories, reviewable patch previews, JSON downloads, and SARIF 2.1 output.
-- A GitHub App webhook can scan pull-request snapshots and publish a GitHub Check with line annotations.
+- A GitHub App webhook scans changed supported pull-request files and publishes a monitor-only GitHub Check with line annotations.
 - The regression suite contains 265 formatting variants derived from 53 labeled base scenarios.
 - The accuracy gate measures 53 internal cases, 750 category-assisted OWASP BenchmarkPython cases, and a separate 300-case OWASP holdout scanned without vulnerability-category hints.
 - Signed-in users can mark findings accurate, report false alarms, or report a missed risk. Feedback records fingerprints and labels only; submitted code is not stored.
@@ -45,6 +45,7 @@ To activate GitHub pull-request checks, create a GitHub App and add these Render
 | `GITHUB_APP_ID` | The numeric GitHub App ID |
 | `GITHUB_PRIVATE_KEY` | The complete PEM private key |
 | `GITHUB_WEBHOOK_SECRET` | A new random webhook secret |
+| `GITHUB_APP_SLUG` | The public slug from the GitHub App URL, used to show the install button |
 
 Configure the GitHub App with:
 
@@ -52,9 +53,9 @@ Configure the GitHub App with:
 - Subscribe to: Pull request
 - Repository permissions: Metadata read-only, Contents read-only, Pull requests read-only, Checks read and write
 
-After installing the App on a repository, opening or updating a pull request queues a static scan and produces an **AI Code Audit** check.
+After installing the App on a repository, opening or updating a pull request queues a static scan of changed supported files and produces an **AI Code Audit** check. Findings use a neutral conclusion and do not block merging. Re-delivered webhooks update the same check instead of creating duplicates.
 
-The public status endpoint at `/github/status` reports only whether each required setting exists; it never returns the values.
+The public status endpoint at `/github/status` reports only whether each required setting exists, the public installation URL, and the integration capabilities; it never returns secrets.
 
 ## SARIF API
 
