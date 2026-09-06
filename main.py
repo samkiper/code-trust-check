@@ -3127,28 +3127,37 @@ async def reconcile_stripe_subscription(request: Request):
         raise HTTPException(status_code=502, detail="Stripe could not be reached to restore the subscription right now.") from exc
 
     active_match = None
-    for customer in customers.auto_paging_iter():
-        customer_id = str(customer.get("id") or "").strip()
-        if not customer_id:
-            continue
-        try:
-            subscriptions = stripe.Subscription.list(customer=customer_id, status="all", limit=20)
-        except Exception as exc:
-            log_server_issue(f"Could not list subscriptions for Stripe customer {customer_id}", exc)
-            continue
-        for subscription in subscriptions.auto_paging_iter():
-            status = str(subscription.get("status") or "").lower()
-            cancel_at_period_end = bool(subscription.get("cancel_at_period_end") or False)
-            current_period_end = subscription.get("current_period_end")
-            if should_keep_pro_access(
-                status,
-                cancel_at_period_end=cancel_at_period_end,
-                current_period_end=current_period_end,
-            ):
-                active_match = (customer_id, subscription, status, cancel_at_period_end, current_period_end)
+    try:
+        customer_records = list(customers.get("data") or [])
+        for customer in customer_records:
+            customer_id = str(customer.get("id") or "").strip()
+            if not customer_id:
+                continue
+            try:
+                subscriptions = stripe.Subscription.list(customer=customer_id, status="all", limit=20)
+                subscription_records = list(subscriptions.get("data") or [])
+            except Exception as exc:
+                log_server_issue(f"Could not list subscriptions for Stripe customer {customer_id}", exc)
+                continue
+            for subscription in subscription_records:
+                status = str(subscription.get("status") or "").lower()
+                cancel_at_period_end = bool(subscription.get("cancel_at_period_end") or False)
+                current_period_end = subscription.get("current_period_end")
+                if should_keep_pro_access(
+                    status,
+                    cancel_at_period_end=cancel_at_period_end,
+                    current_period_end=current_period_end,
+                ):
+                    active_match = (customer_id, subscription, status, cancel_at_period_end, current_period_end)
+                    break
+            if active_match:
                 break
-        if active_match:
-            break
+    except Exception as exc:
+        log_server_issue("Could not read Stripe customer subscription records", exc)
+        raise HTTPException(
+            status_code=502,
+            detail="Stripe returned the payment record, but the subscription details could not be read. Please try Restore paid subscription again.",
+        ) from exc
 
     if not active_match:
         raise HTTPException(
