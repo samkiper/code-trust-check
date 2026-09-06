@@ -7,7 +7,7 @@
 - Results include six evidence categories, reviewable patch previews, JSON downloads, and SARIF 2.1 output.
 - A GitHub App webhook can scan pull-request snapshots and publish a GitHub Check with line annotations.
 - The regression suite contains 265 formatting variants derived from 53 labeled base scenarios.
-- The independent accuracy gate measures those 53 internal cases plus 750 official OWASP BenchmarkPython cases, with results split by language and vulnerability class.
+- The accuracy gate measures 53 internal cases, 750 category-assisted OWASP BenchmarkPython cases, and a separate 300-case OWASP holdout scanned without vulnerability-category hints.
 - Signed-in users can mark findings accurate, report false alarms, or report a missed risk. Feedback records fingerprints and labels only; submitted code is not stored.
 - Dependency review checks published advisories, likely package-name typos, missing registry packages, and unpinned direct-source installs.
 - Review-only “Fix this safely” previews cover unsafe YAML loading, disabled TLS verification, production debug mode, and dynamic `eval`.
@@ -17,7 +17,7 @@
 Run the same gate locally with a checked-out copy of the official OWASP Python benchmark:
 
 ```bash
-python scripts/run_accuracy_gate.py --owasp-dir ../BenchmarkPython --limit 750
+python scripts/run_accuracy_gate.py --owasp-dir ../BenchmarkPython --limit 750 --holdout-limit 300
 ```
 
 The current measured report is committed as `accuracy-report.json`. The gate fails if recall falls below the committed floor or false-positive rate rises above it. This prevents regression; it is not a claim that every vulnerability class is already detected well. Current limitations and exact category results are documented in `docs/ACCURACY.md` and exposed at `/accuracy/status`.

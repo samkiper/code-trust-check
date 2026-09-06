@@ -41,7 +41,7 @@ jobs:
 
       - name: Enforce accuracy thresholds
         working-directory: app
-        run: python scripts/run_accuracy_gate.py --owasp-dir ../owasp --limit 750 --report accuracy-report.json
+        run: python scripts/run_accuracy_gate.py --owasp-dir ../owasp --limit 750 --holdout-limit 300 --report accuracy-report.json
 
       - name: Confirm committed report is current
         working-directory: app

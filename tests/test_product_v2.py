@@ -266,6 +266,69 @@ value = pickle.loads(base64.urlsafe_b64decode(payload))'''
         self.assertTrue(any(item.get("pattern") == "pickle.loads" for item in unsafe_result["flags"]))
         self.assertFalse(any(item.get("pattern") == "pickle.loads" for item in safe_result["flags"]))
 
+    def test_path_traversal_is_detected_without_category_hint(self):
+        unsafe = '''from flask import request
+from pathlib import Path
+name = request.args.get("name")
+candidate = Path("/srv/uploads") / name
+contents = candidate.read_text()'''
+        safe = unsafe.replace(
+            'candidate = Path("/srv/uploads") / name',
+            'base = Path("/srv/uploads").resolve()\ncandidate = (base / name).resolve()\n'
+            'if not candidate.is_relative_to(base):\n    raise ValueError("outside upload directory")',
+        )
+        unsafe_result = main.analyze_code("Review this code before production", unsafe)
+        safe_result = main.analyze_code("Review this code before production", safe)
+        self.assertEqual(unsafe_result["risk"], "yellow")
+        self.assertEqual(safe_result["risk"], "green")
+        self.assertTrue(any(item.get("pattern") == "untrusted_file_path" for item in unsafe_result["flags"]))
+
+    def test_xpath_string_buffer_flow_is_detected_without_category_hint(self):
+        unsafe = '''import io
+from flask import request
+value = request.form.get("employee")
+buffer = io.StringIO()
+buffer.write("/employees/employee[@id='")
+buffer.write(value)
+buffer.write("']")
+query = buffer.getvalue()
+nodes = root.xpath(query)'''
+        safe = unsafe.replace("buffer.write(value)", 'buffer.write("42")')
+        unsafe_result = main.analyze_code("Review this code before production", unsafe)
+        safe_result = main.analyze_code("Review this code before production", safe)
+        self.assertEqual(unsafe_result["risk"], "yellow")
+        self.assertEqual(safe_result["risk"], "green")
+        self.assertTrue(any(item.get("pattern") == "dynamic_xpath_query" for item in unsafe_result["flags"]))
+
+    def test_xxe_flow_is_detected_without_category_hint(self):
+        unsafe = '''from flask import request
+import xml.dom.minidom
+import xml.sax
+payload = request.data
+parser = xml.sax.make_parser()
+parser.setFeature(xml.sax.handler.feature_external_ges, True)
+document = xml.dom.minidom.parseString(payload, parser)'''
+        safe = unsafe.replace("True", "False")
+        unsafe_result = main.analyze_code("Review this code before production", unsafe)
+        safe_result = main.analyze_code("Review this code before production", safe)
+        self.assertEqual(unsafe_result["risk"], "yellow")
+        self.assertEqual(safe_result["risk"], "green")
+        self.assertTrue(any(item.get("pattern") == "xxe_external_entities" for item in unsafe_result["flags"]))
+
+    def test_weak_random_session_value_is_detected_without_category_hint(self):
+        unsafe = '''import random
+from helpers import mysession
+value = str(random.getrandbits(32))
+mysession["remember_me"] = value'''
+        safe = unsafe.replace("import random", "import secrets").replace(
+            "str(random.getrandbits(32))", "secrets.token_urlsafe(32)"
+        )
+        unsafe_result = main.analyze_code("Review this code before production", unsafe)
+        safe_result = main.analyze_code("Review this code before production", safe)
+        self.assertEqual(unsafe_result["risk"], "yellow")
+        self.assertEqual(safe_result["risk"], "green")
+        self.assertTrue(any(item.get("pattern") == "weak_random_security_value" for item in unsafe_result["flags"]))
+
 
 class SarifTests(unittest.TestCase):
     def test_sarif_is_github_compatible_shape(self):

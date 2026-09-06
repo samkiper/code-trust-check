@@ -20,6 +20,7 @@ from tests.test_scanner_benchmark import DANGEROUS_CASES, SAFE_CASES  # noqa: E4
 
 OWASP_REPOSITORY = "https://github.com/OWASP-Benchmark/BenchmarkPython.git"
 OWASP_REVISION = "f1291485808b66e20ddb6b01b10dc71b3df8c8ba"
+NEUTRAL_REVIEW_INTENT = "Review this code before it is used in production"
 
 
 def empty_counts() -> dict[str, int]:
@@ -94,27 +95,55 @@ def balanced_subset(rows: list[dict], limit: int) -> list[dict]:
     return selected
 
 
-def owasp_metrics(root: Path, limit: int) -> dict:
-    rows = balanced_subset(load_owasp_rows(root), limit)
+def held_out_subset(rows: list[dict], training_limit: int, holdout_limit: int) -> list[dict]:
+    """Select cases not present in the published category-assisted benchmark."""
+    published = balanced_subset(rows, training_limit)
+    published_names = {row["name"] for row in published}
+    remaining = [row for row in rows if row["name"] not in published_names]
+    return balanced_subset(remaining, holdout_limit)
+
+
+def metrics_for_rows(root: Path, rows: list[dict], intent_for_row) -> dict:
     overall = empty_counts()
     by_category = defaultdict(empty_counts)
     for row in rows:
         code = (root / "testcode" / f"{row['name']}.py").read_text(encoding="utf-8")
-        detected = analyze_code(f"Review this {row['category']} security case", code)["risk"] != "green"
+        detected = analyze_code(intent_for_row(row), code)["risk"] != "green"
         add_result(overall, row["expected"], detected)
         add_result(by_category[row["category"]], row["expected"], detected)
     return {
-        "source": "OWASP BenchmarkPython v0.1",
-        "revision": OWASP_REVISION,
-        "selection": "deterministic category-balanced subset",
         "overall": rates(overall),
         "by_vulnerability": {key: rates(value) for key, value in sorted(by_category.items())},
     }
 
 
+def owasp_metrics(root: Path, limit: int) -> dict:
+    rows = balanced_subset(load_owasp_rows(root), limit)
+    return {
+        "source": "OWASP BenchmarkPython v0.1",
+        "revision": OWASP_REVISION,
+        "selection": "deterministic category-balanced subset",
+        "intent_mode": "category-assisted",
+        **metrics_for_rows(root, rows, lambda row: f"Review this {row['category']} security case"),
+    }
+
+
+def owasp_no_hint_holdout_metrics(root: Path, training_limit: int, holdout_limit: int) -> dict:
+    rows = held_out_subset(load_owasp_rows(root), training_limit, holdout_limit)
+    return {
+        "source": "OWASP BenchmarkPython v0.1",
+        "revision": OWASP_REVISION,
+        "selection": "deterministic category-balanced cases excluded from the published 750-case set",
+        "intent_mode": "neutral; vulnerability category withheld",
+        **metrics_for_rows(root, rows, lambda _row: NEUTRAL_REVIEW_INTENT),
+    }
+
+
 def check_gate(report: dict, thresholds: dict) -> list[str]:
     failures = []
-    for suite in ("internal", "owasp"):
+    for suite in ("internal", "owasp", "owasp_no_hint_holdout"):
+        if suite not in thresholds:
+            continue
         actual = report[suite]["overall"]
         expected = thresholds[suite]
         if actual["cases"] < expected["minimum_cases"]:
@@ -154,6 +183,7 @@ def main() -> int:
     parser.add_argument("--owasp-dir", type=Path)
     parser.add_argument("--download-official", action="store_true")
     parser.add_argument("--limit", type=int, default=750)
+    parser.add_argument("--holdout-limit", type=int, default=300)
     parser.add_argument("--report", type=Path, default=PROJECT_ROOT / "accuracy-report.json")
     parser.add_argument("--thresholds", type=Path, default=PROJECT_ROOT / "tests" / "accuracy_thresholds.json")
     args = parser.parse_args()
@@ -167,14 +197,24 @@ def main() -> int:
         parser.error("provide --owasp-dir or --download-official")
 
     report = {
-        "schema_version": 1,
+        "schema_version": 2,
         "internal": internal_metrics(),
         "owasp": owasp_metrics(owasp_root, args.limit),
+        "owasp_no_hint_holdout": owasp_no_hint_holdout_metrics(
+            owasp_root,
+            args.limit,
+            args.holdout_limit,
+        ),
     }
     args.report.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     thresholds = json.loads(args.thresholds.read_text(encoding="utf-8"))
     failures = check_gate(report, thresholds)
-    print(json.dumps({"internal": report["internal"]["overall"], "owasp": report["owasp"]["overall"], "failures": failures}, indent=2))
+    print(json.dumps({
+        "internal": report["internal"]["overall"],
+        "owasp": report["owasp"]["overall"],
+        "owasp_no_hint_holdout": report["owasp_no_hint_holdout"]["overall"],
+        "failures": failures,
+    }, indent=2))
     if temp:
         temp.cleanup()
     return 1 if failures else 0

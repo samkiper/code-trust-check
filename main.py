@@ -1931,6 +1931,7 @@ def analyze_python_ast(code: str, intent: str = "") -> list[dict]:
     dynamic_sql_vars: set[str] = set()
     insecure_xml_parsers: set[str] = set()
     external_input_vars: set[str] = set()
+    weak_random_vars: set[str] = set()
     current_function_stack: list[str] = []
 
     def attribute_root_name(node: ast.AST) -> str:
@@ -2008,6 +2009,13 @@ def analyze_python_ast(code: str, intent: str = "") -> list[dict]:
             and isinstance(element.value, (str, int, float, bool, type(None)))
             for element in node.elts
         )
+
+    def is_weak_random_value(node: ast.AST) -> bool:
+        if isinstance(node, ast.Name):
+            return node.id in weak_random_vars
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            return attribute_root_name(node.func) == "random" and node.func.attr != "SystemRandom"
+        return any(is_weak_random_value(child) for child in ast.iter_child_nodes(node))
 
     def current_function_name() -> str:
         if not current_function_stack:
@@ -2094,6 +2102,10 @@ def analyze_python_ast(code: str, intent: str = "") -> list[dict]:
         def visit_Assign(self, node: ast.Assign):
             for target in node.targets:
                 if isinstance(target, ast.Name):
+                    if is_weak_random_value(node.value):
+                        weak_random_vars.add(target.id)
+                    else:
+                        weak_random_vars.discard(target.id)
                     if is_request_derived(node.value):
                         external_input_vars.add(target.id)
                     else:
@@ -2124,6 +2136,25 @@ def analyze_python_ast(code: str, intent: str = "") -> list[dict]:
                         tainted_vars.discard(target.id)
                     else:
                         fixed_literal_vars.discard(target.id)
+                elif (
+                    isinstance(target, ast.Subscript)
+                    and is_weak_random_value(node.value)
+                    and any(
+                        marker in ast.unparse(target.value).lower()
+                        for marker in ("session", "cookie", "token", "auth")
+                    )
+                ):
+                    ast_flags.append(make_flag(
+                        line=node.lineno,
+                        flag_type="weak_randomness",
+                        pattern="weak_random_security_value",
+                        message="Non-cryptographic randomness is stored as security-sensitive state",
+                        severity=14,
+                        explanation=(
+                            "Values from Python's random module are predictable and should not be used for session, "
+                            "cookie, token, or authentication state. Use the secrets module instead."
+                        ),
+                    ))
             self.generic_visit(node)
 
         def visit_AnnAssign(self, node: ast.AnnAssign):
@@ -2210,6 +2241,18 @@ def analyze_python_ast(code: str, intent: str = "") -> list[dict]:
                             explanation=(
                                 "secure=False permits the browser to send this cookie over plain HTTP. "
                                 "Use secure=True in production and keep HttpOnly and an appropriate SameSite policy enabled."
+                            ),
+                        ))
+                    if any(is_weak_random_value(argument) for argument in node.args[1:]):
+                        ast_flags.append(make_flag(
+                            line=node.lineno,
+                            flag_type="weak_randomness",
+                            pattern="weak_random_security_value",
+                            message="A predictable random value is written to a cookie",
+                            severity=14,
+                            explanation=(
+                                "Cookie values used for identity or state should be generated with the secrets module, "
+                                "not Python's predictable random module."
                             ),
                         ))
 
@@ -2519,10 +2562,7 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
         intent_lower,
         ["xss", "html", "web", "browser", "page", "template", "render", "display", "response"],
     )
-    path_context = intent_mentions_any(
-        intent_lower,
-        ["pathtraver", "path traversal", "file", "upload", "download", "filesystem", "directory"],
-    )
+    path_context = True
     ldap_context = True
     xpath_context = True
     redirect_context = True
@@ -2549,6 +2589,7 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
     assigned_names.update(
         node.arg for node in ast.walk(tree) if isinstance(node, ast.arg)
     )
+    insecure_xml_parsers: set[str] = set()
 
     def dotted_name(node: ast.AST) -> str:
         parts: list[str] = []
@@ -2668,6 +2709,13 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
                 or (path_context and (call_name in path_sanitizer_names or short_name in path_sanitizer_names))
             ):
                 return False
+            if (
+                isinstance(node.func, ast.Attribute)
+                and short_name in {"getvalue", "read", "readline", "readlines"}
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id in containers
+            ):
+                return True
             if call_name == "request.path" or call_name.startswith("request.path."):
                 return False
             if (
@@ -2764,6 +2812,25 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
                     return guarded
         return ""
 
+    def containment_guard_name(node: ast.AST) -> str:
+        candidate = node.operand if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not) else node
+        if not isinstance(candidate, ast.Call) or not isinstance(candidate.func, ast.Attribute):
+            return ""
+        if candidate.func.attr not in {"startswith", "is_relative_to"}:
+            return ""
+        receiver = candidate.func.value
+        if isinstance(receiver, ast.Name):
+            return receiver.id
+        if (
+            isinstance(receiver, ast.Call)
+            and isinstance(receiver.func, ast.Name)
+            and receiver.func.id == "str"
+            and receiver.args
+            and isinstance(receiver.args[0], ast.Name)
+        ):
+            return receiver.args[0].id
+        return ""
+
     def definitely_stops(statements: list[ast.stmt]) -> bool:
         return bool(statements) and isinstance(statements[-1], (ast.Return, ast.Raise))
 
@@ -2821,12 +2888,23 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
 
     def record_path_sink(call: ast.Call, tainted: set[str], containers: set[str], sanitized: set[str]) -> None:
         call_name = dotted_name(call.func)
-        is_path_sink = call_name == "open" or call_name.endswith(".open")
-        if not path_context or not is_path_sink or not call.args:
+        short_name = call_name.rsplit(".", 1)[-1]
+        path_methods = {
+            "exists", "is_file", "is_dir", "read_text", "read_bytes", "write_text", "write_bytes",
+            "unlink", "rmdir", "mkdir", "rename", "chmod", "touch", "stat",
+        }
+        argument = None
+        if call_name == "open" or call_name.endswith(".open"):
+            argument = call.args[0] if call.args else getattr(call.func, "value", None)
+        elif call_name.startswith("os.path.") and call.args:
+            argument = call.args[0]
+        elif short_name in path_methods and isinstance(call.func, ast.Attribute):
+            argument = call.func.value
+        if not path_context or argument is None:
             return
-        if not expr_tainted(call.args[0], tainted, containers):
+        if not expr_tainted(argument, tainted, containers):
             return
-        names = tainted_names(call.args[0], tainted, containers)
+        names = tainted_names(argument, tainted, containers)
         if names and names.issubset(sanitized):
             return
         findings.append(make_flag(
@@ -2844,6 +2922,15 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
     def record_security_sink(call: ast.Call, tainted: set[str], containers: set[str], sanitized: set[str]) -> None:
         call_name = dotted_name(call.func)
         short_name = call_name.rsplit(".", 1)[-1]
+        if short_name == "setFeature" and isinstance(call.func, ast.Attribute) and len(call.args) >= 2:
+            parser_name = call.func.value.id if isinstance(call.func.value, ast.Name) else ""
+            feature_name = ast.unparse(call.args[0]).lower()
+            enabled = call.args[1]
+            if parser_name and "external" in feature_name and isinstance(enabled, ast.Constant):
+                if enabled.value is True:
+                    insecure_xml_parsers.add(parser_name)
+                elif enabled.value is False:
+                    insecure_xml_parsers.discard(parser_name)
         argument = call.args[0] if call.args else None
         argument_names = tainted_names(argument, tainted, containers) if argument is not None else set()
         unknown_direct_argument = bool(
@@ -2861,6 +2948,24 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
                 )
             )
         )
+        if (
+            short_name in {"parseString", "parse"}
+            and unsafe_argument
+            and len(call.args) >= 2
+            and isinstance(call.args[1], ast.Name)
+            and call.args[1].id in insecure_xml_parsers
+        ):
+            findings.append(make_flag(
+                line=call.lineno,
+                flag_type="xml_external_entity",
+                pattern="xxe_external_entities",
+                message="Externally supplied XML is parsed with external entities enabled",
+                severity=24,
+                explanation=(
+                    "External entity resolution can read local files or make server-side network requests. "
+                    "Keep external entities disabled and use a hardened XML parser for untrusted input."
+                ),
+            ))
         if code_context and short_name in {"eval", "exec"} and unsafe_argument:
             pattern = f"{short_name}("
             findings.append(make_flag(
@@ -2959,6 +3064,7 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
     def record_nested_security_sinks(node: ast.AST, tainted: set[str], containers: set[str], sanitized: set[str]) -> None:
         for child in ast.walk(node):
             if isinstance(child, ast.Call):
+                record_path_sink(child, tainted, containers, sanitized)
                 record_security_sink(child, tainted, containers, sanitized)
 
     def process_block(statements, tainted=None, containers=None, constants=None, sanitized=None):
@@ -3069,6 +3175,7 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
                     tainted.add(target_name)
                 continue
             if isinstance(statement, ast.If):
+                record_nested_security_sinks(statement.test, tainted, containers, sanitized)
                 condition = const_value(statement.test, constants)
                 if condition is not unknown:
                     chosen = statement.body if bool(condition) else statement.orelse
@@ -3085,6 +3192,9 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
                     rejected_name = rejected_character_guard_name(statement.test)
                     if rejected_name and definitely_stops(statement.body) and falls_through:
                         sanitized.add(rejected_name)
+                    contained_name = containment_guard_name(statement.test)
+                    if contained_name and definitely_stops(statement.body) and falls_through:
+                        sanitized.add(contained_name)
                     if definitely_stops(statement.body) and falls_through:
                         tested_names = {child.id for child in ast.walk(statement.test) if isinstance(child, ast.Name)}
                         tested_attrs = {child.attr for child in ast.walk(statement.test) if isinstance(child, ast.Attribute)}
@@ -3095,6 +3205,7 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
                                     sanitized.update(marker[1])
                 continue
             if isinstance(statement, ast.Match):
+                record_nested_security_sinks(statement.subject, tainted, containers, sanitized)
                 subject = const_value(statement.subject, constants)
                 chosen_case = None
                 if subject is not unknown:
@@ -3121,6 +3232,8 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
                     tainted, containers, constants, sanitized, falls_through = merge_states(states)
                 continue
             if isinstance(statement, (ast.For, ast.While)):
+                loop_expression = statement.iter if isinstance(statement, ast.For) else statement.test
+                record_nested_security_sinks(loop_expression, tainted, containers, sanitized)
                 loop_tainted = set(tainted)
                 loop_containers = set(containers)
                 loop_constants = dict(constants)
@@ -3206,6 +3319,8 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
                     elif call_name == "add" and call.args and expr_tainted(call.args[0], tainted, containers):
                         containers.add(container_name)
                     elif call_name == "extend" and call.args and expr_tainted(call.args[0], tainted, containers):
+                        containers.add(container_name)
+                    elif call_name == "write" and call.args and expr_tainted(call.args[0], tainted, containers):
                         containers.add(container_name)
                     elif call_name == "set" and call.args:
                         key_values = tuple(
@@ -5440,10 +5555,13 @@ def stripe_status():
         "supabase_admin_valid": supabase_admin_is_valid(),
         "app_base_url": APP_BASE_URL,
         "recovery_version": 4,
-        "scanner_version": 12,
+        "scanner_version": 13,
         "security_version": 1,
-        "benchmark_cases": 803,
-        "benchmark_independent_cases": 803,
+        "benchmark_cases": 1103,
+        "benchmark_independent_cases": 300,
+        "benchmark_internal_cases": 53,
+        "benchmark_category_assisted_cases": 750,
+        "benchmark_no_hint_holdout_cases": 300,
         "benchmark_regression_variants": 265,
     }
 
@@ -5551,7 +5669,7 @@ def submit_feedback(req: FeedbackRequest, request: Request):
         "verdict": verdict,
         "category": req.category.strip()[:80],
         "note": req.note.strip()[:500],
-        "scanner_version": 12,
+        "scanner_version": 13,
     }
     inserted = supabase_rest_request("POST", "scan_feedback", payload=payload, prefer="return=representation")
     if not inserted:
