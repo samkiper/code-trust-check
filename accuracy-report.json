@@ -440,15 +440,15 @@
     "revision": "f1291485808b66e20ddb6b01b10dc71b3df8c8ba",
     "selection": "deterministic category-balanced subset",
     "overall": {
-      "tp": 153,
+      "tp": 179,
       "fp": 52,
       "tn": 391,
-      "fn": 154,
+      "fn": 128,
       "cases": 750,
-      "precision": 0.7463,
-      "recall": 0.4984,
+      "precision": 0.7749,
+      "recall": 0.5831,
       "false_positive_rate": 0.1174,
-      "f1": 0.5977
+      "f1": 0.6654
     },
     "by_vulnerability": {
       "cmdi": {
@@ -507,15 +507,15 @@
         "f1": 0.0
       },
       "pathtraver": {
-        "tp": 0,
+        "tp": 9,
         "fp": 0,
         "tn": 52,
-        "fn": 36,
+        "fn": 27,
         "cases": 88,
-        "precision": null,
-        "recall": 0.0,
+        "precision": 1.0,
+        "recall": 0.25,
         "false_positive_rate": 0.0,
-        "f1": 0.0
+        "f1": 0.4
       },
       "redirect": {
         "tp": 0,
@@ -584,15 +584,15 @@
         "f1": 0.0
       },
       "xss": {
-        "tp": 0,
+        "tp": 17,
         "fp": 0,
         "tn": 57,
-        "fn": 31,
+        "fn": 14,
         "cases": 88,
-        "precision": null,
-        "recall": 0.0,
+        "precision": 1.0,
+        "recall": 0.5484,
         "false_positive_rate": 0.0,
-        "f1": 0.0
+        "f1": 0.7083
       },
       "xxe": {
         "tp": 2,

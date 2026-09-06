@@ -6,7 +6,7 @@
   },
   "owasp": {
     "minimum_cases": 750,
-    "minimum_recall": 0.49,
+    "minimum_recall": 0.58,
     "maximum_false_positive_rate": 0.12
   },
   "owasp_categories": {
@@ -15,14 +15,14 @@
     "deserialization": {"minimum_recall": 1.0, "maximum_false_positive_rate": 0.34},
     "hash": {"minimum_recall": 1.0, "maximum_false_positive_rate": 0.0},
     "ldapi": {"minimum_recall": 0.0, "maximum_false_positive_rate": 0.01},
-    "pathtraver": {"minimum_recall": 0.0, "maximum_false_positive_rate": 0.01},
+    "pathtraver": {"minimum_recall": 0.25, "maximum_false_positive_rate": 0.0},
     "redirect": {"minimum_recall": 0.0, "maximum_false_positive_rate": 0.01},
     "securecookie": {"minimum_recall": 1.0, "maximum_false_positive_rate": 0.0},
     "sqli": {"minimum_recall": 1.0, "maximum_false_positive_rate": 0.0},
     "trustbound": {"minimum_recall": 0.0, "maximum_false_positive_rate": 0.01},
     "weakrand": {"minimum_recall": 1.0, "maximum_false_positive_rate": 0.0},
     "xpathi": {"minimum_recall": 0.0, "maximum_false_positive_rate": 0.01},
-    "xss": {"minimum_recall": 0.0, "maximum_false_positive_rate": 0.01},
+    "xss": {"minimum_recall": 0.54, "maximum_false_positive_rate": 0.0},
     "xxe": {"minimum_recall": 0.25, "maximum_false_positive_rate": 0.0}
   }
 }

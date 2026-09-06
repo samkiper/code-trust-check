@@ -2476,7 +2476,514 @@ def analyze_python_ast(code: str, intent: str = "") -> list[dict]:
             self.generic_visit(node)
 
     SecurityVisitor().visit(tree)
+    ast_flags.extend(analyze_python_web_dataflow(tree, intent_lower))
     return ast_flags
+
+
+def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
+    """Track request-derived values into web-response and filesystem sinks."""
+    findings: list[dict] = []
+    web_context = intent_mentions_any(
+        intent_lower,
+        ["xss", "html", "web", "browser", "page", "template", "render", "display", "response"],
+    )
+    path_context = intent_mentions_any(
+        intent_lower,
+        ["pathtraver", "path traversal", "file", "upload", "download", "filesystem", "directory"],
+    )
+    sanitizer_names = {
+        "escape",
+        "escape_for_html",
+        "html.escape",
+        "markupsafe.escape",
+        "bleach.clean",
+    }
+    path_sanitizer_names = {"basename", "secure_filename", "os.path.basename"}
+    unknown = object()
+
+    def dotted_name(node: ast.AST) -> str:
+        parts: list[str] = []
+        current = node
+        while isinstance(current, ast.Attribute):
+            parts.append(current.attr)
+            current = current.value
+        if isinstance(current, ast.Name):
+            parts.append(current.id)
+        return ".".join(reversed(parts))
+
+    def root_name(node: ast.AST) -> str:
+        current = node
+        while isinstance(current, (ast.Attribute, ast.Subscript)):
+            current = current.value
+        if isinstance(current, ast.Call):
+            return root_name(current.func)
+        return current.id if isinstance(current, ast.Name) else ""
+
+    def const_value(node: ast.AST, constants: dict[str, object]):
+        try:
+            if isinstance(node, ast.Constant):
+                return node.value
+            if isinstance(node, ast.Name):
+                return constants.get(node.id, unknown)
+            if isinstance(node, (ast.List, ast.Tuple)):
+                values = [const_value(item, constants) for item in node.elts]
+                if any(value is unknown for value in values):
+                    return unknown
+                return values if isinstance(node, ast.List) else tuple(values)
+            if isinstance(node, ast.Dict):
+                keys = [const_value(item, constants) for item in node.keys]
+                values = [const_value(item, constants) for item in node.values]
+                if any(value is unknown for value in keys + values):
+                    return unknown
+                return dict(zip(keys, values))
+            if isinstance(node, ast.Subscript):
+                value = const_value(node.value, constants)
+                index = const_value(node.slice, constants)
+                return unknown if value is unknown or index is unknown else value[index]
+            if isinstance(node, ast.UnaryOp):
+                value = const_value(node.operand, constants)
+                if value is unknown:
+                    return unknown
+                if isinstance(node.op, ast.Not):
+                    return not value
+                if isinstance(node.op, ast.USub):
+                    return -value
+                if isinstance(node.op, ast.UAdd):
+                    return +value
+            if isinstance(node, ast.BinOp):
+                left, right = const_value(node.left, constants), const_value(node.right, constants)
+                if left is unknown or right is unknown:
+                    return unknown
+                operations = {
+                    ast.Add: lambda: left + right,
+                    ast.Sub: lambda: left - right,
+                    ast.Mult: lambda: left * right,
+                    ast.Div: lambda: left / right,
+                    ast.FloorDiv: lambda: left // right,
+                    ast.Mod: lambda: left % right,
+                }
+                operation = operations.get(type(node.op))
+                return operation() if operation else unknown
+            if isinstance(node, ast.Compare) and len(node.ops) == len(node.comparators) == 1:
+                left = const_value(node.left, constants)
+                right = const_value(node.comparators[0], constants)
+                if left is unknown or right is unknown:
+                    return unknown
+                operation = node.ops[0]
+                if isinstance(operation, ast.Eq):
+                    return left == right
+                if isinstance(operation, ast.NotEq):
+                    return left != right
+                if isinstance(operation, ast.Gt):
+                    return left > right
+                if isinstance(operation, ast.GtE):
+                    return left >= right
+                if isinstance(operation, ast.Lt):
+                    return left < right
+                if isinstance(operation, ast.LtE):
+                    return left <= right
+                if isinstance(operation, ast.In):
+                    return left in right
+                if isinstance(operation, ast.NotIn):
+                    return left not in right
+            if isinstance(node, ast.IfExp):
+                condition = const_value(node.test, constants)
+                if condition is unknown:
+                    return unknown
+                return const_value(node.body if condition else node.orelse, constants)
+        except (KeyError, IndexError, TypeError, ValueError, ZeroDivisionError):
+            return unknown
+        return unknown
+
+    def expr_tainted(node: ast.AST, tainted: set[str], containers: set[str]) -> bool:
+        if isinstance(node, ast.Name):
+            return (
+                node.id in tainted
+                or node.id in containers
+                or any(isinstance(item, tuple) and item[0] == node.id for item in containers)
+            )
+        if isinstance(node, ast.Constant):
+            return False
+        if isinstance(node, ast.Call):
+            call_name = dotted_name(node.func)
+            if (
+                call_name in sanitizer_names
+                or call_name.rsplit(".", 1)[-1] in sanitizer_names
+                or call_name in path_sanitizer_names
+                or call_name.rsplit(".", 1)[-1] in path_sanitizer_names
+            ):
+                return False
+            if call_name == "request.path" or call_name.startswith("request.path."):
+                return False
+            if call_name.rsplit(".", 1)[-1] in {"get_form_parameter", "get_query_parameter"}:
+                return True
+            if root_name(node.func) == "request":
+                return True
+            if (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get"
+                and isinstance(node.func.value, ast.Name)
+                and node.args
+                and all(isinstance(argument, ast.Constant) for argument in node.args[:2])
+            ):
+                key_values = tuple(argument.value for argument in node.args[:2])
+                key = key_values[0] if len(key_values) == 1 else key_values
+                return (
+                    node.func.value.id in containers
+                    or (node.func.value.id, key) in containers
+                )
+            return (
+                expr_tainted(node.func.value, tainted, containers)
+                if isinstance(node.func, ast.Attribute)
+                else False
+            ) or any(expr_tainted(arg, tainted, containers) for arg in node.args) or any(
+                expr_tainted(keyword.value, tainted, containers) for keyword in node.keywords
+            )
+        if isinstance(node, ast.JoinedStr):
+            return any(
+                isinstance(value, ast.FormattedValue) and expr_tainted(value.value, tainted, containers)
+                for value in node.values
+            )
+        if isinstance(node, ast.FormattedValue):
+            return expr_tainted(node.value, tainted, containers)
+        if isinstance(node, ast.BinOp):
+            return expr_tainted(node.left, tainted, containers) or expr_tainted(node.right, tainted, containers)
+        if isinstance(node, ast.BoolOp):
+            return any(expr_tainted(value, tainted, containers) for value in node.values)
+        if isinstance(node, ast.IfExp):
+            return expr_tainted(node.body, tainted, containers) or expr_tainted(node.orelse, tainted, containers)
+        if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+            return any(expr_tainted(value, tainted, containers) for value in node.elts)
+        if isinstance(node, ast.Dict):
+            return any(expr_tainted(value, tainted, containers) for value in node.values)
+        if isinstance(node, ast.Subscript):
+            if isinstance(node.value, ast.Name) and isinstance(node.slice, ast.Constant):
+                return (
+                    node.value.id in containers
+                    or (node.value.id, node.slice.value) in containers
+                )
+            return root_name(node) == "request" or expr_tainted(node.value, tainted, containers)
+        if isinstance(node, ast.Attribute):
+            if dotted_name(node) == "request.path":
+                return False
+            return root_name(node) == "request" or expr_tainted(node.value, tainted, containers)
+        return False
+
+    def tainted_names(node: ast.AST, tainted: set[str], containers: set[str]) -> set[str]:
+        names = {
+            child.id
+            for child in ast.walk(node)
+            if isinstance(child, ast.Name) and (child.id in tainted or child.id in containers)
+        }
+        return names
+
+    def traversal_guard_name(node: ast.AST) -> str:
+        if isinstance(node, ast.Compare) and len(node.ops) == 1 and isinstance(node.ops[0], ast.In):
+            if isinstance(node.left, ast.Constant) and str(node.left.value) in {"..", "../", "..\\"}:
+                right_names = [child.id for child in ast.walk(node.comparators[0]) if isinstance(child, ast.Name)]
+                return right_names[0] if right_names else ""
+        return ""
+
+    def definitely_stops(statements: list[ast.stmt]) -> bool:
+        return bool(statements) and isinstance(statements[-1], (ast.Return, ast.Raise))
+
+    def merge_states(states):
+        continuing = [state for state in states if state[4]]
+        if not continuing:
+            return set(), set(), {}, set(), False
+        tainted = set().union(*(state[0] for state in continuing))
+        containers = set().union(*(state[1] for state in continuing))
+        sanitized = set.intersection(*(state[3] for state in continuing)) if len(continuing) > 1 else set(continuing[0][3])
+        shared_constants = dict(continuing[0][2])
+        for state in continuing[1:]:
+            shared_constants = {
+                key: value for key, value in shared_constants.items()
+                if key in state[2] and state[2][key] == value
+            }
+        return tainted, containers, shared_constants, sanitized, True
+
+    def assign_target(
+        target,
+        value_tainted,
+        value_constant,
+        tainted,
+        containers,
+        constants,
+        sanitized,
+        value_path_safe=False,
+    ):
+        if isinstance(target, ast.Name):
+            if value_tainted:
+                tainted.add(target.id)
+            else:
+                tainted.discard(target.id)
+            containers.discard(target.id)
+            containers.difference_update({
+                item for item in containers if isinstance(item, tuple) and item[0] == target.id
+            })
+            if value_path_safe:
+                sanitized.add(target.id)
+            else:
+                sanitized.discard(target.id)
+            if value_constant is unknown:
+                constants.pop(target.id, None)
+            else:
+                constants[target.id] = value_constant
+        elif isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name):
+            if isinstance(target.slice, ast.Constant):
+                item = (target.value.id, target.slice.value)
+                if value_tainted:
+                    containers.add(item)
+                else:
+                    containers.discard(item)
+            elif value_tainted:
+                containers.add(target.value.id)
+
+    def record_path_sink(call: ast.Call, tainted: set[str], containers: set[str], sanitized: set[str]) -> None:
+        call_name = dotted_name(call.func)
+        is_path_sink = call_name == "open" or call_name.endswith(".open")
+        if not path_context or not is_path_sink or not call.args:
+            return
+        if not expr_tainted(call.args[0], tainted, containers):
+            return
+        names = tainted_names(call.args[0], tainted, containers)
+        if names and names.issubset(sanitized):
+            return
+        findings.append(make_flag(
+            line=call.lineno,
+            flag_type="path_traversal",
+            pattern="untrusted_file_path",
+            message="Request-controlled data is used to choose a filesystem path",
+            severity=22,
+            explanation=(
+                "An attacker may use path segments such as ../ to access files outside the intended directory. "
+                "Resolve the candidate path, enforce that it remains under an allowed base directory, and reject traversal segments."
+            ),
+        ))
+
+    def process_block(statements, tainted=None, containers=None, constants=None, sanitized=None):
+        tainted = set(tainted or ())
+        containers = set(containers or ())
+        constants = dict(constants or {})
+        sanitized = set(sanitized or ())
+        falls_through = True
+        for statement in statements:
+            if not falls_through:
+                break
+            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                parameter_names = {
+                    argument.arg
+                    for argument in (
+                        list(statement.args.posonlyargs)
+                        + list(statement.args.args)
+                        + list(statement.args.kwonlyargs)
+                    )
+                }
+                if statement.args.vararg:
+                    parameter_names.add(statement.args.vararg.arg)
+                if statement.args.kwarg:
+                    parameter_names.add(statement.args.kwarg.arg)
+                process_block(statement.body, tainted=parameter_names)
+                continue
+            if isinstance(statement, ast.Assign):
+                if isinstance(statement.value, ast.Call):
+                    record_path_sink(statement.value, tainted, containers, sanitized)
+                value_constant = const_value(statement.value, constants)
+                value_tainted = (
+                    False
+                    if value_constant is not unknown
+                    else expr_tainted(statement.value, tainted, containers)
+                )
+                source_names = tainted_names(statement.value, tainted, containers)
+                value_path_safe = bool(source_names) and source_names.issubset(sanitized)
+                for target in statement.targets:
+                    assign_target(
+                        target,
+                        value_tainted,
+                        value_constant,
+                        tainted,
+                        containers,
+                        constants,
+                        sanitized,
+                        value_path_safe,
+                    )
+                continue
+            if isinstance(statement, ast.AnnAssign) and statement.value:
+                assign_target(
+                    statement.target,
+                    expr_tainted(statement.value, tainted, containers),
+                    const_value(statement.value, constants),
+                    tainted,
+                    containers,
+                    constants,
+                    sanitized,
+                )
+                continue
+            if isinstance(statement, ast.AugAssign):
+                value_tainted = expr_tainted(statement.value, tainted, containers)
+                target_name = statement.target.id if isinstance(statement.target, ast.Name) else ""
+                if web_context and value_tainted and target_name.lower() in {"response", "html", "body", "output"}:
+                    findings.append(make_flag(
+                        line=statement.lineno,
+                        flag_type="cross_site_scripting",
+                        pattern="unescaped_web_response",
+                        message="Unescaped request data is included in a web response",
+                        severity=22,
+                        explanation=(
+                            "Request-controlled text can become active browser content when it is returned without contextual escaping. "
+                            "Escape or sanitize the value at the output boundary, or render it through an auto-escaping template."
+                        ),
+                    ))
+                if target_name and value_tainted:
+                    tainted.add(target_name)
+                continue
+            if isinstance(statement, ast.If):
+                condition = const_value(statement.test, constants)
+                if condition is not unknown:
+                    chosen = statement.body if bool(condition) else statement.orelse
+                    tainted, containers, constants, sanitized, falls_through = process_block(
+                        chosen, tainted, containers, constants, sanitized
+                    )
+                else:
+                    body_state = process_block(statement.body, tainted, containers, constants, sanitized)
+                    else_state = process_block(statement.orelse, tainted, containers, constants, sanitized)
+                    tainted, containers, constants, sanitized, falls_through = merge_states([body_state, else_state])
+                    guarded_name = traversal_guard_name(statement.test)
+                    if guarded_name and definitely_stops(statement.body) and falls_through:
+                        sanitized.add(guarded_name)
+                continue
+            if isinstance(statement, ast.Match):
+                subject = const_value(statement.subject, constants)
+                chosen_case = None
+                if subject is not unknown:
+                    for case in statement.cases:
+                        pattern = case.pattern
+                        if isinstance(pattern, ast.MatchValue) and const_value(pattern.value, constants) == subject:
+                            chosen_case = case
+                            break
+                        if isinstance(pattern, ast.MatchOr) and any(
+                            isinstance(item, ast.MatchValue) and const_value(item.value, constants) == subject
+                            for item in pattern.patterns
+                        ):
+                            chosen_case = case
+                            break
+                        if isinstance(pattern, ast.MatchAs) and pattern.name is None:
+                            chosen_case = case
+                            break
+                if chosen_case:
+                    tainted, containers, constants, sanitized, falls_through = process_block(
+                        chosen_case.body, tainted, containers, constants, sanitized
+                    )
+                else:
+                    states = [process_block(case.body, tainted, containers, constants, sanitized) for case in statement.cases]
+                    tainted, containers, constants, sanitized, falls_through = merge_states(states)
+                continue
+            if isinstance(statement, (ast.For, ast.While)):
+                loop_state = process_block(statement.body, tainted, containers, constants, sanitized)
+                else_state = process_block(statement.orelse, tainted, containers, constants, sanitized)
+                tainted, containers, constants, sanitized, falls_through = merge_states([
+                    (tainted, containers, constants, sanitized, True), loop_state, else_state
+                ])
+                continue
+            if isinstance(statement, ast.Try):
+                states = [process_block(statement.body, tainted, containers, constants, sanitized)]
+                states.extend(process_block(handler.body, tainted, containers, constants, sanitized) for handler in statement.handlers)
+                if statement.orelse:
+                    states.append(process_block(statement.orelse, tainted, containers, constants, sanitized))
+                tainted, containers, constants, sanitized, falls_through = merge_states(states)
+                if statement.finalbody:
+                    tainted, containers, constants, sanitized, falls_through = process_block(
+                        statement.finalbody, tainted, containers, constants, sanitized
+                    )
+                continue
+            if isinstance(statement, (ast.With, ast.AsyncWith)):
+                for item in statement.items:
+                    if isinstance(item.context_expr, ast.Call):
+                        record_path_sink(item.context_expr, tainted, containers, sanitized)
+                tainted, containers, constants, sanitized, falls_through = process_block(
+                    statement.body, tainted, containers, constants, sanitized
+                )
+                continue
+            if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call):
+                call = statement.value
+                record_path_sink(call, tainted, containers, sanitized)
+                call_name = dotted_name(call.func).rsplit(".", 1)[-1]
+                if isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name):
+                    container_name = call.func.value.id
+                    if call_name == "append" and call.args:
+                        value_tainted = expr_tainted(call.args[0], tainted, containers)
+                        known_list = constants.get(container_name)
+                        if isinstance(known_list, list):
+                            index = len(known_list)
+                            known_list.append(unknown if value_tainted else const_value(call.args[0], constants))
+                            if value_tainted:
+                                containers.add((container_name, index))
+                            else:
+                                containers.discard((container_name, index))
+                        elif value_tainted:
+                            containers.add(container_name)
+                    elif call_name == "pop" and isinstance(constants.get(container_name), list):
+                        known_list = constants[container_name]
+                        raw_index = const_value(call.args[0], constants) if call.args else -1
+                        if isinstance(raw_index, int) and known_list:
+                            index = raw_index if raw_index >= 0 else len(known_list) + raw_index
+                            if 0 <= index < len(known_list):
+                                known_list.pop(index)
+                                shifted = set()
+                                for item in containers:
+                                    if isinstance(item, tuple) and item[0] == container_name and isinstance(item[1], int):
+                                        if item[1] == index:
+                                            continue
+                                        shifted.add((container_name, item[1] - 1 if item[1] > index else item[1]))
+                                    else:
+                                        shifted.add(item)
+                                containers.clear()
+                                containers.update(shifted)
+                    elif call_name == "add" and call.args and expr_tainted(call.args[0], tainted, containers):
+                        containers.add(container_name)
+                    elif call_name == "extend" and call.args and expr_tainted(call.args[0], tainted, containers):
+                        containers.add(container_name)
+                    elif call_name == "set" and call.args:
+                        key_values = tuple(
+                            argument.value for argument in call.args[:-1]
+                            if isinstance(argument, ast.Constant)
+                        )
+                        key = key_values[0] if len(key_values) == 1 else key_values
+                        if key_values and len(key_values) == len(call.args) - 1:
+                            item = (container_name, key)
+                            if expr_tainted(call.args[-1], tainted, containers):
+                                containers.add(item)
+                            else:
+                                containers.discard(item)
+                        elif expr_tainted(call.args[-1], tainted, containers):
+                            containers.add(container_name)
+                continue
+            if isinstance(statement, ast.Return):
+                if (
+                    web_context
+                    and statement.value
+                    and not isinstance(statement.value, ast.Name)
+                    and expr_tainted(statement.value, tainted, containers)
+                ):
+                    findings.append(make_flag(
+                        line=statement.lineno,
+                        flag_type="cross_site_scripting",
+                        pattern="unescaped_web_response",
+                        message="Unescaped request data is returned to a web client",
+                        severity=22,
+                        explanation=(
+                            "Request-controlled text can become active browser content when returned without contextual escaping. "
+                            "Escape or sanitize the value at the output boundary, or render it through an auto-escaping template."
+                        ),
+                    ))
+                falls_through = False
+                continue
+            if isinstance(statement, ast.Raise):
+                falls_through = False
+        return tainted, containers, constants, sanitized, falls_through
+
+    process_block(getattr(tree, "body", []))
+    return findings
 
 
 def dedupe_flags(flags: list[dict]) -> list[dict]:
@@ -4666,7 +5173,7 @@ def stripe_status():
         "supabase_admin_valid": supabase_admin_is_valid(),
         "app_base_url": APP_BASE_URL,
         "recovery_version": 4,
-        "scanner_version": 9,
+        "scanner_version": 10,
         "security_version": 1,
         "benchmark_cases": 803,
         "benchmark_independent_cases": 803,
@@ -4777,7 +5284,7 @@ def submit_feedback(req: FeedbackRequest, request: Request):
         "verdict": verdict,
         "category": req.category.strip()[:80],
         "note": req.note.strip()[:500],
-        "scanner_version": 9,
+        "scanner_version": 10,
     }
     inserted = supabase_rest_request("POST", "scan_feedback", payload=payload, prefer="return=representation")
     if not inserted:

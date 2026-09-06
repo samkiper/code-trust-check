@@ -105,6 +105,38 @@ class CryptographyAndCookieTests(unittest.TestCase):
 
 
 class InjectionAndParserTests(unittest.TestCase):
+    def test_request_path_requires_containment_or_traversal_rejection(self):
+        unsafe = '''from flask import request
+name = request.form.get("name")
+path = f"/srv/uploads/{name}"
+with open(path, "rb") as handle:
+    data = handle.read()'''
+        safe = unsafe.replace(
+            'path = f"/srv/uploads/{name}"',
+            'if "../" in name:\n    raise ValueError("bad path")\npath = f"/srv/uploads/{name}"',
+        )
+        unsafe_result = main.analyze_code("Read an uploaded file", unsafe)
+        safe_result = main.analyze_code("Read an uploaded file", safe)
+        self.assertEqual(unsafe_result["risk"], "yellow")
+        self.assertEqual(safe_result["risk"], "green")
+        self.assertTrue(any(item.get("pattern") == "untrusted_file_path" for item in unsafe_result["flags"]))
+
+    def test_web_response_requires_contextual_escaping(self):
+        unsafe = '''from flask import request
+comment = request.form.get("comment")
+response = ""
+response += f"<p>{comment}</p>"
+return response'''
+        safe = unsafe.replace(
+            'from flask import request',
+            'from flask import request\nfrom markupsafe import escape',
+        ).replace('{comment}', '{escape(comment)}')
+        unsafe_result = main.analyze_code("Display a submitted comment", unsafe)
+        safe_result = main.analyze_code("Display a submitted comment", safe)
+        self.assertEqual(unsafe_result["risk"], "yellow")
+        self.assertEqual(safe_result["risk"], "green")
+        self.assertTrue(any(item.get("pattern") == "unescaped_web_response" for item in unsafe_result["flags"]))
+
     def test_interpolated_sql_is_risky_but_parameterized_sql_is_clear(self):
         unsafe = "sql = f\"SELECT * FROM users WHERE name = '{name}'\"\ncursor.execute(sql)"
         safe = "sql = 'SELECT * FROM users WHERE name = ?'\ncursor.execute(sql, (name,))"
