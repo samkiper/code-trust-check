@@ -1,5 +1,5 @@
 from fastapi import BackgroundTasks, FastAPI, Request, HTTPException
-from fastapi.responses import FileResponse, Response, JSONResponse
+from fastapi.responses import FileResponse, Response, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import re
@@ -58,7 +58,7 @@ async def add_security_headers(request: Request, call_next):
     forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
     if request.url.scheme == "https" or forwarded_proto == "https":
         response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
-    if request.url.path.startswith(("/scan", "/auth/", "/stripe/")):
+    if request.url.path.startswith(("/scan", "/auth/", "/stripe/", "/github/")):
         response.headers.setdefault("Cache-Control", "no-store, max-age=0")
         response.headers.setdefault("Pragma", "no-cache")
     return response
@@ -214,6 +214,8 @@ GITHUB_WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET", "").strip()
 GITHUB_APP_SLUG = os.getenv("GITHUB_APP_SLUG", "").strip()
 GITHUB_ENFORCE_PRO = os.getenv("GITHUB_ENFORCE_PRO", "false").strip().lower() in {"1", "true", "yes", "on"}
 GITHUB_LINK_STATE_SECRET = os.getenv("GITHUB_LINK_STATE_SECRET", "").strip() or GITHUB_WEBHOOK_SECRET
+GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "").strip()
+GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 
 SCANNER_VERSION = 17
 
@@ -5699,13 +5701,18 @@ def github_installation_entitlement(installation_id: int) -> dict:
     }
 
 
-def create_github_install_state(user_id: str, ttl_seconds: int = 900) -> str:
+def create_github_install_state(
+    user_id: str,
+    ttl_seconds: int = 900,
+    purpose: str = "installation",
+) -> str:
     if not GITHUB_LINK_STATE_SECRET:
         raise RuntimeError("GitHub installation linking is not configured")
     payload = {
         "user_id": str(user_id),
         "exp": int(time.time()) + max(60, min(int(ttl_seconds), 1800)),
         "nonce": secrets.token_urlsafe(10),
+        "purpose": str(purpose),
     }
     encoded = base64.urlsafe_b64encode(
         json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
@@ -5714,24 +5721,133 @@ def create_github_install_state(user_id: str, ttl_seconds: int = 900) -> str:
     return f"{encoded}.{signature}"
 
 
-def verify_github_install_state(state: str, expected_user_id: str) -> bool:
+def read_github_install_state(state: str, expected_purpose: str = "installation") -> dict:
     if not GITHUB_LINK_STATE_SECRET or not state or len(state) > 1000:
-        return False
+        return {}
     try:
         encoded, supplied_signature = state.rsplit(".", 1)
         expected_signature = hmac.new(
             GITHUB_LINK_STATE_SECRET.encode("utf-8"), encoded.encode("ascii"), hashlib.sha256
         ).hexdigest()
         if not hmac.compare_digest(supplied_signature, expected_signature):
-            return False
+            return {}
         padded = encoded + "=" * (-len(encoded) % 4)
         payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
-        return (
-            str(payload.get("user_id") or "") == str(expected_user_id)
-            and int(payload.get("exp") or 0) >= int(time.time())
-        )
+        if int(payload.get("exp") or 0) < int(time.time()):
+            return {}
+        if str(payload.get("purpose") or "installation") != str(expected_purpose):
+            return {}
+        return payload
     except Exception:
-        return False
+        return {}
+
+
+def verify_github_install_state(
+    state: str,
+    expected_user_id: str,
+    expected_purpose: str = "installation",
+) -> bool:
+    payload = read_github_install_state(state, expected_purpose)
+    return str(payload.get("user_id") or "") == str(expected_user_id)
+
+
+def github_oauth_callback_url() -> str:
+    return f"{APP_BASE_URL}/github/oauth/callback"
+
+
+def github_oauth_authorize_url(user_id: str) -> str:
+    if not GITHUB_CLIENT_ID or not GITHUB_CLIENT_SECRET or not GITHUB_LINK_STATE_SECRET:
+        raise RuntimeError("GitHub user authorization is not configured")
+    state = create_github_install_state(user_id, purpose="oauth")
+    return "https://github.com/login/oauth/authorize?" + urlencode({
+        "client_id": GITHUB_CLIENT_ID,
+        "redirect_uri": github_oauth_callback_url(),
+        "state": state,
+    })
+
+
+def github_oauth_exchange(code: str) -> str:
+    if not code or len(code) > 500:
+        raise ValueError("GitHub returned an invalid authorization code")
+    data = json.dumps({
+        "client_id": GITHUB_CLIENT_ID,
+        "client_secret": GITHUB_CLIENT_SECRET,
+        "code": code,
+        "redirect_uri": github_oauth_callback_url(),
+    }).encode("utf-8")
+    request = urllib.request.Request(
+        "https://github.com/login/oauth/access_token",
+        data=data,
+        method="POST",
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "AI-Code-Audit",
+        },
+    )
+    with urllib.request.urlopen(
+        request,
+        timeout=20,
+        context=ssl.create_default_context(cafile=certifi.where()),
+    ) as response:
+        payload = json.loads(response.read().decode("utf-8") or "{}")
+    token = str(payload.get("access_token") or "") if isinstance(payload, dict) else ""
+    if not token:
+        raise RuntimeError("GitHub did not issue a user access token")
+    return token
+
+
+def list_github_user_installations(token: str) -> tuple[dict, list[dict]]:
+    user = github_api_request("GET", "https://api.github.com/user", token)
+    if not isinstance(user, dict) or not user.get("login"):
+        raise RuntimeError("GitHub did not return the authorized user")
+    installations: list[dict] = []
+    for page in range(1, 11):
+        result = github_api_request(
+            "GET",
+            f"https://api.github.com/user/installations?per_page=100&page={page}",
+            token,
+        )
+        page_items = result.get("installations") if isinstance(result, dict) else []
+        if not isinstance(page_items, list):
+            raise RuntimeError("GitHub returned an invalid installation list")
+        installations.extend(
+            item for item in page_items
+            if isinstance(item, dict) and str(item.get("app_id") or "") == str(GITHUB_APP_ID)
+        )
+        if len(page_items) < 100:
+            break
+    return user, installations
+
+
+def github_user_has_pro(user_id: str) -> bool:
+    user = get_supabase_admin_user(str(user_id)) or {}
+    metadata = user.get("app_metadata") or {}
+    role = str(metadata.get("role") or "user").lower()
+    plan = str(metadata.get("plan") or ("admin" if role == "admin" else "free")).lower()
+    return role == "admin" or plan == "pro"
+
+
+def save_github_installation_link(user_id: str, installation: dict) -> dict:
+    installation_id = int(installation.get("id") or 0)
+    if installation_id <= 0:
+        return {}
+    account = installation.get("account") or {}
+    payload = {
+        "installation_id": installation_id,
+        "user_id": str(user_id),
+        "account_login": str(account.get("login") or "")[:255],
+        "account_type": str(account.get("type") or "")[:80],
+        "status": "active",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    saved = supabase_rest_request(
+        "POST",
+        "github_installations",
+        payload=payload,
+        prefer="resolution=merge-duplicates,return=representation",
+    )
+    return payload if saved else {}
 
 
 def list_github_pull_request_files(full_name: str, pull_request_number: int, token: str) -> list[dict]:
@@ -6021,7 +6137,24 @@ def github_status():
         "dynamic_sandbox": "not_enabled",
         "pro_enforcement": GITHUB_ENFORCE_PRO,
         "secure_linking": bool(GITHUB_LINK_STATE_SECRET),
+        "existing_install_linking": bool(GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET and GITHUB_LINK_STATE_SECRET),
         "scanner_version": SCANNER_VERSION,
+    })
+
+
+@app.get("/github/connect-url")
+def github_connect_url(request: Request):
+    access = enrich_access_with_admin_metadata(get_request_access_context(request))
+    enforce_rate_limit(request, access, "billing")
+    if not access.get("authenticated") or not access.get("user_id"):
+        return private_json({"detail": "Sign in before connecting GitHub."}, status_code=401)
+    if access.get("plan") not in {"pro", "admin"} and access.get("role") != "admin":
+        return private_json({"detail": "An active Pro account is required for automatic pull-request checks."}, status_code=403)
+    if not GITHUB_CLIENT_ID or not GITHUB_CLIENT_SECRET or not GITHUB_LINK_STATE_SECRET:
+        return private_json({"detail": "Connecting an existing GitHub installation is not configured yet."}, status_code=503)
+    return private_json({
+        "url": github_oauth_authorize_url(str(access["user_id"])),
+        "expires_in": 900,
     })
 
 
@@ -6040,6 +6173,75 @@ def github_install_url(request: Request):
     return private_json({
         "url": f"https://github.com/apps/{valid_slug}/installations/new?{urlencode({'state': state})}",
         "expires_in": 900,
+    })
+
+
+@app.get("/github/oauth/callback")
+def github_oauth_callback(code: str = "", state: str = "", error: str = ""):
+    def home_redirect(result: str, **extra: str | int) -> RedirectResponse:
+        query = {"github": result, **extra}
+        return RedirectResponse(
+            f"{APP_BASE_URL}/?{urlencode(query)}",
+            status_code=303,
+            headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
+        )
+
+    if error:
+        return home_redirect("cancelled")
+    payload = read_github_install_state(state, "oauth")
+    user_id = str(payload.get("user_id") or "")
+    if not user_id or not github_user_has_pro(user_id):
+        return home_redirect("error")
+    try:
+        token = github_oauth_exchange(code)
+        github_user, installations = list_github_user_installations(token)
+        if not installations:
+            valid_slug = GITHUB_APP_SLUG if GITHUB_APP_SLUG_PATTERN.fullmatch(GITHUB_APP_SLUG) else ""
+            if not valid_slug:
+                return home_redirect("error")
+            install_state = create_github_install_state(user_id, purpose="installation")
+            install_url = f"https://github.com/apps/{valid_slug}/installations/new?" + urlencode({
+                "state": install_state,
+            })
+            return RedirectResponse(
+                install_url,
+                status_code=303,
+                headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
+            )
+        saved = [save_github_installation_link(user_id, item) for item in installations]
+        if not all(saved):
+            raise RuntimeError("One or more GitHub installation links could not be saved")
+        return home_redirect(
+            "connected",
+            github_account=str(github_user.get("login") or "")[:255],
+            github_installations=len(saved),
+        )
+    except Exception as exc:
+        log_server_issue("GitHub user authorization failed", exc)
+        return home_redirect("error")
+
+
+@app.get("/github/account-status")
+def github_account_status(request: Request):
+    access = enrich_access_with_admin_metadata(get_request_access_context(request))
+    enforce_rate_limit(request, access, "billing")
+    if not access.get("authenticated") or not access.get("user_id"):
+        return private_json({"detail": "Sign in to view connected GitHub installations."}, status_code=401)
+    rows = supabase_rest_request(
+        "GET",
+        "github_installations",
+        query=urlencode({
+            "user_id": f"eq.{access['user_id']}",
+            "status": "eq.active",
+            "select": "installation_id,account_login,account_type,status,updated_at",
+            "order": "updated_at.desc",
+        }),
+    )
+    installations = rows if isinstance(rows, list) else []
+    return private_json({
+        "connected": bool(installations),
+        "installations": installations,
+        "count": len(installations),
     })
 
 
@@ -6065,22 +6267,8 @@ def link_github_installation(req: GitHubInstallationLinkRequest, request: Reques
         return private_json({"detail": "GitHub could not verify that installation for this App."}, status_code=400)
     if not isinstance(installation, dict) or int(installation.get("id") or 0) != req.installation_id:
         return private_json({"detail": "GitHub returned an invalid installation record."}, status_code=400)
-    account = installation.get("account") or {}
-    payload = {
-        "installation_id": req.installation_id,
-        "user_id": str(access["user_id"]),
-        "account_login": str(account.get("login") or "")[:255],
-        "account_type": str(account.get("type") or "")[:80],
-        "status": "active",
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }
-    saved = supabase_rest_request(
-        "POST",
-        "github_installations",
-        payload=payload,
-        prefer="resolution=merge-duplicates,return=representation",
-    )
-    if not saved:
+    payload = save_github_installation_link(str(access["user_id"]), installation)
+    if not payload:
         return private_json({"detail": "GitHub linking storage is not configured yet."}, status_code=503)
     return private_json({
         "linked": True,

@@ -11,7 +11,7 @@
 - Signed-in users can mark findings accurate, report false alarms, or report a missed risk. Feedback records fingerprints and labels only; submitted code is not stored.
 - Dependency review checks published advisories, likely package-name typos, missing registry packages, and unpinned direct-source installs.
 - Review-only “Fix this safely” previews cover unsafe YAML loading, disabled TLS verification, production debug mode, and dynamic `eval`.
-- Scanner v17 adds action-oriented verdicts, language and coverage disclosures, explicit static-analysis limitations, complete finding access, GitHub check reruns, and opt-in Pro enforcement for linked GitHub installations. Detection weights remain unchanged from v16.
+- Scanner v17 adds action-oriented verdicts, language and coverage disclosures, explicit static-analysis limitations, complete finding access, GitHub check reruns, and opt-in Pro enforcement for linked GitHub installations. The production patch also supports securely connecting GitHub Apps that were installed before account linking was enabled. Detection weights remain unchanged from v16.
 
 ## Accuracy gate
 
@@ -38,10 +38,12 @@ In Supabase, open **SQL Editor**, paste the contents of `supabase/scan_feedback.
 ## GitHub Pro-link setup for v17
 
 1. In Supabase **SQL Editor**, run `supabase/github_installations.sql` once.
-2. In the GitHub App settings, set the **Setup URL** to `https://code-trust-check.onrender.com/` and enable the redirect after installation updates.
-3. Subscribe the GitHub App to both **Pull request** and **Check run** events. Check-run delivery enables GitHub's **Re-run checks** control.
-4. Deploy v17 with `GITHUB_ENFORCE_PRO=false` first and complete one signed-in Pro installation-link test.
-5. After that test succeeds, set `GITHUB_ENFORCE_PRO=true` in Render and redeploy. Unlinked or non-Pro installations then receive a neutral check explaining how to connect Pro instead of a scan.
+2. In the GitHub App settings, add `https://code-trust-check.onrender.com/github/oauth/callback` as a **Callback URL**.
+3. Generate a GitHub App client secret and store the App's client ID and secret in Render as `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`.
+4. Set the GitHub App **Setup URL** to `https://code-trust-check.onrender.com/` and enable the redirect after installation updates.
+5. Subscribe the GitHub App to both **Pull request** and **Check run** events. Check-run delivery enables GitHub's **Re-run checks** control.
+6. Deploy v17 with `GITHUB_ENFORCE_PRO=false` first and complete one signed-in Pro installation-link test. **Connect GitHub** authorizes the GitHub user and links only installations GitHub confirms that user can access. If none exist, the same flow continues to a new installation.
+7. After that test succeeds, set `GITHUB_ENFORCE_PRO=true` in Render and redeploy. Unlinked or non-Pro installations then receive a neutral check explaining how to connect Pro instead of a scan.
 
 The installation link is verified directly against GitHub before it is stored. Browser users cannot read or write the installation table directly.
 
@@ -57,6 +59,8 @@ To activate GitHub pull-request checks, create a GitHub App and add these Render
 | `GITHUB_PRIVATE_KEY` | The complete PEM private key |
 | `GITHUB_WEBHOOK_SECRET` | A new random webhook secret |
 | `GITHUB_APP_SLUG` | The public slug from the GitHub App URL, used to show the install button |
+| `GITHUB_CLIENT_ID` | The GitHub App client ID used for existing-installation authorization |
+| `GITHUB_CLIENT_SECRET` | A GitHub App client secret; never expose this in browser code |
 | `GITHUB_ENFORCE_PRO` | Start with `false`; change to `true` only after the v17 linking test succeeds |
 | `GITHUB_LINK_STATE_SECRET` | A separate random secret used to sign the short-lived installation ownership token |
 

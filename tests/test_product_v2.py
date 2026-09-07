@@ -7,6 +7,7 @@ import unittest
 import zipfile
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlparse
 
 import main
 from fastapi import BackgroundTasks, HTTPException
@@ -35,6 +36,62 @@ class ProductIntegrityV17Tests(unittest.TestCase):
             self.assertFalse(main.verify_github_install_state(state, "user-2"))
             self.assertFalse(main.verify_github_install_state(state + "tampered", "user-1"))
 
+    def test_github_install_and_oauth_states_cannot_be_interchanged(self):
+        with patch.object(main, "GITHUB_LINK_STATE_SECRET", "state-secret"):
+            install_state = main.create_github_install_state("user-1", purpose="installation")
+            oauth_state = main.create_github_install_state("user-1", purpose="oauth")
+        with patch.object(main, "GITHUB_LINK_STATE_SECRET", "state-secret"):
+            self.assertTrue(main.verify_github_install_state(install_state, "user-1", "installation"))
+            self.assertFalse(main.verify_github_install_state(install_state, "user-1", "oauth"))
+            self.assertEqual(main.read_github_install_state(oauth_state, "oauth")["user_id"], "user-1")
+
+    def test_existing_installation_authorization_url_uses_callback_and_signed_state(self):
+        with patch.object(main, "GITHUB_CLIENT_ID", "client-id"), \
+                patch.object(main, "GITHUB_CLIENT_SECRET", "client-secret"), \
+                patch.object(main, "GITHUB_LINK_STATE_SECRET", "state-secret"), \
+                patch.object(main, "APP_BASE_URL", "https://audit.example"):
+            url = main.github_oauth_authorize_url("user-1")
+            query = parse_qs(urlparse(url).query)
+            self.assertEqual(query["client_id"], ["client-id"])
+            self.assertEqual(query["redirect_uri"], ["https://audit.example/github/oauth/callback"])
+            self.assertEqual(main.read_github_install_state(query["state"][0], "oauth")["user_id"], "user-1")
+
+    def test_oauth_installation_listing_keeps_only_this_github_app(self):
+        responses = [
+            {"login": "samkiper"},
+            {"installations": [
+                {"id": 10, "app_id": 123, "account": {"login": "samkiper"}},
+                {"id": 20, "app_id": 999, "account": {"login": "someone-else"}},
+            ]},
+        ]
+        with patch.object(main, "GITHUB_APP_ID", "123"), \
+                patch.object(main, "github_api_request", side_effect=responses):
+            user, installations = main.list_github_user_installations("user-token")
+        self.assertEqual(user["login"], "samkiper")
+        self.assertEqual([item["id"] for item in installations], [10])
+
+    def test_oauth_callback_links_an_existing_verified_installation(self):
+        with patch.object(main, "GITHUB_LINK_STATE_SECRET", "state-secret"):
+            state = main.create_github_install_state("user-1", purpose="oauth")
+        installation = {"id": 10, "app_id": 123, "account": {"login": "samkiper"}}
+        with patch.object(main, "GITHUB_LINK_STATE_SECRET", "state-secret"), \
+                patch.object(main, "github_user_has_pro", return_value=True), \
+                patch.object(main, "github_oauth_exchange", return_value="user-token"), \
+                patch.object(main, "list_github_user_installations", return_value=({"login": "samkiper"}, [installation])), \
+                patch.object(main, "save_github_installation_link", return_value={"installation_id": 10}):
+            response = main.github_oauth_callback(code="code", state=state)
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("github=connected", response.headers["location"])
+        self.assertIn("github_account=samkiper", response.headers["location"])
+
+    def test_oauth_callback_rejects_invalid_state_before_exchanging_code(self):
+        with patch.object(main, "GITHUB_LINK_STATE_SECRET", "state-secret"), \
+                patch.object(main, "github_oauth_exchange") as exchange:
+            response = main.github_oauth_callback(code="code", state="invalid")
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("github=error", response.headers["location"])
+        exchange.assert_not_called()
+
     def test_safe_result_uses_supported_signal_language_and_action(self):
         with patch.object(main, "SEMGREP_ENABLED", False):
             result = main.analyze_code_product("Print a greeting", "print('hello')", filename="hello.py")
@@ -56,6 +113,8 @@ class ProductIntegrityV17Tests(unittest.TestCase):
         self.assertNotIn("Behavior matches intent", html)
         self.assertIn("No supported risk signals found", html)
         self.assertIn("Show all ", html)
+        self.assertIn('/github/connect-url', html)
+        self.assertIn('id="githubAccountCard"', html)
 
 
 class FixPreviewTests(unittest.TestCase):
