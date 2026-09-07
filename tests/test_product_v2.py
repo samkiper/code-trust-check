@@ -580,7 +580,8 @@ class GitHubWebhookTests(unittest.TestCase):
         archive = io.BytesIO()
         with zipfile.ZipFile(archive, "w") as output:
             output.writestr("owner-repo-sha/app.py", "eval(user_input)")
-        with patch.object(main, "github_installation_token", return_value="token"), \
+        with patch.object(main, "GITHUB_ENFORCE_PRO", False), \
+                patch.object(main, "github_installation_token", return_value="token"), \
                 patch.object(main, "list_github_pull_request_files", return_value=[{"filename": "app.py"}]), \
                 patch.object(main, "download_github_archive", return_value=archive.getvalue()), \
                 patch.object(main, "analyze_code", return_value={"flags": [{
@@ -606,7 +607,8 @@ class GitHubWebhookTests(unittest.TestCase):
         self.assertIn("Suggested fix:", annotation["message"])
 
     def test_scan_failure_is_reported_as_non_blocking_neutral(self):
-        with patch.object(main, "github_installation_token", return_value="token"), \
+        with patch.object(main, "GITHUB_ENFORCE_PRO", False), \
+                patch.object(main, "github_installation_token", return_value="token"), \
                 patch.object(main, "list_github_pull_request_files", side_effect=RuntimeError("temporary")), \
                 patch.object(main, "upsert_github_check", return_value={}) as upsert:
             main.process_github_pull_request(1, "owner/repo", 5, "d" * 40)
