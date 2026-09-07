@@ -6,12 +6,13 @@
 - A local Semgrep engine independently checks structural security rules. Code is written only to a temporary directory for the scan and is not sent to Semgrep's registry or telemetry service.
 - Results include six evidence categories, reviewable patch previews, JSON downloads, and SARIF 2.1 output.
 - A GitHub App webhook scans changed supported pull-request files and publishes a monitor-only GitHub Check with line annotations.
-- The regression suite contains 265 formatting variants derived from 53 labeled base scenarios.
-- The accuracy gate measures 53 internal cases, 750 category-assisted OWASP BenchmarkPython cases, and a separate 300-case OWASP holdout scanned without vulnerability-category hints.
+- The regression suite contains 325 formatting variants derived from 65 labeled base scenarios.
+- The accuracy gate measures 65 internal cases, 750 category-assisted OWASP BenchmarkPython cases, and a separate 300-case OWASP holdout scanned without vulnerability-category hints.
 - Signed-in users can mark findings accurate, report false alarms, or report a missed risk. Feedback records fingerprints and labels only; submitted code is not stored.
 - Dependency review checks published advisories, likely package-name typos, missing registry packages, and unpinned direct-source installs.
 - Review-only “Fix this safely” previews cover unsafe YAML loading, disabled TLS verification, production debug mode, and dynamic `eval`.
 - Scanner v18 adds a signed-in security dashboard with connected repositories, the latest 25 pull-request scans, severity counts, expandable finding explanations, and false-positive feedback. Stored history contains metadata and finding explanations only; source code is never stored. Detection rules and weights remain unchanged from v17.
+- Scanner v19 adds shared Supabase rate limiting, an admin-only feedback review queue and sanitized candidate export, common direct-manifest and lockfile parsing across six dependency ecosystems, and typed JavaScript/TypeScript regression coverage.
 
 ## Accuracy gate
 
@@ -33,7 +34,15 @@ Also configure Render to wait for GitHub checks before auto-deploying when that 
 
 ## Feedback setup
 
-In Supabase, open **SQL Editor**, paste the contents of `supabase/scan_feedback.sql`, and run it once. The table has row-level security enabled and denies browser clients direct access; the authenticated backend writes the minimal feedback record with the existing Supabase secret key.
+In Supabase, open **SQL Editor**, paste the current contents of `supabase/scan_feedback.sql`, and run it. For v19 this safely adds review status, reviewer metadata, and queue indexes to an existing table. The table has row-level security enabled and denies browser clients direct access; the authenticated backend writes the minimal feedback record with the existing Supabase secret key. Admins see the review queue from the account menu. Exported candidates contain fingerprints and reviewed labels, never scanned source, and are explicitly marked incomplete until a minimal reproducer is independently reviewed.
+
+## Persistent rate-limit setup for v19
+
+In Supabase **SQL Editor**, run `supabase/rate_limits.sql` once. The function atomically counts requests across Render restarts and multiple service instances. Bucket identifiers are one-way hashes, browser roles have no access, and the backend falls back to a local limiter if Supabase is temporarily unavailable. `PERSISTENT_RATE_LIMITS_ENABLED` defaults to `true`; set it to `false` only during incident recovery.
+
+## Dependency coverage for v19
+
+Repository scans now parse supported entries from `requirements.txt`, `pyproject.toml`, `poetry.lock`, `uv.lock`, `package.json`, npm/Yarn/pnpm lockfiles, `go.mod`, `Cargo.lock`, `composer.lock`, and `Gemfile.lock`. OSV coverage spans PyPI, npm, Go, crates.io, Packagist, and RubyGems. Complex ranges, private registries, generated manifests, and platform-specific resolution may still be skipped and are disclosed in scan coverage.
 
 ## Security dashboard setup for v18
 
@@ -67,6 +76,7 @@ To activate GitHub pull-request checks, create a GitHub App and add these Render
 | `GITHUB_CLIENT_SECRET` | A GitHub App client secret; never expose this in browser code |
 | `GITHUB_ENFORCE_PRO` | Keep `true` after the GitHub installation-link acceptance test succeeds |
 | `GITHUB_LINK_STATE_SECRET` | A separate random secret used to sign the short-lived installation ownership token |
+| `PERSISTENT_RATE_LIMITS_ENABLED` | Optional; defaults to `true`. Set `false` only for incident recovery |
 
 Configure the GitHub App with:
 

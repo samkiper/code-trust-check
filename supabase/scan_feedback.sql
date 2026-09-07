@@ -8,12 +8,37 @@ create table if not exists public.scan_feedback (
   category text not null default '',
   note text not null default '',
   scanner_version integer not null,
+  review_status text not null default 'pending',
+  review_note text not null default '',
+  reviewed_at timestamptz,
+  reviewed_by uuid references auth.users(id) on delete set null,
+  updated_at timestamptz not null default now(),
   unique (user_id, scan_id, finding_id, verdict)
 );
+
+alter table public.scan_feedback add column if not exists review_status text not null default 'pending';
+alter table public.scan_feedback add column if not exists review_note text not null default '';
+alter table public.scan_feedback add column if not exists reviewed_at timestamptz;
+alter table public.scan_feedback add column if not exists reviewed_by uuid references auth.users(id) on delete set null;
+alter table public.scan_feedback add column if not exists updated_at timestamptz not null default now();
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'scan_feedback_review_status_check'
+  ) then
+    alter table public.scan_feedback
+      add constraint scan_feedback_review_status_check
+      check (review_status in ('pending', 'accepted', 'dismissed'));
+  end if;
+end $$;
 
 alter table public.scan_feedback enable row level security;
 
 create index if not exists scan_feedback_scanner_version_idx
   on public.scan_feedback (scanner_version, verdict, created_at desc);
+
+create index if not exists scan_feedback_review_queue_idx
+  on public.scan_feedback (review_status, created_at desc);
 
 revoke all on public.scan_feedback from anon, authenticated;

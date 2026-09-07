@@ -1,6 +1,6 @@
 {
   "internal": {
-    "minimum_cases": 53,
+    "minimum_cases": 65,
     "minimum_recall": 1.0,
     "maximum_false_positive_rate": 0.0
   },

@@ -28,7 +28,7 @@ class EvidenceModelTests(unittest.TestCase):
         self.assertEqual(execution["status"], "high")
 
 
-class ProductIntegrityV18Tests(unittest.TestCase):
+class ProductIntegrityV19Tests(unittest.TestCase):
     def test_github_install_state_is_signed_and_bound_to_user(self):
         with patch.object(main, "GITHUB_LINK_STATE_SECRET", "state-secret"):
             state = main.create_github_install_state("user-1")
@@ -95,7 +95,7 @@ class ProductIntegrityV18Tests(unittest.TestCase):
     def test_safe_result_uses_supported_signal_language_and_action(self):
         with patch.object(main, "SEMGREP_ENABLED", False):
             result = main.analyze_code_product("Print a greeting", "print('hello')", filename="hello.py")
-        self.assertEqual(result["scanner_version"], 18)
+        self.assertEqual(result["scanner_version"], 19)
         self.assertEqual(result["verdict"]["id"], "continue_with_review")
         self.assertIn("No major supported risks", result["verdict"]["label"])
         self.assertEqual(result["coverage"]["language"], "Python")
@@ -205,6 +205,46 @@ class ProductIntegrityV18Tests(unittest.TestCase):
         self.assertEqual(payload["scans"][0]["scan_id"], "a" * 24)
         for call in database.call_args_list:
             self.assertIn("user_id=eq.user-1", call.kwargs["query"])
+
+    def test_feedback_queue_requires_admin_before_database_access(self):
+        request = Request({"type": "http", "method": "GET", "path": "/admin/feedback", "headers": [], "client": ("127.0.0.1", 1)})
+        with patch.object(main, "get_request_access_context", return_value={"authenticated": True, "user_id": "user-1", "role": "user"}), \
+                patch.object(main, "enrich_access_with_admin_metadata", side_effect=lambda value: value), \
+                patch.object(main, "enforce_rate_limit"), \
+                patch.object(main, "supabase_rest_request") as database:
+            with self.assertRaises(HTTPException) as caught:
+                main.admin_feedback_queue(request)
+        self.assertEqual(caught.exception.status_code, 403)
+        database.assert_not_called()
+
+    def test_admin_can_review_feedback_without_source_code(self):
+        request = Request({"type": "http", "method": "POST", "path": "/admin/feedback/7/review", "headers": [], "client": ("127.0.0.1", 1)})
+        updated = [{"id": 7, "review_status": "accepted"}]
+        with patch.object(main, "get_request_access_context", return_value={"authenticated": True, "user_id": "admin-1", "role": "admin"}), \
+                patch.object(main, "enrich_access_with_admin_metadata", side_effect=lambda value: value), \
+                patch.object(main, "enforce_rate_limit"), \
+                patch.object(main, "supabase_rest_request", return_value=updated) as database:
+            response = main.review_admin_feedback(7, main.FeedbackReviewRequest(decision="accepted"), request)
+        payload = json.loads(response.body)
+        self.assertTrue(payload["reviewed"])
+        sent = database.call_args.kwargs["payload"]
+        self.assertEqual(sent["review_status"], "accepted")
+        self.assertNotIn("code", json.dumps(sent))
+
+    def test_feedback_candidate_export_is_explicitly_not_test_ready(self):
+        request = Request({"type": "http", "method": "GET", "path": "/admin/feedback/export", "headers": [], "client": ("127.0.0.1", 1)})
+        row = {"id": 7, "verdict": "false_positive", "category": "network", "scanner_version": 19,
+               "review_status": "accepted", "scan_id": "a" * 24, "finding_id": "b" * 20,
+               "note": "looks safe", "review_note": "verified"}
+        with patch.object(main, "get_request_access_context", return_value={"authenticated": True, "user_id": "admin-1", "role": "admin"}), \
+                patch.object(main, "enrich_access_with_admin_metadata", side_effect=lambda value: value), \
+                patch.object(main, "enforce_rate_limit"), \
+                patch.object(main, "supabase_rest_request", return_value=[row]):
+            response = main.export_admin_feedback(request)
+        payload = json.loads(response.body)
+        self.assertFalse(payload["contains_source_code"])
+        self.assertFalse(payload["candidates"][0]["test_case_ready"])
+        self.assertIn("minimal reproducing code", payload["candidates"][0]["missing"])
 
 
 class FixPreviewTests(unittest.TestCase):

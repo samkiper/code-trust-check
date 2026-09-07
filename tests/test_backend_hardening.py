@@ -52,6 +52,25 @@ class RateLimitAndPrivacyTests(unittest.TestCase):
         self.assertEqual(caught.exception.status_code, 429)
         self.assertIn("Retry-After", caught.exception.headers)
 
+    def test_persistent_rate_limit_is_shared_and_skips_local_bucket(self):
+        request = make_request({"User-Agent": "browser"})
+        access = {"authenticated": True, "user_id": "user-123"}
+        with patch.object(main, "consume_persistent_rate_limit", side_effect=[
+            {"allowed": True, "retry_after": 1, "remaining": 0},
+            {"allowed": False, "retry_after": 37, "remaining": 0},
+        ]):
+            main.enforce_rate_limit(request, access, "github")
+            with self.assertRaises(HTTPException) as caught:
+                main.enforce_rate_limit(request, access, "github")
+        self.assertEqual(caught.exception.headers["Retry-After"], "37")
+        self.assertEqual(request.state.rate_limit_backend, "supabase")
+        self.assertEqual(main.RATE_LIMIT_STATE, {})
+
+    def test_persistent_rate_limit_key_does_not_expose_actor(self):
+        key = main.persistent_rate_limit_key("scan:user:private-user-id")
+        self.assertRegex(key, r"^v1:[a-f0-9]{64}$")
+        self.assertNotIn("private-user-id", key)
+
     def test_github_and_billing_requests_use_independent_buckets(self):
         request = make_request({"User-Agent": "browser"})
         access = {"authenticated": True, "user_id": "user-123"}
@@ -119,6 +138,35 @@ class RepositoryScoringTests(unittest.TestCase):
             result = main.analyze_dependency_manifests(source)
         self.assertEqual(result["manifests_scanned"], 2)
         self.assertEqual(result["dependencies_parsed"], 2)
+
+    def test_common_lockfiles_cover_six_dependency_ecosystems(self):
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as output:
+            output.writestr("repo/pyproject.toml", '[project]\ndependencies = ["requests==2.31.0"]\n')
+            output.writestr("repo/poetry.lock", '[[package]]\nname = "flask"\nversion = "3.0.0"\n')
+            output.writestr("repo/package-lock.json", '{"packages":{"node_modules/lodash":{"name":"lodash","version":"4.17.21"}}}')
+            output.writestr("repo/yarn.lock", 'left-pad@^1.3.0:\n  version "1.3.0"\n')
+            output.writestr("repo/pnpm-lock.yaml", "packages:\n  react@18.2.0:\n    resolution: {}\n")
+            output.writestr("repo/go.mod", "module example.com/app\nrequire github.com/gin-gonic/gin v1.9.1\n")
+            output.writestr("repo/Cargo.lock", '[[package]]\nname = "serde"\nversion = "1.0.188"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n')
+            output.writestr("repo/composer.lock", '{"packages":[{"name":"monolog/monolog","version":"3.5.0"}]}')
+            output.writestr("repo/Gemfile.lock", "GEM\n  specs:\n    rake (13.0.6)\n\nPLATFORMS\n")
+        archive.seek(0)
+        with zipfile.ZipFile(archive) as source, \
+                patch.object(main, "query_osv_batch", return_value=[]), \
+                patch.object(main, "registry_package_exists", return_value=True):
+            result = main.analyze_dependency_manifests(source)
+        self.assertEqual(result["manifests_scanned"], 9)
+        self.assertGreaterEqual(result["dependencies_parsed"], 9)
+        ecosystems = {item["ecosystem"] for item in main.dedupe_dependencies([
+            *main.parse_pyproject_manifest("pyproject.toml", '[project]\ndependencies=["requests==2.31.0"]')[0],
+            *main.parse_go_mod_manifest("go.mod", "require github.com/gin-gonic/gin v1.9.1")[0],
+            *main.parse_cargo_lock_manifest("Cargo.lock", '[[package]]\nname="serde"\nversion="1.0.188"')[0],
+            *main.parse_composer_lock_manifest("composer.lock", '{"packages":[{"name":"a/b","version":"1.0.0"}]}')[0],
+            *main.parse_gemfile_lock_manifest("Gemfile.lock", "GEM\n  specs:\n    rake (13.0.6)\n")[0],
+            *main.parse_npm_lock_manifest("package-lock.json", '{"packages":{"node_modules/lodash":{"version":"4.17.21"}}}')[0],
+        ])}
+        self.assertEqual(ecosystems, {"PyPI", "npm", "Go", "crates.io", "Packagist", "RubyGems"})
 
 
 class BillingLifecycleTests(unittest.TestCase):

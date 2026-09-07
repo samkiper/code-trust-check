@@ -22,6 +22,7 @@ import difflib
 import time
 import threading
 import secrets
+import tomllib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from html import escape as html_escape
@@ -58,7 +59,7 @@ async def add_security_headers(request: Request, call_next):
     forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
     if request.url.scheme == "https" or forwarded_proto == "https":
         response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
-    if request.url.path.startswith(("/scan", "/auth/", "/stripe/", "/github/")):
+    if request.url.path.startswith(("/scan", "/auth/", "/stripe/", "/github/", "/admin/")):
         response.headers.setdefault("Cache-Control", "no-store, max-age=0")
         response.headers.setdefault("Pragma", "no-cache")
     return response
@@ -103,6 +104,11 @@ class FeedbackRequest(BaseModel):
     verdict: str
     category: str = ""
     note: str = ""
+
+
+class FeedbackReviewRequest(BaseModel):
+    decision: str
+    review_note: str = ""
 
 
 # display_key, regex, label, base severity points
@@ -199,6 +205,9 @@ RATE_LIMITS_PER_MINUTE = {
 }
 RATE_LIMIT_STATE: dict[str, list[float]] = {}
 RATE_LIMIT_LOCK = threading.Lock()
+PERSISTENT_RATE_LIMITS_ENABLED = os.getenv("PERSISTENT_RATE_LIMITS_ENABLED", "true").strip().lower() not in {
+    "0", "false", "no", "off"
+}
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_SECRET_KEY = os.getenv("SUPABASE_SECRET_KEY", "")
@@ -218,7 +227,7 @@ GITHUB_LINK_STATE_SECRET = os.getenv("GITHUB_LINK_STATE_SECRET", "").strip() or 
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "").strip()
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 
-SCANNER_VERSION = 18
+SCANNER_VERSION = 19
 
 GITHUB_REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 GITHUB_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -365,6 +374,18 @@ GENERIC_INTENTS = {
 DEPENDENCY_MANIFEST_FILES = {
     "requirements.txt": "PyPI",
     "package.json": "npm",
+    "pyproject.toml": "PyPI",
+    "poetry.lock": "PyPI",
+    "uv.lock": "PyPI",
+    "package-lock.json": "npm",
+    "npm-shrinkwrap.json": "npm",
+    "yarn.lock": "npm",
+    "pnpm-lock.yaml": "npm",
+    "pnpm-lock.yml": "npm",
+    "go.mod": "Go",
+    "cargo.lock": "crates.io",
+    "composer.lock": "Packagist",
+    "gemfile.lock": "RubyGems",
 }
 
 OSV_API_BATCH_URL = "https://api.osv.dev/v1/querybatch"
@@ -643,12 +664,58 @@ def build_actor_key(request: Request, access: dict) -> str:
     return f"anon:{digest}"
 
 
+def persistent_rate_limit_key(bucket_key: str) -> str:
+    """Keep raw user IDs and network fingerprints out of the limiter table."""
+    digest = hashlib.sha256(f"ai-code-audit-rate-v1\0{bucket_key}".encode("utf-8")).hexdigest()
+    return f"v1:{digest}"
+
+
+def consume_persistent_rate_limit(bucket_key: str, limit: int) -> dict | None:
+    """Atomically consume a shared Supabase limit, or return None when unavailable."""
+    if not PERSISTENT_RATE_LIMITS_ENABLED or not SUPABASE_URL or not SUPABASE_SECRET_KEY:
+        return None
+    result = supabase_rest_request(
+        "POST",
+        "rpc/consume_rate_limit",
+        payload={
+            "p_bucket_key": persistent_rate_limit_key(bucket_key),
+            "p_limit": int(limit),
+            "p_window_seconds": int(RATE_LIMIT_WINDOW_SECONDS),
+        },
+    )
+    row = result[0] if isinstance(result, list) and result else result if isinstance(result, dict) else None
+    if not isinstance(row, dict) or "allowed" not in row:
+        return None
+    return {
+        "allowed": bool(row.get("allowed")),
+        "retry_after": max(1, int(row.get("retry_after") or 1)),
+        "remaining": max(0, int(row.get("remaining") or 0)),
+    }
+
+
+def raise_rate_limit(retry_after: int) -> None:
+    raise HTTPException(
+        status_code=429,
+        detail="Too many requests. Wait briefly and try again.",
+        headers={"Retry-After": str(max(1, int(retry_after)))},
+    )
+
+
 def enforce_rate_limit(request: Request, access: dict, scope: str):
     limits = RATE_LIMITS_PER_MINUTE.get(scope) or RATE_LIMITS_PER_MINUTE["scan"]
     identity_type = "authenticated" if access.get("authenticated") else "anonymous"
     limit = int(limits[identity_type])
     actor_key = build_actor_key(request, access)
     bucket_key = f"{scope}:{actor_key}"
+    persistent = consume_persistent_rate_limit(bucket_key, limit)
+    if persistent is not None:
+        if not persistent["allowed"]:
+            raise_rate_limit(persistent["retry_after"])
+        request.state.rate_limit_backend = "supabase"
+        request.state.rate_limit_remaining = persistent["remaining"]
+        return
+
+    request.state.rate_limit_backend = "local-fallback"
     now = time.monotonic()
     cutoff = now - RATE_LIMIT_WINDOW_SECONDS
 
@@ -664,11 +731,7 @@ def enforce_rate_limit(request: Request, access: dict, scope: str):
         if len(recent) >= limit:
             retry_after = max(1, int(RATE_LIMIT_WINDOW_SECONDS - (now - recent[0])))
             RATE_LIMIT_STATE[bucket_key] = recent
-            raise HTTPException(
-                status_code=429,
-                detail="Too many requests. Wait briefly and try again.",
-                headers={"Retry-After": str(retry_after)},
-            )
+            raise_rate_limit(retry_after)
         recent.append(now)
         RATE_LIMIT_STATE[bucket_key] = recent
 
@@ -683,6 +746,27 @@ def private_json(payload: dict | list, status_code: int = 200) -> JSONResponse:
             "X-Content-Type-Options": "nosniff",
         },
     )
+
+
+def require_admin_access(request: Request, scope: str = "feedback") -> dict:
+    access = enrich_access_with_admin_metadata(get_request_access_context(request))
+    enforce_rate_limit(request, access, scope)
+    if not access.get("authenticated") or not access.get("user_id"):
+        raise HTTPException(status_code=401, detail="Sign in before opening the admin review queue.")
+    if str(access.get("role") or "").lower() != "admin":
+        raise HTTPException(status_code=403, detail="Administrator access is required.")
+    return access
+
+
+def sanitize_feedback_text(value: str, limit: int = 500) -> str:
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", " ", str(value or ""))
+    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(
+        r"(?i)\b(?:sk|pk|ghp|github_pat|xox[baprs]|AIza)[-_A-Za-z0-9]{12,}\b",
+        "[redacted credential-like value]",
+        text,
+    )
+    return text[:limit]
 
 
 def get_daily_usage(actor_key: str, usage_day: str) -> dict | None:
@@ -1018,11 +1102,11 @@ def build_repo_coverage(file_names: list[str], files_available: int, dependency_
         "files_analyzed": len(file_names),
         "supported_files_found": int(files_available or 0),
         "dependency_manifests_analyzed": manifests,
-        "dependency_ecosystems": ["PyPI requirements.txt", "npm package.json"],
+        "dependency_ecosystems": ["PyPI", "npm", "Go", "crates.io", "Packagist", "RubyGems"],
         "limitations": [
             "Static review only: repository code was not executed.",
             "Files are analyzed individually; cross-file data flows and runtime configuration are not followed.",
-            "Dependency vulnerability lookup currently parses requirements.txt and package.json only.",
+            "Dependency lookup covers common direct manifests and lockfiles, but generated, private-registry, and platform-specific resolution can still differ from production.",
             "A clean result means no supported signal was found, not that the repository was proven safe.",
         ],
     }
@@ -1637,7 +1721,8 @@ def line_contains_source(line: str) -> bool:
 
 def extract_assigned_variable(line: str) -> str | None:
     match = re.match(
-        r"\s*(?:(?:const|let|var)\s+)?([A-Za-z_$][A-Za-z0-9_$]*)\s*=",
+        r"\s*(?:(?:const|let|var)\s+)?([A-Za-z_$][A-Za-z0-9_$]*)"
+        r"(?:\s*:\s*[A-Za-z_$][A-Za-z0-9_$<>,.\[\]| &?]*)?\s*=",
         line,
     )
     if match:
@@ -3752,6 +3837,226 @@ def parse_package_json_manifest(file_name: str, content: str) -> tuple[list[dict
     return dependencies, skipped
 
 
+def dependency_record(
+    file_name: str,
+    manifest_type: str,
+    package: str,
+    ecosystem: str,
+    declared_version: str,
+    line: int = 1,
+    section: str = "",
+) -> tuple[dict | None, dict | None]:
+    normalized_version, version_kind = normalize_manifest_version(declared_version)
+    if not package or not normalized_version:
+        return None, {
+            "file": file_name,
+            "line": max(1, int(line or 1)),
+            "raw": f"{package}: {declared_version}".strip(),
+            "reason": "The dependency did not provide a resolvable registry version.",
+        }
+    return {
+        "file": file_name,
+        "manifest_type": manifest_type,
+        "line": max(1, int(line or 1)),
+        "package": package.strip(),
+        "ecosystem": ecosystem,
+        "declared_version": declared_version.strip(),
+        "version": normalized_version,
+        "version_kind": version_kind,
+        "dependency_section": section,
+    }, None
+
+
+def parse_python_requirement_entry(
+    file_name: str, manifest_type: str, raw: str, line: int = 1, section: str = ""
+) -> tuple[dict | None, dict | None]:
+    entry = str(raw or "").split(";", 1)[0].strip()
+    match = re.match(r"^([A-Za-z0-9_.-]+)(?:\[[^\]]+\])?\s*([~^=<>!]{0,2}\s*[^\s,]+)?", entry)
+    if not match:
+        return None, {"file": file_name, "line": line, "raw": entry, "reason": "Invalid Python dependency entry."}
+    package = normalize_python_package_name(match.group(1) or "")
+    version = str(match.group(2) or "").replace(" ", "")
+    return dependency_record(file_name, manifest_type, package, "PyPI", version, line, section)
+
+
+def parse_pyproject_manifest(file_name: str, content: str) -> tuple[list[dict], list[dict]]:
+    dependencies: list[dict] = []
+    skipped: list[dict] = []
+    try:
+        data = tomllib.loads(content)
+    except Exception:
+        return [], [{"file": file_name, "line": 1, "raw": "", "reason": "pyproject.toml is not valid TOML."}]
+
+    project = data.get("project") if isinstance(data, dict) else {}
+    entries: list[tuple[str, str]] = []
+    if isinstance(project, dict):
+        entries.extend(("project.dependencies", item) for item in project.get("dependencies", []) if isinstance(item, str))
+        optional = project.get("optional-dependencies") or {}
+        if isinstance(optional, dict):
+            for group, values in optional.items():
+                entries.extend((f"project.optional-dependencies.{group}", item) for item in values if isinstance(item, str))
+    for section, raw in entries:
+        record, skip = parse_python_requirement_entry(file_name, "pyproject.toml", raw, 1, section)
+        (dependencies if record else skipped).append(record or skip)
+
+    poetry = (((data.get("tool") or {}).get("poetry") or {}).get("dependencies") or {}) if isinstance(data, dict) else {}
+    if isinstance(poetry, dict):
+        for package, spec in poetry.items():
+            if str(package).lower() == "python":
+                continue
+            raw_version = spec if isinstance(spec, str) else spec.get("version", "") if isinstance(spec, dict) else ""
+            record, skip = dependency_record(
+                file_name, "pyproject.toml", str(package), "PyPI", str(raw_version), 1, "tool.poetry.dependencies"
+            )
+            (dependencies if record else skipped).append(record or skip)
+    return dependencies, skipped
+
+
+def parse_python_lock_manifest(file_name: str, content: str) -> tuple[list[dict], list[dict]]:
+    try:
+        data = tomllib.loads(content)
+    except Exception:
+        return [], [{"file": file_name, "line": 1, "raw": "", "reason": f"{Path(file_name).name} is not valid TOML."}]
+    packages = data.get("package", []) if isinstance(data, dict) else []
+    if isinstance(packages, dict):
+        packages = [packages]
+    dependencies, skipped = [], []
+    for item in packages if isinstance(packages, list) else []:
+        if not isinstance(item, dict):
+            continue
+        record, skip = dependency_record(
+            file_name, Path(file_name).name.lower(), str(item.get("name") or ""), "PyPI", str(item.get("version") or "")
+        )
+        (dependencies if record else skipped).append(record or skip)
+    return dependencies, skipped
+
+
+def parse_npm_lock_manifest(file_name: str, content: str) -> tuple[list[dict], list[dict]]:
+    try:
+        data = json.loads(content)
+    except Exception:
+        return [], [{"file": file_name, "line": 1, "raw": "", "reason": "npm lockfile is not valid JSON."}]
+    dependencies, skipped = [], []
+    packages = data.get("packages") or {}
+    if isinstance(packages, dict):
+        for path, item in packages.items():
+            if not path or not isinstance(item, dict):
+                continue
+            package = str(item.get("name") or str(path).rsplit("node_modules/", 1)[-1]).strip()
+            version = str(item.get("version") or "")
+            record, skip = dependency_record(file_name, Path(file_name).name.lower(), package, "npm", version, 1, "packages")
+            (dependencies if record else skipped).append(record or skip)
+    elif isinstance(data.get("dependencies"), dict):
+        for package, item in data["dependencies"].items():
+            version = str(item.get("version") or "") if isinstance(item, dict) else str(item)
+            record, skip = dependency_record(file_name, Path(file_name).name.lower(), str(package), "npm", version, 1, "dependencies")
+            (dependencies if record else skipped).append(record or skip)
+    return dependencies, skipped
+
+
+def parse_yarn_lock_manifest(file_name: str, content: str) -> tuple[list[dict], list[dict]]:
+    dependencies, skipped = [], []
+    current_names: list[str] = []
+    for line_number, raw_line in enumerate(content.splitlines(), start=1):
+        if raw_line and not raw_line[0].isspace() and raw_line.rstrip().endswith(":"):
+            header = raw_line.rstrip()[:-1]
+            current_names = []
+            for selector in re.split(r",\s*", header):
+                selector = selector.strip().strip('"\'')
+                match = re.match(r"^(@[^/]+/[^@]+|[^@]+)@", selector)
+                if match:
+                    current_names.append(match.group(1))
+        version_match = re.match(r"^\s+version\s+[\"']?([^\"'\s]+)", raw_line)
+        if version_match and current_names:
+            for package in current_names:
+                record, skip = dependency_record(file_name, "yarn.lock", package, "npm", version_match.group(1), line_number)
+                (dependencies if record else skipped).append(record or skip)
+            current_names = []
+    return dependencies, skipped
+
+
+def parse_pnpm_lock_manifest(file_name: str, content: str) -> tuple[list[dict], list[dict]]:
+    dependencies, skipped = [], []
+    for line_number, raw_line in enumerate(content.splitlines(), start=1):
+        match = re.match(r"^\s{2,}['\"]?/?(@?[^@:'\"\s]+(?:/[^@:'\"\s]+)?)@([^:'\"\s()]+)(?:\([^)]*\))?['\"]?:\s*$", raw_line)
+        if not match:
+            continue
+        record, skip = dependency_record(file_name, "pnpm-lock.yaml", match.group(1), "npm", match.group(2), line_number)
+        (dependencies if record else skipped).append(record or skip)
+    return dependencies, skipped
+
+
+def parse_go_mod_manifest(file_name: str, content: str) -> tuple[list[dict], list[dict]]:
+    dependencies, skipped = [], []
+    in_require = False
+    for line_number, raw_line in enumerate(content.splitlines(), start=1):
+        line = raw_line.split("//", 1)[0].strip()
+        if line == "require (":
+            in_require = True
+            continue
+        if in_require and line == ")":
+            in_require = False
+            continue
+        if line.startswith("require "):
+            line = line[len("require "):].strip()
+        elif not in_require:
+            continue
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        record, skip = dependency_record(file_name, "go.mod", parts[0], "Go", parts[1], line_number)
+        (dependencies if record else skipped).append(record or skip)
+    return dependencies, skipped
+
+
+def parse_cargo_lock_manifest(file_name: str, content: str) -> tuple[list[dict], list[dict]]:
+    try:
+        data = tomllib.loads(content)
+    except Exception:
+        return [], [{"file": file_name, "line": 1, "raw": "", "reason": "Cargo.lock is not valid TOML."}]
+    dependencies, skipped = [], []
+    for item in data.get("package", []) if isinstance(data, dict) else []:
+        if not isinstance(item, dict) or str(item.get("source") or "").startswith("git+"):
+            continue
+        record, skip = dependency_record(file_name, "Cargo.lock", str(item.get("name") or ""), "crates.io", str(item.get("version") or ""))
+        (dependencies if record else skipped).append(record or skip)
+    return dependencies, skipped
+
+
+def parse_composer_lock_manifest(file_name: str, content: str) -> tuple[list[dict], list[dict]]:
+    try:
+        data = json.loads(content)
+    except Exception:
+        return [], [{"file": file_name, "line": 1, "raw": "", "reason": "composer.lock is not valid JSON."}]
+    dependencies, skipped = [], []
+    for section in ("packages", "packages-dev"):
+        for item in data.get(section, []) if isinstance(data, dict) else []:
+            if not isinstance(item, dict):
+                continue
+            record, skip = dependency_record(file_name, "composer.lock", str(item.get("name") or ""), "Packagist", str(item.get("version") or ""), 1, section)
+            (dependencies if record else skipped).append(record or skip)
+    return dependencies, skipped
+
+
+def parse_gemfile_lock_manifest(file_name: str, content: str) -> tuple[list[dict], list[dict]]:
+    dependencies, skipped = [], []
+    in_specs = False
+    for line_number, raw_line in enumerate(content.splitlines(), start=1):
+        if raw_line.strip() == "specs:":
+            in_specs = True
+            continue
+        if in_specs and raw_line and not raw_line.startswith("    "):
+            in_specs = False
+        if not in_specs:
+            continue
+        match = re.match(r"^\s{4}([A-Za-z0-9_.-]+) \(([^)]+)\)", raw_line)
+        if not match:
+            continue
+        record, skip = dependency_record(file_name, "Gemfile.lock", match.group(1), "RubyGems", match.group(2), line_number)
+        (dependencies if record else skipped).append(record or skip)
+    return dependencies, skipped
+
+
 def dedupe_dependencies(dependencies: list[dict]) -> list[dict]:
     deduped: list[dict] = []
     seen: set[tuple] = set()
@@ -4085,6 +4390,24 @@ def analyze_dependency_manifests(zip_file: zipfile.ZipFile) -> dict:
             deps, skipped = parse_requirements_manifest(file_name, content)
         elif lower_name.endswith("package.json"):
             deps, skipped = parse_package_json_manifest(file_name, content)
+        elif lower_name.endswith("pyproject.toml"):
+            deps, skipped = parse_pyproject_manifest(file_name, content)
+        elif lower_name.endswith(("poetry.lock", "uv.lock")):
+            deps, skipped = parse_python_lock_manifest(file_name, content)
+        elif lower_name.endswith(("package-lock.json", "npm-shrinkwrap.json")):
+            deps, skipped = parse_npm_lock_manifest(file_name, content)
+        elif lower_name.endswith("yarn.lock"):
+            deps, skipped = parse_yarn_lock_manifest(file_name, content)
+        elif lower_name.endswith(("pnpm-lock.yaml", "pnpm-lock.yml")):
+            deps, skipped = parse_pnpm_lock_manifest(file_name, content)
+        elif lower_name.endswith("go.mod"):
+            deps, skipped = parse_go_mod_manifest(file_name, content)
+        elif lower_name.endswith("cargo.lock"):
+            deps, skipped = parse_cargo_lock_manifest(file_name, content)
+        elif lower_name.endswith("composer.lock"):
+            deps, skipped = parse_composer_lock_manifest(file_name, content)
+        elif lower_name.endswith("gemfile.lock"):
+            deps, skipped = parse_gemfile_lock_manifest(file_name, content)
         else:
             deps, skipped = [], []
 
@@ -6526,12 +6849,12 @@ def stripe_status():
         "recovery_version": 4,
         "scanner_version": SCANNER_VERSION,
         "security_version": 1,
-        "benchmark_cases": 1103,
+        "benchmark_cases": 1115,
         "benchmark_independent_cases": 300,
-        "benchmark_internal_cases": 53,
+        "benchmark_internal_cases": 65,
         "benchmark_category_assisted_cases": 750,
         "benchmark_no_hint_holdout_cases": 300,
-        "benchmark_regression_variants": 265,
+        "benchmark_regression_variants": 325,
     }
 
 
@@ -6637,13 +6960,128 @@ def submit_feedback(req: FeedbackRequest, request: Request):
         "finding_id": req.finding_id,
         "verdict": verdict,
         "category": req.category.strip()[:80],
-        "note": req.note.strip()[:500],
+        "note": sanitize_feedback_text(req.note, 500),
         "scanner_version": SCANNER_VERSION,
+        "review_status": "pending",
+        "review_note": "",
+        "reviewed_at": None,
+        "reviewed_by": None,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
-    inserted = supabase_rest_request("POST", "scan_feedback", payload=payload, prefer="return=representation")
+    inserted = supabase_rest_request(
+        "POST",
+        "scan_feedback",
+        payload=payload,
+        query="on_conflict=user_id,scan_id,finding_id,verdict",
+        prefer="resolution=merge-duplicates,return=representation",
+    )
     if not inserted:
         return private_json({"detail": "Feedback storage is not configured yet."}, status_code=503)
     return private_json({"received": True, "stored_code": False})
+
+
+@app.get("/admin/feedback")
+def admin_feedback_queue(request: Request, status: str = "pending"):
+    require_admin_access(request)
+    review_status = str(status or "pending").strip().lower()
+    if review_status not in {"pending", "accepted", "dismissed", "all"}:
+        raise HTTPException(status_code=400, detail="Choose pending, accepted, dismissed, or all.")
+    filters = {
+        "select": (
+            "id,created_at,updated_at,user_id,scan_id,finding_id,verdict,category,note,"
+            "scanner_version,review_status,review_note,reviewed_at,reviewed_by"
+        ),
+        "order": "created_at.desc",
+        "limit": "200",
+    }
+    if review_status != "all":
+        filters["review_status"] = f"eq.{review_status}"
+    rows = supabase_rest_request("GET", "scan_feedback", query=urlencode(filters))
+    feedback = rows if isinstance(rows, list) else []
+    return private_json({
+        "feedback": feedback,
+        "status": review_status,
+        "count": len(feedback),
+        "stored_code": False,
+        "scanner_version": SCANNER_VERSION,
+    })
+
+
+@app.post("/admin/feedback/{feedback_id}/review")
+def review_admin_feedback(feedback_id: int, req: FeedbackReviewRequest, request: Request):
+    access = require_admin_access(request)
+    if feedback_id <= 0:
+        raise HTTPException(status_code=400, detail="The feedback record is invalid.")
+    decision = str(req.decision or "").strip().lower()
+    if decision not in {"accepted", "dismissed"}:
+        raise HTTPException(status_code=400, detail="Choose accepted or dismissed.")
+    payload = {
+        "review_status": decision,
+        "review_note": sanitize_feedback_text(req.review_note, 500),
+        "reviewed_at": datetime.now(timezone.utc).isoformat(),
+        "reviewed_by": str(access["user_id"]),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    updated = supabase_rest_request(
+        "PATCH",
+        "scan_feedback",
+        payload=payload,
+        query=urlencode({"id": f"eq.{int(feedback_id)}"}),
+        prefer="return=representation",
+    )
+    if not isinstance(updated, list) or not updated:
+        return private_json({"detail": "The feedback record could not be updated."}, status_code=404)
+    return private_json({"reviewed": True, "feedback": updated[0], "stored_code": False})
+
+
+@app.get("/admin/feedback/export")
+def export_admin_feedback(request: Request, status: str = "accepted"):
+    require_admin_access(request)
+    review_status = str(status or "accepted").strip().lower()
+    if review_status not in {"accepted", "pending", "dismissed", "all"}:
+        raise HTTPException(status_code=400, detail="Choose pending, accepted, dismissed, or all.")
+    filters = {
+        "select": (
+            "id,created_at,scan_id,finding_id,verdict,category,note,scanner_version,"
+            "review_status,review_note,reviewed_at"
+        ),
+        "order": "created_at.asc",
+        "limit": "1000",
+    }
+    if review_status != "all":
+        filters["review_status"] = f"eq.{review_status}"
+    rows = supabase_rest_request("GET", "scan_feedback", query=urlencode(filters))
+    feedback = rows if isinstance(rows, list) else []
+    candidates = [{
+        "feedback_id": int(item.get("id") or 0),
+        "verdict": str(item.get("verdict") or ""),
+        "category": str(item.get("category") or "")[:80],
+        "scanner_version": int(item.get("scanner_version") or 0),
+        "review_status": str(item.get("review_status") or "pending"),
+        "review_note": sanitize_feedback_text(item.get("review_note") or "", 500),
+        "user_note": sanitize_feedback_text(item.get("note") or "", 500),
+        "scan_fingerprint": str(item.get("scan_id") or "")[:32],
+        "finding_fingerprint": str(item.get("finding_id") or "")[:40],
+        "test_case_ready": False,
+        "missing": ["minimal reproducing code", "independently verified expected result"],
+    } for item in feedback]
+    export = {
+        "schema_version": 1,
+        "scanner_version": SCANNER_VERSION,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "contains_source_code": False,
+        "warning": "Candidates must be independently reviewed and supplied with a minimal reproducer before becoming regression tests.",
+        "candidates": candidates,
+    }
+    return Response(
+        content=json.dumps(export, indent=2) + "\n",
+        media_type="application/json",
+        headers={
+            "Cache-Control": "no-store, max-age=0",
+            "Content-Disposition": 'attachment; filename="ai-code-audit-feedback-candidates.json"',
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 

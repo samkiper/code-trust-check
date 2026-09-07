@@ -6,7 +6,7 @@ AI Code Audit is evaluated against three distinct sets. Internal labeled scenari
 
 | Dataset | Cases | Precision | Recall | False-positive rate | F1 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Internal independent cases | 53 | 100.00% | 100.00% | 0.00% | 100.00% |
+| Internal labeled cases | 65 | 100.00% | 100.00% | 0.00% | 100.00% |
 | OWASP category-assisted cases | 750 | 100.00% | 100.00% | 0.00% | 100.00% |
 | OWASP no-hint holdout | 300 | 100.00% | 96.91% | 0.00% | 98.43% |
 
@@ -36,9 +36,11 @@ Scanner v17 is a product-integrity release and does not change the v16 detection
 
 Scanner v18 adds privacy-safe GitHub scan history, connected-repository visibility, and reviewed false-positive feedback in the signed-in dashboard. It does not change detection rules, weights, benchmark selection, or the published accuracy baseline.
 
+Scanner v19 adds six safe and six risky JavaScript/TypeScript cases, including typed TypeScript data flows. That exposed and fixed a real gap in typed assignment tracking. The internal set now contains 65 labeled base cases and 325 formatting variants. These additions are internally curated, not an external JavaScript/TypeScript benchmark; claims remain limited accordingly. The two OWASP Python sets remain unchanged and still pass their release thresholds.
+
 ## Next accuracy work
 
 1. Preserve the no-hint holdout without tuning against its three misses; use a new development set for weak-randomness improvements.
-2. Add reviewed false-positive and missed-risk reports to an isolated labeled test set.
+2. Use the v19 admin review queue to triage feedback, then obtain a minimal reproducer and independently verify the expected result before adding any regression test.
 3. Add language-specific external benchmarks and independently sourced production-like examples as stable, redistributable datasets become available.
 4. Keep safe-fix previews narrow, deterministic, and review-only until their semantic correctness is independently tested.
