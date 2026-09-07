@@ -11,7 +11,7 @@ AI Code Audit welcomes reproducible bug reports, carefully scoped feature reques
 
 ## Pull requests
 
-Code contributions are not accepted until the repository's formal license and contributor terms are decided. You may still open an issue describing a proposed change.
+Code contributions are not accepted unless the operator explicitly requests them and supplies written contributor terms. The repository is proprietary; public visibility does not grant reuse rights. You may still open an issue describing a proposed change.
 
 Maintainers should run:
 
@@ -24,4 +24,3 @@ Detection changes must also pass the pinned accuracy gate and must not lower com
 ## Scanner feedback rule
 
 User feedback is evidence for review, not an automatic rule change. A false-positive or missed-risk report must be converted into a minimal, independently reviewed test case before scanner behavior is changed.
-

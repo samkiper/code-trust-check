@@ -2,7 +2,7 @@
 
 **Intent-aware static review for AI-generated code, public repositories, and GitHub pull requests.**
 
-[Try the live scanner](https://code-trust-check.onrender.com/) · [Methodology](https://code-trust-check.onrender.com/methodology) · [Accuracy](docs/ACCURACY.md) · [Security](SECURITY.md)
+[Try the live scanner](https://code-trust-check.onrender.com/) · [Methodology](https://code-trust-check.onrender.com/methodology) · [Accuracy](docs/ACCURACY.md) · [Security](SECURITY.md) · [Support](mailto:support.aicodeaudit@gmail.com)
 
 AI Code Audit helps beginners understand what generated code may do while giving experienced developers exact files, lines, rules, engine evidence, and remediation context. It does not execute submitted code.
 
@@ -113,5 +113,8 @@ Never post credentials, private source code, private repository names, payment i
 
 ## Licensing status
 
-No open-source license is currently granted. The source is publicly viewable, but reuse rights have not been granted. A formal license decision is still required before accepting outside code contributions.
+Copyright © 2026 North Third Street Media and Design LLC, doing business as North Third Street Media Group. All rights reserved.
 
+This is proprietary software. The source is publicly viewable, but no permission is granted to copy, modify, distribute, sublicense, or commercially use it except where applicable law or a separate written agreement permits. See [LICENSE](LICENSE).
+
+AI Code Audit is operated by North Third Street Media Group, a DBA of North Third Street Media and Design LLC. Contact [support.aicodeaudit@gmail.com](mailto:support.aicodeaudit@gmail.com) for private support, billing, privacy, or security questions.

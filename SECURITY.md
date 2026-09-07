@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-Please report vulnerabilities through a [private GitHub Security Advisory](https://github.com/samkiper/code-trust-check/security/advisories/new).
+Please report vulnerabilities through a [private GitHub Security Advisory](https://github.com/samkiper/code-trust-check/security/advisories/new) or email [support.aicodeaudit@gmail.com](mailto:support.aicodeaudit@gmail.com).
 
 Do not open a public issue containing:
 
@@ -28,4 +28,3 @@ Scanner false positives and missed detections are valuable, but they are normall
 ## Supported version
 
 Security fixes are applied to the current production version on `main`. Older versions are not maintained as separate supported release lines.
-

@@ -833,11 +833,23 @@ class LaunchReadinessV201Tests(unittest.TestCase):
         self.assertIn("Repository policies and optional merge blocking", html)
         self.assertIn('href="/privacy"', html)
         self.assertIn('href="/methodology"', html)
+        self.assertIn("North Third Street Media and Design LLC", html)
+        self.assertIn("support.aicodeaudit@gmail.com", html)
 
     def test_repository_readiness_files_exist(self):
-        for filename in ("README.md", "SECURITY.md", "CONTRIBUTING.md", "CHANGELOG.md"):
+        for filename in ("README.md", "SECURITY.md", "CONTRIBUTING.md", "CHANGELOG.md", "LICENSE"):
             with self.subTest(filename=filename):
                 self.assertTrue(Path(filename).is_file())
+
+    def test_public_operator_and_support_contact_are_disclosed(self):
+        expected_operator = "North Third Street Media Group, a DBA of North Third Street Media and Design LLC"
+        expected_email = "support.aicodeaudit@gmail.com"
+        for path in ("static/privacy.html", "static/terms.html", "static/support.html"):
+            content = Path(path).read_text(encoding="utf-8")
+            self.assertIn(expected_operator, content)
+            self.assertIn(expected_email, content)
+        self.assertIn(expected_email, Path("static/security.html").read_text(encoding="utf-8"))
+        self.assertIn("All rights reserved", Path("LICENSE").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
