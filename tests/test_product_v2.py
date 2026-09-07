@@ -28,7 +28,7 @@ class EvidenceModelTests(unittest.TestCase):
         self.assertEqual(execution["status"], "high")
 
 
-class ProductIntegrityV17Tests(unittest.TestCase):
+class ProductIntegrityV18Tests(unittest.TestCase):
     def test_github_install_state_is_signed_and_bound_to_user(self):
         with patch.object(main, "GITHUB_LINK_STATE_SECRET", "state-secret"):
             state = main.create_github_install_state("user-1")
@@ -95,7 +95,7 @@ class ProductIntegrityV17Tests(unittest.TestCase):
     def test_safe_result_uses_supported_signal_language_and_action(self):
         with patch.object(main, "SEMGREP_ENABLED", False):
             result = main.analyze_code_product("Print a greeting", "print('hello')", filename="hello.py")
-        self.assertEqual(result["scanner_version"], 17)
+        self.assertEqual(result["scanner_version"], 18)
         self.assertEqual(result["verdict"]["id"], "continue_with_review")
         self.assertIn("No major supported risks", result["verdict"]["label"])
         self.assertEqual(result["coverage"]["language"], "Python")
@@ -117,6 +117,94 @@ class ProductIntegrityV17Tests(unittest.TestCase):
         self.assertIn('id="githubAccountCard"', html)
         self.assertIn('id="githubConnectedStatus"', html)
         self.assertIn("✓ GitHub Connected", html)
+        self.assertIn('id="dashboardModal"', html)
+        self.assertIn('/github/dashboard', html)
+
+    def test_github_scan_history_is_privacy_safe_and_feedback_ready(self):
+        findings = [("src/app.py", {
+            "line": 7,
+            "severity": 22,
+            "pattern": "credential_egress",
+            "message": "Credential may leave the trusted environment",
+            "why_risky": "A secret could be disclosed.",
+            "suggested_fix": "Remove the secret from the payload.",
+            "code": "do not store this source code",
+        })]
+        serialized = main.serialize_github_findings(findings)
+        self.assertEqual(len(serialized), 1)
+        self.assertEqual(serialized[0]["severity"], "high")
+        self.assertRegex(serialized[0]["finding_id"], r"^[a-f0-9]{20}$")
+        self.assertNotIn("code", serialized[0])
+
+    def test_github_scan_history_upserts_without_source_code(self):
+        with patch.object(main, "supabase_rest_request", return_value=[{"scan_id": "saved"}]) as request:
+            saved = main.save_github_scan_history(
+                "user-1", 123, "owner/repo", 9, "a" * 40, "completed",
+                conclusion="neutral",
+                findings=[("app.py", {"line": 2, "severity": 20, "message": "Risk"})],
+                files_scanned=1,
+            )
+        self.assertEqual(len(saved["scan_id"]), 24)
+        self.assertEqual(saved["high_count"], 1)
+        self.assertNotIn("code", json.dumps(request.call_args.kwargs["payload"]))
+        self.assertEqual(request.call_args.kwargs["query"], "on_conflict=scan_id")
+
+    def test_github_repository_listing_filters_untrusted_names_and_urls(self):
+        response = {
+            "repositories": [
+                {"full_name": "owner/good-repo", "private": True, "html_url": "https://evil.example"},
+                {"full_name": "../../bad", "private": False},
+            ],
+        }
+        with patch.object(main, "github_installation_token", return_value="token"), \
+                patch.object(main, "github_api_request", return_value=response):
+            repositories = main.list_github_installation_repositories(123)
+        self.assertEqual(repositories, [{
+            "full_name": "owner/good-repo",
+            "private": True,
+            "html_url": "https://github.com/owner/good-repo",
+        }])
+
+    def test_github_dashboard_is_scoped_to_the_authenticated_user(self):
+        request = Request({
+            "type": "http",
+            "method": "GET",
+            "path": "/github/dashboard",
+            "headers": [],
+            "client": ("127.0.0.1", 1),
+        })
+        installations = [{
+            "installation_id": 123,
+            "account_login": "owner",
+            "account_type": "User",
+            "status": "active",
+            "updated_at": "2026-09-07T00:00:00Z",
+        }]
+        scans = [{
+            "scan_id": "a" * 24,
+            "repository": "owner/repo",
+            "findings": [],
+        }]
+        with patch.object(main, "get_request_access_context", return_value={
+            "authenticated": True,
+            "user_id": "user-1",
+            "plan": "pro",
+        }), patch.object(main, "enrich_access_with_admin_metadata", side_effect=lambda value: value), \
+                patch.object(main, "enforce_rate_limit"), \
+                patch.object(main, "supabase_rest_request", side_effect=[installations, scans]) as database, \
+                patch.object(main, "list_github_installation_repositories", return_value=[{
+                    "full_name": "owner/repo",
+                    "private": True,
+                    "html_url": "https://github.com/owner/repo",
+                }]):
+            response = main.github_dashboard(request)
+        payload = json.loads(response.body)
+        self.assertTrue(payload["connected"])
+        self.assertFalse(payload["stored_code"])
+        self.assertEqual(payload["repositories"][0]["full_name"], "owner/repo")
+        self.assertEqual(payload["scans"][0]["scan_id"], "a" * 24)
+        for call in database.call_args_list:
+            self.assertIn("user_id=eq.user-1", call.kwargs["query"])
 
 
 class FixPreviewTests(unittest.TestCase):

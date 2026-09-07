@@ -11,7 +11,7 @@
 - Signed-in users can mark findings accurate, report false alarms, or report a missed risk. Feedback records fingerprints and labels only; submitted code is not stored.
 - Dependency review checks published advisories, likely package-name typos, missing registry packages, and unpinned direct-source installs.
 - Review-only “Fix this safely” previews cover unsafe YAML loading, disabled TLS verification, production debug mode, and dynamic `eval`.
-- Scanner v17 adds action-oriented verdicts, language and coverage disclosures, explicit static-analysis limitations, complete finding access, GitHub check reruns, and opt-in Pro enforcement for linked GitHub installations. The production patch also supports securely connecting GitHub Apps that were installed before account linking was enabled. Detection weights remain unchanged from v16.
+- Scanner v18 adds a signed-in security dashboard with connected repositories, the latest 25 pull-request scans, severity counts, expandable finding explanations, and false-positive feedback. Stored history contains metadata and finding explanations only; source code is never stored. Detection rules and weights remain unchanged from v17.
 
 ## Accuracy gate
 
@@ -34,6 +34,10 @@ Also configure Render to wait for GitHub checks before auto-deploying when that 
 ## Feedback setup
 
 In Supabase, open **SQL Editor**, paste the contents of `supabase/scan_feedback.sql`, and run it once. The table has row-level security enabled and denies browser clients direct access; the authenticated backend writes the minimal feedback record with the existing Supabase secret key.
+
+## Security dashboard setup for v18
+
+In Supabase **SQL Editor**, run `supabase/github_scan_runs.sql` once after `supabase/github_installations.sql`. The dashboard table has row-level security enabled and denies browser clients direct access. The backend stores repository and pull-request identifiers, scan counts, and sanitized finding explanations; it never stores scanned source code.
 
 ## GitHub Pro-link setup for v17
 
@@ -61,7 +65,7 @@ To activate GitHub pull-request checks, create a GitHub App and add these Render
 | `GITHUB_APP_SLUG` | The public slug from the GitHub App URL, used to show the install button |
 | `GITHUB_CLIENT_ID` | The GitHub App client ID used for existing-installation authorization |
 | `GITHUB_CLIENT_SECRET` | A GitHub App client secret; never expose this in browser code |
-| `GITHUB_ENFORCE_PRO` | Start with `false`; change to `true` only after the v17 linking test succeeds |
+| `GITHUB_ENFORCE_PRO` | Keep `true` after the GitHub installation-link acceptance test succeeds |
 | `GITHUB_LINK_STATE_SECRET` | A separate random secret used to sign the short-lived installation ownership token |
 
 Configure the GitHub App with:

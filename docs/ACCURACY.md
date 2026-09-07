@@ -34,6 +34,8 @@ Scanner v17's existing-installation authorization patch changes account-linking 
 
 Scanner v17 is a product-integrity release and does not change the v16 detection weights. It replaces definitive safety language with supported-signal language, exposes per-scan coverage and limitations, gives users an action-oriented verdict, and makes all findings accessible in the web interface. The published accuracy baseline therefore remains the v16 scoring baseline.
 
+Scanner v18 adds privacy-safe GitHub scan history, connected-repository visibility, and reviewed false-positive feedback in the signed-in dashboard. It does not change detection rules, weights, benchmark selection, or the published accuracy baseline.
+
 ## Next accuracy work
 
 1. Preserve the no-hint holdout without tuning against its three misses; use a new development set for weak-randomness improvements.

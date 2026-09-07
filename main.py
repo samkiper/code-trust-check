@@ -218,7 +218,7 @@ GITHUB_LINK_STATE_SECRET = os.getenv("GITHUB_LINK_STATE_SECRET", "").strip() or 
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "").strip()
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 
-SCANNER_VERSION = 17
+SCANNER_VERSION = 18
 
 GITHUB_REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 GITHUB_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -5981,6 +5981,111 @@ def github_finding_severity(severity: float) -> str:
     return "Notice"
 
 
+def github_scan_history_id(installation_id: int, full_name: str, pull_request_number: int, sha: str) -> str:
+    return hashlib.sha256(
+        f"{int(installation_id)}\0{full_name}\0{int(pull_request_number)}\0{sha}".encode("utf-8")
+    ).hexdigest()[:24]
+
+
+def serialize_github_findings(findings: list[tuple[str, dict]]) -> list[dict]:
+    serialized = []
+    for path, finding in findings[:100]:
+        line = max(1, int(finding.get("line") or 1))
+        message = str(finding.get("message") or "Code behavior requires review.")[:300]
+        category = str(finding.get("pattern") or finding.get("type") or "review")[:80]
+        finding_id = str(finding.get("finding_id") or "")
+        if not re.fullmatch(r"[a-zA-Z0-9_-]{1,40}", finding_id):
+            finding_id = hashlib.sha256(
+                f"github\0{path}\0{line}\0{category}\0{message}".encode("utf-8", errors="ignore")
+            ).hexdigest()[:20]
+        severity_points = float(finding.get("severity", 0) or 0)
+        serialized.append({
+            "finding_id": finding_id,
+            "path": str(path)[:500],
+            "line": line,
+            "severity": github_finding_severity(severity_points).lower(),
+            "category": category,
+            "message": message,
+            "why_risky": str(finding.get("why_risky") or "")[:1000],
+            "suggested_fix": str(finding.get("suggested_fix") or "")[:1000],
+        })
+    return serialized
+
+
+def save_github_scan_history(
+    user_id: str,
+    installation_id: int,
+    full_name: str,
+    pull_request_number: int,
+    sha: str,
+    status: str,
+    *,
+    conclusion: str = "",
+    findings: list[tuple[str, dict]] | None = None,
+    files_scanned: int = 0,
+    files_skipped: int = 0,
+    error_message: str = "",
+) -> dict:
+    if not user_id:
+        return {}
+    serialized = serialize_github_findings(findings or [])
+    counts = {"high": 0, "medium": 0, "notice": 0}
+    for finding in serialized:
+        severity = str(finding.get("severity") or "notice")
+        counts[severity if severity in counts else "notice"] += 1
+    payload = {
+        "scan_id": github_scan_history_id(installation_id, full_name, pull_request_number, sha),
+        "user_id": str(user_id),
+        "installation_id": int(installation_id),
+        "repository": str(full_name)[:300],
+        "pull_request_number": int(pull_request_number),
+        "commit_sha": str(sha)[:40],
+        "status": status if status in {"in_progress", "completed", "failed"} else "failed",
+        "conclusion": str(conclusion)[:40],
+        "high_count": counts["high"],
+        "medium_count": counts["medium"],
+        "notice_count": counts["notice"],
+        "files_scanned": max(0, int(files_scanned)),
+        "files_skipped": max(0, int(files_skipped)),
+        "findings": serialized,
+        "details_url": f"https://github.com/{full_name}/pull/{int(pull_request_number)}/files",
+        "error_message": str(error_message)[:300],
+        "scanner_version": SCANNER_VERSION,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    saved = supabase_rest_request(
+        "POST",
+        "github_scan_runs",
+        payload=payload,
+        query="on_conflict=scan_id",
+        prefer="resolution=merge-duplicates,return=representation",
+    )
+    return payload if saved else {}
+
+
+def list_github_installation_repositories(installation_id: int, limit: int = 100) -> list[dict]:
+    token = github_installation_token(installation_id)
+    payload = github_api_request(
+        "GET",
+        f"https://api.github.com/installation/repositories?per_page={max(1, min(int(limit), 100))}",
+        token,
+    )
+    repositories = payload.get("repositories") if isinstance(payload, dict) else []
+    if not isinstance(repositories, list):
+        return []
+    safe_repositories = []
+    for item in repositories[:limit]:
+        full_name = str(item.get("full_name") or "") if isinstance(item, dict) else ""
+        if not GITHUB_REPOSITORY_PATTERN.fullmatch(full_name):
+            continue
+        safe_repositories.append({
+            "full_name": full_name,
+            "private": bool(item.get("private")),
+            "html_url": f"https://github.com/{quote(full_name, safe='/')}",
+        })
+    return safe_repositories
+
+
 def github_annotation_message(finding: dict) -> str:
     parts = [str(finding.get("message") or "Code behavior requires review.")]
     why_risky = str(finding.get("why_risky") or "").strip()
@@ -6025,6 +6130,7 @@ def build_github_check_output(
 
 def process_github_pull_request(installation_id: int, full_name: str, pull_request_number: int, sha: str) -> None:
     token = ""
+    history_user_id = ""
     try:
         token = github_installation_token(installation_id)
         if not token:
@@ -6053,6 +6159,15 @@ def process_github_pull_request(installation_id: int, full_name: str, pull_reque
                 },
             )
             return
+        history_user_id = str(entitlement.get("user_id") or "")
+        save_github_scan_history(
+            history_user_id,
+            installation_id,
+            full_name,
+            pull_request_number,
+            sha,
+            "in_progress",
+        )
         upsert_github_check(
             full_name,
             pull_request_number,
@@ -6097,8 +6212,30 @@ def process_github_pull_request(installation_id: int, full_name: str, pull_reque
                 "output": check_output,
             },
         )
+        save_github_scan_history(
+            history_user_id,
+            installation_id,
+            full_name,
+            pull_request_number,
+            sha,
+            "completed",
+            conclusion=conclusion,
+            findings=findings,
+            files_scanned=files_scanned,
+            files_skipped=files_skipped,
+        )
     except Exception as exc:
         log_server_issue("GitHub pull request scan failed", exc)
+        save_github_scan_history(
+            history_user_id,
+            installation_id,
+            full_name,
+            pull_request_number,
+            sha,
+            "failed",
+            conclusion="neutral",
+            error_message="The scan could not complete. Retry the GitHub check.",
+        )
         if token:
             try:
                 upsert_github_check(
@@ -6244,6 +6381,63 @@ def github_account_status(request: Request):
         "connected": bool(installations),
         "installations": installations,
         "count": len(installations),
+    })
+
+
+@app.get("/github/dashboard")
+def github_dashboard(request: Request):
+    access = enrich_access_with_admin_metadata(get_request_access_context(request))
+    enforce_rate_limit(request, access, "github")
+    if not access.get("authenticated") or not access.get("user_id"):
+        return private_json({"detail": "Sign in to view your GitHub dashboard."}, status_code=401)
+
+    user_id = str(access["user_id"])
+    installation_rows = supabase_rest_request(
+        "GET",
+        "github_installations",
+        query=urlencode({
+            "user_id": f"eq.{user_id}",
+            "status": "eq.active",
+            "select": "installation_id,account_login,account_type,status,updated_at",
+            "order": "updated_at.desc",
+            "limit": "10",
+        }),
+    )
+    installations = installation_rows if isinstance(installation_rows, list) else []
+
+    repositories_by_name = {}
+    for installation in installations:
+        try:
+            installation_id = int(installation.get("installation_id") or 0)
+            for repository in list_github_installation_repositories(installation_id):
+                repositories_by_name[repository["full_name"]] = repository
+        except Exception as exc:
+            log_server_issue("GitHub dashboard repository listing failed", exc)
+
+    scan_rows = supabase_rest_request(
+        "GET",
+        "github_scan_runs",
+        query=urlencode({
+            "user_id": f"eq.{user_id}",
+            "select": (
+                "scan_id,repository,pull_request_number,commit_sha,status,conclusion,"
+                "high_count,medium_count,notice_count,files_scanned,files_skipped,"
+                "findings,details_url,error_message,scanner_version,created_at,updated_at"
+            ),
+            "order": "updated_at.desc",
+            "limit": "25",
+        }),
+    )
+    scans = scan_rows if isinstance(scan_rows, list) else []
+    return private_json({
+        "connected": bool(installations),
+        "plan": str(access.get("plan") or "free"),
+        "installations": installations,
+        "repositories": sorted(repositories_by_name.values(), key=lambda item: item["full_name"].lower()),
+        "scans": scans,
+        "history_storage_ready": isinstance(scan_rows, list),
+        "stored_code": False,
+        "scanner_version": SCANNER_VERSION,
     })
 
 
