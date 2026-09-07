@@ -5928,13 +5928,19 @@ def upsert_github_check(
         token,
     )
     existing_id = None
+    existing_annotations = 0
     if isinstance(checks, dict):
         for check in checks.get("check_runs") or []:
             if isinstance(check, dict) and check.get("external_id") == external_id:
                 existing_id = check.get("id")
+                output = check.get("output") if isinstance(check.get("output"), dict) else {}
+                existing_annotations = max(0, int(output.get("annotations_count") or 0))
                 break
     if existing_id:
         update_payload = dict(check_payload)
+        if existing_annotations and isinstance(update_payload.get("output"), dict):
+            update_payload["output"] = dict(update_payload["output"])
+            update_payload["output"].pop("annotations", None)
         update_payload["external_id"] = external_id
         return github_api_request(
             "PATCH",

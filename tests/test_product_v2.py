@@ -664,6 +664,27 @@ class GitHubWebhookTests(unittest.TestCase):
         self.assertEqual(request.call_args_list[1].args[0], "PATCH")
         self.assertTrue(request.call_args_list[1].args[1].endswith("/check-runs/77"))
 
+    def test_rerun_does_not_append_duplicate_annotations(self):
+        existing = {"check_runs": [{
+            "id": 77,
+            "external_id": main.github_check_external_id("owner/repo", 9, "b" * 40),
+            "output": {"annotations_count": 2},
+        }]}
+        payload = {
+            "status": "completed",
+            "conclusion": "neutral",
+            "output": {
+                "title": "2 findings",
+                "summary": "Current scan summary",
+                "annotations": [{"path": "app.py", "start_line": 1, "end_line": 1}],
+            },
+        }
+        with patch.object(main, "github_api_request", side_effect=[existing, {"id": 77}]) as request:
+            main.upsert_github_check("owner/repo", 9, "b" * 40, "token", payload)
+        update_payload = request.call_args_list[1].args[3]
+        self.assertNotIn("annotations", update_payload["output"])
+        self.assertEqual(update_payload["output"]["summary"], "Current scan summary")
+
     def test_findings_are_monitor_only_and_never_fail_the_pull_request(self):
         archive = io.BytesIO()
         with zipfile.ZipFile(archive, "w") as output:
