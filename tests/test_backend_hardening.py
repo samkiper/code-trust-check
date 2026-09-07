@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 from starlette.requests import Request
 
 import main
@@ -55,6 +56,12 @@ class RateLimitAndPrivacyTests(unittest.TestCase):
         response = main.private_json({"ok": True})
         self.assertEqual(response.headers["cache-control"], "no-store, max-age=0")
         self.assertEqual(response.headers["pragma"], "no-cache")
+
+    def test_homepage_has_browser_security_policy(self):
+        response = TestClient(main.app).get("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("frame-ancestors 'none'", response.headers["content-security-policy"])
+        self.assertEqual(response.headers["cross-origin-opener-policy"], "same-origin")
 
 
 class RepositoryScoringTests(unittest.TestCase):

@@ -30,6 +30,8 @@ Scanner v15 extends credential-flow analysis across multiline network calls. The
 
 Scanner v16 improves GitHub Check presentation without changing risk scoring: severity counts, review summaries, explanations, suggested fixes, and pull-request file links are included directly in the check result.
 
+Scanner v17 is a product-integrity release and does not change the v16 detection weights. It replaces definitive safety language with supported-signal language, exposes per-scan coverage and limitations, gives users an action-oriented verdict, and makes all findings accessible in the web interface. The published accuracy baseline therefore remains the v16 scoring baseline.
+
 ## Next accuracy work
 
 1. Preserve the no-hint holdout without tuning against its three misses; use a new development set for weak-randomness improvements.

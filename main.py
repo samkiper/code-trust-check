@@ -6,6 +6,7 @@ import re
 import os
 import io
 import ast
+import base64
 import json
 import zipfile
 import urllib.request
@@ -20,6 +21,7 @@ import tempfile
 import difflib
 import time
 import threading
+import secrets
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from html import escape as html_escape
@@ -43,6 +45,16 @@ async def add_security_headers(request: Request, call_next):
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "no-referrer")
     response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "connect-src 'self' https://ohabowduaydfaauqadqt.supabase.co wss://ohabowduaydfaauqadqt.supabase.co; "
+        "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+    )
+    response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
     forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
     if request.url.scheme == "https" or forwarded_proto == "https":
         response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
@@ -73,6 +85,11 @@ class ScanRequest(BaseModel):
 class RepoScanRequest(BaseModel):
     intent: str
     repo_url: str
+
+
+class GitHubInstallationLinkRequest(BaseModel):
+    installation_id: int
+    state: str
 
 
 class FixPreviewRequest(BaseModel):
@@ -195,6 +212,10 @@ GITHUB_APP_ID = os.getenv("GITHUB_APP_ID", "").strip()
 GITHUB_PRIVATE_KEY = os.getenv("GITHUB_PRIVATE_KEY", "").replace("\\n", "\n").strip()
 GITHUB_WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET", "").strip()
 GITHUB_APP_SLUG = os.getenv("GITHUB_APP_SLUG", "").strip()
+GITHUB_ENFORCE_PRO = os.getenv("GITHUB_ENFORCE_PRO", "false").strip().lower() in {"1", "true", "yes", "on"}
+GITHUB_LINK_STATE_SECRET = os.getenv("GITHUB_LINK_STATE_SECRET", "").strip() or GITHUB_WEBHOOK_SECRET
+
+SCANNER_VERSION = 17
 
 GITHUB_REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 GITHUB_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -908,6 +929,99 @@ def build_trust_badge(trust_score: int, risk: str) -> dict:
         "emoji": "🟢",
         "color": "green",
         "message": "No major risk signals were found in this static scan. This is not a guarantee that the code is safe."
+    }
+
+
+LANGUAGE_LABELS = {
+    ".py": "Python", ".js": "JavaScript", ".jsx": "JavaScript",
+    ".ts": "TypeScript", ".tsx": "TypeScript", ".go": "Go",
+    ".java": "Java", ".rb": "Ruby", ".php": "PHP", ".cs": "C#",
+    ".cpp": "C++", ".c": "C", ".rs": "Rust", ".sh": "Shell",
+    ".swift": "Swift", ".kt": "Kotlin", ".sql": "SQL",
+    ".html": "HTML", ".css": "CSS", ".json": "JSON",
+    ".yaml": "YAML", ".yml": "YAML", ".xml": "XML",
+}
+
+
+def language_from_filename(filename: str) -> str:
+    return LANGUAGE_LABELS.get(Path(str(filename or "")).suffix.lower(), "Unknown")
+
+
+def build_action_verdict(risk: str, trust_score: int, insufficient: bool = False) -> dict:
+    """Give users a next action without claiming a static scan proved safety."""
+    if insufficient or risk in {"limit", "limited"}:
+        return {
+            "id": "not_rated",
+            "label": "Not enough was scanned",
+            "action": "Provide supported code or reduce the scan size, then run the audit again.",
+            "tone": "neutral",
+        }
+    if risk == "red" or trust_score <= 40:
+        return {
+            "id": "do_not_run",
+            "label": "Do not run this yet",
+            "action": "Fix the high-risk findings first, then scan the revised code again.",
+            "tone": "danger",
+        }
+    if risk == "yellow" or trust_score <= 70:
+        return {
+            "id": "review_first",
+            "label": "Review before running",
+            "action": "Confirm each flagged behavior is expected and apply the relevant fixes.",
+            "tone": "warning",
+        }
+    return {
+        "id": "continue_with_review",
+        "label": "No major supported risks found",
+        "action": "You can continue testing, but still review business logic, permissions, and runtime behavior.",
+        "tone": "clear",
+    }
+
+
+def build_code_coverage(code: str, filename: str, semgrep_status: str) -> dict:
+    language = language_from_filename(filename)
+    if language == "Python":
+        depth = "Deep"
+        evidence = "Python receives syntax-tree, data-flow, behavior-rule, and local Semgrep analysis."
+    elif language in {"JavaScript", "TypeScript"}:
+        depth = "Standard"
+        evidence = f"{language} receives behavior-rule and local Semgrep analysis; cross-file flows are not followed."
+    else:
+        depth = "Basic"
+        evidence = f"{language} receives supported static pattern checks; language-specific depth may be limited."
+    limitations = [
+        "Static review only: the submitted code was not executed.",
+        "A clean result means no supported signal was found, not that the code was proven safe.",
+        "Pasted-code scans do not resolve project dependencies or follow behavior across other files.",
+    ]
+    if semgrep_status != "complete":
+        limitations.append(f"The local Semgrep engine was {semgrep_status}; results rely on the behavior engine.")
+    return {
+        "scope": "pasted_code",
+        "language": language,
+        "analysis_depth": depth,
+        "summary": evidence,
+        "lines_analyzed": len(code.splitlines()),
+        "limitations": limitations,
+    }
+
+
+def build_repo_coverage(file_names: list[str], files_available: int, dependency_summary: dict) -> dict:
+    languages = sorted({language_from_filename(name) for name in file_names if language_from_filename(name) != "Unknown"})
+    manifests = int(dependency_summary.get("manifests_scanned", 0) or 0)
+    return {
+        "scope": "public_repository",
+        "languages": languages,
+        "files_analyzed": len(file_names),
+        "supported_files_found": int(files_available or 0),
+        "dependency_manifests_analyzed": manifests,
+        "dependency_ecosystems": ["PyPI requirements.txt", "npm package.json"],
+        "limitations": [
+            "Static review only: repository code was not executed.",
+            "Files are analyzed individually; cross-file data flows and runtime configuration are not followed.",
+            "Dependency vulnerability lookup currently parses requirements.txt and package.json only.",
+            "A clean result means no supported signal was found, not that the repository was proven safe.",
+        ],
     }
 
 
@@ -4678,6 +4792,20 @@ def analyze_code_product(intent: str, code: str, plan: str = "free", filename: s
         {"name": "behavior", "status": "complete", "findings": len(result.get("flags") or [])},
         {"name": "semgrep", "status": semgrep.get("status"), "findings": len(semgrep_findings), "duration_ms": semgrep.get("duration_ms", 0)},
     ]
+    effective_filename = filename or infer_code_filename(code)
+    result["scanner_version"] = SCANNER_VERSION
+    result["verdict"] = build_action_verdict(
+        str(result.get("risk") or "limited"),
+        int(result.get("trust_score", 0) or 0),
+        insufficient=result.get("risk") in {"limit", "limited"},
+    )
+    result["coverage"] = build_code_coverage(code, effective_filename, str(semgrep.get("status") or "unavailable"))
+    result["scan_confidence"] = build_scan_confidence(
+        "code",
+        code_line_count=len(code.splitlines()),
+        line_limit_applied=get_plan_limits(plan).get("line_limit"),
+        was_limited=result.get("risk") in {"limit", "limited"},
+    )
     result["evidence"] = build_evidence_profile(
         result.get("flags") or [],
         result.get("touches") or [],
@@ -5526,6 +5654,86 @@ def parse_github_pull_request_event(body: dict) -> tuple[int, str, int, str]:
     return installation_id, full_name, pull_request_number, sha
 
 
+def parse_github_check_rerequest_event(body: dict) -> tuple[int, str, int, str]:
+    check_run = body.get("check_run") or {}
+    pull_requests = check_run.get("pull_requests") or []
+    try:
+        installation_id = int(((body.get("installation") or {}).get("id") or 0))
+        pull_request_number = int(((pull_requests[0] if pull_requests else {}).get("number") or 0))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Incomplete check rerun event.") from exc
+    full_name = str(((body.get("repository") or {}).get("full_name") or "")).strip()
+    sha = str(check_run.get("head_sha") or "").strip()
+    check_name = str(check_run.get("name") or "").strip()
+    if (
+        installation_id <= 0
+        or pull_request_number <= 0
+        or check_name != GITHUB_CHECK_NAME
+        or not GITHUB_REPOSITORY_PATTERN.fullmatch(full_name)
+        or not GITHUB_SHA_PATTERN.fullmatch(sha)
+    ):
+        raise ValueError("Incomplete check rerun event.")
+    return installation_id, full_name, pull_request_number, sha
+
+
+def github_installation_entitlement(installation_id: int) -> dict:
+    """Resolve a claimed GitHub installation to a currently entitled account."""
+    if not GITHUB_ENFORCE_PRO:
+        return {"allowed": True, "reason": "enforcement_disabled"}
+    rows = supabase_rest_request(
+        "GET",
+        "github_installations",
+        query=f"installation_id=eq.{int(installation_id)}&status=eq.active&select=user_id&limit=1",
+    )
+    if not isinstance(rows, list) or not rows:
+        return {"allowed": False, "reason": "installation_not_linked"}
+    user_id = str(rows[0].get("user_id") or "")
+    user = get_supabase_admin_user(user_id) or {}
+    metadata = user.get("app_metadata") or {}
+    role = str(metadata.get("role") or "user").lower()
+    plan = str(metadata.get("plan") or ("admin" if role == "admin" else "free")).lower()
+    return {
+        "allowed": role == "admin" or plan == "pro",
+        "reason": "active_pro" if role == "admin" or plan == "pro" else "pro_required",
+        "user_id": user_id,
+    }
+
+
+def create_github_install_state(user_id: str, ttl_seconds: int = 900) -> str:
+    if not GITHUB_LINK_STATE_SECRET:
+        raise RuntimeError("GitHub installation linking is not configured")
+    payload = {
+        "user_id": str(user_id),
+        "exp": int(time.time()) + max(60, min(int(ttl_seconds), 1800)),
+        "nonce": secrets.token_urlsafe(10),
+    }
+    encoded = base64.urlsafe_b64encode(
+        json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    ).decode("ascii").rstrip("=")
+    signature = hmac.new(GITHUB_LINK_STATE_SECRET.encode("utf-8"), encoded.encode("ascii"), hashlib.sha256).hexdigest()
+    return f"{encoded}.{signature}"
+
+
+def verify_github_install_state(state: str, expected_user_id: str) -> bool:
+    if not GITHUB_LINK_STATE_SECRET or not state or len(state) > 1000:
+        return False
+    try:
+        encoded, supplied_signature = state.rsplit(".", 1)
+        expected_signature = hmac.new(
+            GITHUB_LINK_STATE_SECRET.encode("utf-8"), encoded.encode("ascii"), hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(supplied_signature, expected_signature):
+            return False
+        padded = encoded + "=" * (-len(encoded) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+        return (
+            str(payload.get("user_id") or "") == str(expected_user_id)
+            and int(payload.get("exp") or 0) >= int(time.time())
+        )
+    except Exception:
+        return False
+
+
 def list_github_pull_request_files(full_name: str, pull_request_number: int, token: str) -> list[dict]:
     changed_files: list[dict] = []
     page = 1
@@ -5687,6 +5895,8 @@ def build_github_check_output(
         "Monitor-only: this check does not block merging. No code was executed. "
         f"Scanned {files_scanned} changed supported file(s); skipped {files_skipped}."
     )
+    if len(findings) > 50:
+        summary += f" GitHub displays the first 50 of {len(findings)} findings; review the changed files for the remainder."
     output = {
         "title": f"{len(findings)} finding(s) across {files_scanned} file(s)",
         "summary": summary,
@@ -5705,6 +5915,27 @@ def process_github_pull_request(installation_id: int, full_name: str, pull_reque
         details_url = (
             f"https://github.com/{quote(full_name, safe='/')}/pull/{pull_request_number}/files"
         )
+        entitlement = github_installation_entitlement(installation_id)
+        if not entitlement.get("allowed"):
+            upsert_github_check(
+                full_name,
+                pull_request_number,
+                sha,
+                token,
+                {
+                    "status": "completed",
+                    "conclusion": "neutral",
+                    "details_url": f"{APP_BASE_URL}/?github=link&installation_id={installation_id}",
+                    "output": {
+                        "title": "Connect this installation to Pro",
+                        "summary": (
+                            "This monitor-only scan was not run because the GitHub installation is not linked "
+                            "to an active AI Code Audit Pro account. Open the details link while signed in to connect it."
+                        ),
+                    },
+                },
+            )
+            return
         upsert_github_check(
             full_name,
             pull_request_number,
@@ -5788,6 +6019,74 @@ def github_status():
         "monitor_only": True,
         "scans_changed_files_only": True,
         "dynamic_sandbox": "not_enabled",
+        "pro_enforcement": GITHUB_ENFORCE_PRO,
+        "secure_linking": bool(GITHUB_LINK_STATE_SECRET),
+        "scanner_version": SCANNER_VERSION,
+    })
+
+
+@app.get("/github/install-url")
+def github_install_url(request: Request):
+    access = enrich_access_with_admin_metadata(get_request_access_context(request))
+    enforce_rate_limit(request, access, "billing")
+    if not access.get("authenticated") or not access.get("user_id"):
+        return private_json({"detail": "Sign in before installing the GitHub App."}, status_code=401)
+    if access.get("plan") not in {"pro", "admin"} and access.get("role") != "admin":
+        return private_json({"detail": "An active Pro account is required for automatic pull-request checks."}, status_code=403)
+    valid_slug = GITHUB_APP_SLUG if GITHUB_APP_SLUG_PATTERN.fullmatch(GITHUB_APP_SLUG) else ""
+    if not valid_slug or not GITHUB_LINK_STATE_SECRET:
+        return private_json({"detail": "Secure GitHub installation linking is not configured."}, status_code=503)
+    state = create_github_install_state(str(access["user_id"]))
+    return private_json({
+        "url": f"https://github.com/apps/{valid_slug}/installations/new?{urlencode({'state': state})}",
+        "expires_in": 900,
+    })
+
+
+@app.post("/github/link-installation")
+def link_github_installation(req: GitHubInstallationLinkRequest, request: Request):
+    access = enrich_access_with_admin_metadata(get_request_access_context(request))
+    enforce_rate_limit(request, access, "billing")
+    if not access.get("authenticated") or not access.get("user_id"):
+        return private_json({"detail": "Sign in before connecting a GitHub installation."}, status_code=401)
+    if access.get("plan") not in {"pro", "admin"} and access.get("role") != "admin":
+        return private_json({"detail": "An active Pro account is required for automatic pull-request checks."}, status_code=403)
+    if req.installation_id <= 0:
+        return private_json({"detail": "The GitHub installation ID is invalid."}, status_code=400)
+    if not verify_github_install_state(req.state, str(access["user_id"])):
+        return private_json({"detail": "The GitHub installation link expired or did not match this account. Start the connection again."}, status_code=400)
+    try:
+        installation = github_api_request(
+            "GET",
+            f"https://api.github.com/app/installations/{int(req.installation_id)}",
+            github_app_jwt(),
+        )
+    except Exception:
+        return private_json({"detail": "GitHub could not verify that installation for this App."}, status_code=400)
+    if not isinstance(installation, dict) or int(installation.get("id") or 0) != req.installation_id:
+        return private_json({"detail": "GitHub returned an invalid installation record."}, status_code=400)
+    account = installation.get("account") or {}
+    payload = {
+        "installation_id": req.installation_id,
+        "user_id": str(access["user_id"]),
+        "account_login": str(account.get("login") or "")[:255],
+        "account_type": str(account.get("type") or "")[:80],
+        "status": "active",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    saved = supabase_rest_request(
+        "POST",
+        "github_installations",
+        payload=payload,
+        prefer="resolution=merge-duplicates,return=representation",
+    )
+    if not saved:
+        return private_json({"detail": "GitHub linking storage is not configured yet."}, status_code=503)
+    return private_json({
+        "linked": True,
+        "installation_id": req.installation_id,
+        "account_login": payload["account_login"],
+        "pro_enforcement": GITHUB_ENFORCE_PRO,
     })
 
 
@@ -5806,10 +6105,13 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=400, detail="Malformed GitHub webhook payload.")
     if event == "ping":
         return private_json({"received": True, "event": "ping"})
-    if event != "pull_request" or body.get("action") not in {"opened", "reopened", "synchronize"}:
-        return private_json({"received": True, "ignored": True})
     try:
-        installation_id, full_name, pull_request_number, sha = parse_github_pull_request_event(body)
+        if event == "pull_request" and body.get("action") in {"opened", "reopened", "synchronize"}:
+            installation_id, full_name, pull_request_number, sha = parse_github_pull_request_event(body)
+        elif event == "check_run" and body.get("action") == "rerequested":
+            installation_id, full_name, pull_request_number, sha = parse_github_check_rerequest_event(body)
+        else:
+            return private_json({"received": True, "ignored": True})
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     background_tasks.add_task(
@@ -5832,7 +6134,7 @@ def stripe_status():
         "supabase_admin_valid": supabase_admin_is_valid(),
         "app_base_url": APP_BASE_URL,
         "recovery_version": 4,
-        "scanner_version": 16,
+        "scanner_version": SCANNER_VERSION,
         "security_version": 1,
         "benchmark_cases": 1103,
         "benchmark_independent_cases": 300,
@@ -5946,7 +6248,7 @@ def submit_feedback(req: FeedbackRequest, request: Request):
         "verdict": verdict,
         "category": req.category.strip()[:80],
         "note": req.note.strip()[:500],
-        "scanner_version": 16,
+        "scanner_version": SCANNER_VERSION,
     }
     inserted = supabase_rest_request("POST", "scan_feedback", payload=payload, prefer="return=representation")
     if not inserted:
@@ -6055,6 +6357,7 @@ def scan_repo(req: RepoScanRequest, request: Request):
 
     if not files_scanned and not dependency_findings:
         return private_json({
+            "scanner_version": SCANNER_VERSION,
             "repo_url": req.repo_url,
             "repo_name": f"{owner}/{repo}",
             "risk": "limited",
@@ -6092,6 +6395,8 @@ def scan_repo(req: RepoScanRequest, request: Request):
                 "level": "Insufficient",
                 "lines": ["No supported source files were found. A safety rating was not produced."],
             },
+            "verdict": build_action_verdict("limited", 0, insufficient=True),
+            "coverage": build_repo_coverage([], files_available_count, dependency_scan),
             "access": access,
             "privacy": {"stored_by_scanner": False, "response_cache_disabled": True},
         })
@@ -6160,6 +6465,7 @@ def scan_repo(req: RepoScanRequest, request: Request):
     )
 
     return private_json({
+        "scanner_version": SCANNER_VERSION,
         "repo_url": req.repo_url,
         "repo_name": f"{owner}/{repo}",
         "risk": overall_risk,
@@ -6176,6 +6482,12 @@ def scan_repo(req: RepoScanRequest, request: Request):
         "score_explanation": score_explanation,
         "score_explanation_lines": score_explanation_lines,
         "scan_confidence": scan_confidence,
+        "verdict": build_action_verdict(overall_risk, trust_score),
+        "coverage": build_repo_coverage(
+            [str(item.get("file") or "") for item in files_scanned],
+            files_available_count,
+            dependency_scan,
+        ),
         "evidence": evidence,
         "analysis_engines": [
             {"name": "behavior", "status": "complete", "findings": len(flattened_repo_flags)},

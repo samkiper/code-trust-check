@@ -5,6 +5,7 @@ import io
 import asyncio
 import unittest
 import zipfile
+from pathlib import Path
 from unittest.mock import patch
 
 import main
@@ -24,6 +25,37 @@ class EvidenceModelTests(unittest.TestCase):
             result = main.analyze_code_product("Display input", "value = input()\neval(value)")
         execution = next(item for item in result["evidence"] if item["id"] == "execution")
         self.assertEqual(execution["status"], "high")
+
+
+class ProductIntegrityV17Tests(unittest.TestCase):
+    def test_github_install_state_is_signed_and_bound_to_user(self):
+        with patch.object(main, "GITHUB_LINK_STATE_SECRET", "state-secret"):
+            state = main.create_github_install_state("user-1")
+            self.assertTrue(main.verify_github_install_state(state, "user-1"))
+            self.assertFalse(main.verify_github_install_state(state, "user-2"))
+            self.assertFalse(main.verify_github_install_state(state + "tampered", "user-1"))
+
+    def test_safe_result_uses_supported_signal_language_and_action(self):
+        with patch.object(main, "SEMGREP_ENABLED", False):
+            result = main.analyze_code_product("Print a greeting", "print('hello')", filename="hello.py")
+        self.assertEqual(result["scanner_version"], 17)
+        self.assertEqual(result["verdict"]["id"], "continue_with_review")
+        self.assertIn("No major supported risks", result["verdict"]["label"])
+        self.assertEqual(result["coverage"]["language"], "Python")
+        self.assertEqual(result["coverage"]["analysis_depth"], "Deep")
+        self.assertTrue(any("not that the code was proven safe" in item for item in result["coverage"]["limitations"]))
+
+    def test_high_risk_result_gives_beginner_safe_next_action(self):
+        with patch.object(main, "SEMGREP_ENABLED", False):
+            result = main.analyze_code_product("Print a greeting", "value = input()\neval(value)", filename="app.py")
+        self.assertEqual(result["verdict"]["id"], "do_not_run")
+        self.assertIn("scan the revised code again", result["verdict"]["action"])
+
+    def test_web_ui_does_not_claim_behavior_matches_intent(self):
+        html = Path("static/index.html").read_text(encoding="utf-8")
+        self.assertNotIn("Behavior matches intent", html)
+        self.assertIn("No supported risk signals found", html)
+        self.assertIn("Show all ", html)
 
 
 class FixPreviewTests(unittest.TestCase):
@@ -415,6 +447,42 @@ class GitHubWebhookTests(unittest.TestCase):
         body["repository"]["full_name"] = "owner/repo/extra"
         with self.assertRaises(ValueError):
             main.parse_github_pull_request_event(body)
+
+    def test_check_rerequest_event_is_validated_and_parsed(self):
+        sha = "e" * 40
+        body = {
+            "installation": {"id": 123},
+            "repository": {"full_name": "owner/repo"},
+            "check_run": {
+                "name": "AI Code Audit",
+                "head_sha": sha,
+                "pull_requests": [{"number": 42}],
+            },
+        }
+        self.assertEqual(main.parse_github_check_rerequest_event(body), (123, "owner/repo", 42, sha))
+        body["check_run"]["name"] = "Another check"
+        with self.assertRaises(ValueError):
+            main.parse_github_check_rerequest_event(body)
+
+    def test_github_summary_discloses_annotation_limit(self):
+        findings = [("app.py", {"line": index + 1, "severity": 20, "message": "Risk"}) for index in range(55)]
+        output = main.build_github_check_output(findings, 1, 0)
+        self.assertIn("first 50 of 55 findings", output["summary"])
+
+    def test_pro_enforcement_rejects_unlinked_installation(self):
+        with patch.object(main, "GITHUB_ENFORCE_PRO", True), \
+                patch.object(main, "supabase_rest_request", return_value=[]):
+            result = main.github_installation_entitlement(123)
+        self.assertFalse(result["allowed"])
+        self.assertEqual(result["reason"], "installation_not_linked")
+
+    def test_pro_enforcement_accepts_linked_pro_account(self):
+        with patch.object(main, "GITHUB_ENFORCE_PRO", True), \
+                patch.object(main, "supabase_rest_request", return_value=[{"user_id": "user-1"}]), \
+                patch.object(main, "get_supabase_admin_user", return_value={"app_metadata": {"plan": "pro"}}):
+            result = main.github_installation_entitlement(123)
+        self.assertTrue(result["allowed"])
+        self.assertEqual(result["reason"], "active_pro")
 
     def test_pull_request_file_listing_paginates_and_filters(self):
         first_page = [{"filename": f"docs/page-{index}.md", "status": "modified"} for index in range(100)]

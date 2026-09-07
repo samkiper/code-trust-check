@@ -11,6 +11,7 @@
 - Signed-in users can mark findings accurate, report false alarms, or report a missed risk. Feedback records fingerprints and labels only; submitted code is not stored.
 - Dependency review checks published advisories, likely package-name typos, missing registry packages, and unpinned direct-source installs.
 - Review-only “Fix this safely” previews cover unsafe YAML loading, disabled TLS verification, production debug mode, and dynamic `eval`.
+- Scanner v17 adds action-oriented verdicts, language and coverage disclosures, explicit static-analysis limitations, complete finding access, GitHub check reruns, and opt-in Pro enforcement for linked GitHub installations. Detection weights remain unchanged from v16.
 
 ## Accuracy gate
 
@@ -34,6 +35,16 @@ Also configure Render to wait for GitHub checks before auto-deploying when that 
 
 In Supabase, open **SQL Editor**, paste the contents of `supabase/scan_feedback.sql`, and run it once. The table has row-level security enabled and denies browser clients direct access; the authenticated backend writes the minimal feedback record with the existing Supabase secret key.
 
+## GitHub Pro-link setup for v17
+
+1. In Supabase **SQL Editor**, run `supabase/github_installations.sql` once.
+2. In the GitHub App settings, set the **Setup URL** to `https://code-trust-check.onrender.com/` and enable the redirect after installation updates.
+3. Subscribe the GitHub App to both **Pull request** and **Check run** events. Check-run delivery enables GitHub's **Re-run checks** control.
+4. Deploy v17 with `GITHUB_ENFORCE_PRO=false` first and complete one signed-in Pro installation-link test.
+5. After that test succeeds, set `GITHUB_ENFORCE_PRO=true` in Render and redeploy. Unlinked or non-Pro installations then receive a neutral check explaining how to connect Pro instead of a scan.
+
+The installation link is verified directly against GitHub before it is stored. Browser users cannot read or write the installation table directly.
+
 ## Render environment variables
 
 Semgrep runs by default after the new dependency is installed. Set `SEMGREP_ENABLED=false` only if the Render instance cannot support the additional package.
@@ -46,14 +57,16 @@ To activate GitHub pull-request checks, create a GitHub App and add these Render
 | `GITHUB_PRIVATE_KEY` | The complete PEM private key |
 | `GITHUB_WEBHOOK_SECRET` | A new random webhook secret |
 | `GITHUB_APP_SLUG` | The public slug from the GitHub App URL, used to show the install button |
+| `GITHUB_ENFORCE_PRO` | Start with `false`; change to `true` only after the v17 linking test succeeds |
+| `GITHUB_LINK_STATE_SECRET` | A separate random secret used to sign the short-lived installation ownership token |
 
 Configure the GitHub App with:
 
 - Webhook URL: `https://code-trust-check.onrender.com/github/webhook`
-- Subscribe to: Pull request
+- Subscribe to: Pull request and Check run
 - Repository permissions: Metadata read-only, Contents read-only, Pull requests read-only, Checks read and write
 
-After installing the App on a repository, opening or updating a pull request queues a static scan of changed supported files and produces an **AI Code Audit** check. Findings use a neutral conclusion and do not block merging. Each annotation includes a severity label, explanation, suggested fix, and a link to the pull request's changed files. Re-delivered webhooks update the same check instead of creating duplicates.
+After installing the App on a repository, opening or updating a pull request queues a static scan of changed supported files and produces an **AI Code Audit** check. Findings use a neutral conclusion and do not block merging. Each annotation includes a severity label, explanation, suggested fix, and a link to the pull request's changed files. Re-delivered webhooks and check reruns update the same check instead of creating duplicates. GitHub annotations are limited to 50 per response, so v17 explicitly reports when additional findings exist.
 
 The public status endpoint at `/github/status` reports only whether each required setting exists, the public installation URL, and the integration capabilities; it never returns secrets.
 
