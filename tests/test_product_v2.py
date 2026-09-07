@@ -115,6 +115,8 @@ class ProductIntegrityV17Tests(unittest.TestCase):
         self.assertIn("Show all ", html)
         self.assertIn('/github/connect-url', html)
         self.assertIn('id="githubAccountCard"', html)
+        self.assertIn('id="githubConnectedStatus"', html)
+        self.assertIn("✓ GitHub Connected", html)
 
 
 class FixPreviewTests(unittest.TestCase):
