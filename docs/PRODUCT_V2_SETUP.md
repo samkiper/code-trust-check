@@ -13,6 +13,7 @@
 - Review-only “Fix this safely” previews cover unsafe YAML loading, disabled TLS verification, production debug mode, and dynamic `eval`.
 - Scanner v18 adds a signed-in security dashboard with connected repositories, the latest 25 pull-request scans, severity counts, expandable finding explanations, and false-positive feedback. Stored history contains metadata and finding explanations only; source code is never stored. Detection rules and weights remain unchanged from v17.
 - Scanner v19 adds shared Supabase rate limiting, an admin-only feedback review queue and sanitized candidate export, common direct-manifest and lockfile parsing across six dependency ecosystems, and typed JavaScript/TypeScript regression coverage.
+- Scanner v20 adds bounded Semgrep cold-start retries and engine telemetry, opt-in repository severity policies, auditable accepted-risk/false-positive/temporary suppressions, scan-to-scan comparisons, Beginner and Developer result views, and severity filtering with pagination. Repository checks remain monitor-only until a Pro user explicitly saves a blocking policy.
 
 ## Accuracy gate
 
@@ -39,6 +40,12 @@ In Supabase, open **SQL Editor**, paste the current contents of `supabase/scan_f
 ## Persistent rate-limit setup for v19
 
 In Supabase **SQL Editor**, run `supabase/rate_limits.sql` once. The function atomically counts requests across Render restarts and multiple service instances. Bucket identifiers are one-way hashes, browser roles have no access, and the backend falls back to a local limiter if Supabase is temporarily unavailable. `PERSISTENT_RATE_LIMITS_ENABLED` defaults to `true`; set it to `false` only during incident recovery.
+
+## Repository policy setup for v20
+
+In Supabase **SQL Editor**, run `supabase/repository_security.sql` once. It creates server-only tables for per-repository enforcement policies and reviewed finding suppressions. Suppressions store a finding fingerprint, disposition, reason, and optional expiration; they never store source code. The default policy is monitor-only. Blocking must be explicitly enabled per repository by a Pro user.
+
+Semgrep uses a bounded 40-second total budget with a 28-second first attempt and one retry using the remaining budget. Override these only if the Render instance needs tuning with `SEMGREP_BUDGET_SECONDS` and `SEMGREP_FIRST_ATTEMPT_SECONDS`.
 
 ## Dependency coverage for v19
 
