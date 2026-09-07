@@ -27,7 +27,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from html import escape as html_escape
 from dotenv import load_dotenv
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, timedelta
 from urllib.parse import urlparse, quote, urlencode
 import stripe
 import jwt
@@ -109,6 +109,19 @@ class FeedbackRequest(BaseModel):
 class FeedbackReviewRequest(BaseModel):
     decision: str
     review_note: str = ""
+
+
+class RepositoryPolicyRequest(BaseModel):
+    enforcement_mode: str = "monitor"
+    block_at: str = "high"
+
+
+class FindingSuppressionRequest(BaseModel):
+    repository: str
+    finding_id: str
+    disposition: str
+    reason: str
+    expires_in_days: int | None = None
 
 
 # display_key, regex, label, base severity points
@@ -218,6 +231,8 @@ STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "").strip()
 APP_BASE_URL = os.getenv("APP_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
 SEMGREP_ENABLED = os.getenv("SEMGREP_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
 SEMGREP_CONFIG_PATH = Path(__file__).with_name("semgrep.yml")
+SEMGREP_BUDGET_SECONDS = max(15, min(int(os.getenv("SEMGREP_BUDGET_SECONDS", "40")), 60))
+SEMGREP_FIRST_ATTEMPT_SECONDS = max(10, min(int(os.getenv("SEMGREP_FIRST_ATTEMPT_SECONDS", "28")), SEMGREP_BUDGET_SECONDS))
 GITHUB_APP_ID = os.getenv("GITHUB_APP_ID", "").strip()
 GITHUB_PRIVATE_KEY = os.getenv("GITHUB_PRIVATE_KEY", "").replace("\\n", "\n").strip()
 GITHUB_WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET", "").strip()
@@ -227,7 +242,7 @@ GITHUB_LINK_STATE_SECRET = os.getenv("GITHUB_LINK_STATE_SECRET", "").strip() or 
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "").strip()
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 
-SCANNER_VERSION = 19
+SCANNER_VERSION = 20
 
 GITHUB_REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 GITHUB_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -4573,27 +4588,47 @@ def run_semgrep_scan(code: str, filename: str | None = None) -> dict:
         return {"name": "semgrep", "status": "unavailable", "findings": [], "duration_ms": 0}
 
     safe_name = Path(filename or infer_code_filename(code)).name
+    attempts = []
     try:
         with tempfile.TemporaryDirectory(prefix="ai-code-audit-") as temp_dir:
             target = Path(temp_dir) / safe_name
             target.write_text(code, encoding="utf-8")
-            completed = subprocess.run(
-                [
-                    executable,
-                    "scan",
-                    "--json",
-                    "--metrics=off",
-                    "--quiet",
-                    "--config",
-                    str(SEMGREP_CONFIG_PATH),
-                    str(target),
-                ],
-                capture_output=True,
-                text=True,
-                timeout=20,
-                check=False,
-                env={**os.environ, "SEMGREP_SEND_METRICS": "off"},
-            )
+            command = [
+                executable, "scan", "--json", "--metrics=off", "--quiet",
+                "--jobs", "1", "--timeout", "5", "--max-memory", "512",
+                "--config", str(SEMGREP_CONFIG_PATH), str(target),
+            ]
+            completed = None
+            deadline = started + SEMGREP_BUDGET_SECONDS
+            for attempt_number in (1, 2):
+                remaining = max(0, deadline - time.monotonic())
+                if remaining < 2:
+                    break
+                timeout_seconds = min(
+                    SEMGREP_FIRST_ATTEMPT_SECONDS if attempt_number == 1 else remaining,
+                    remaining,
+                )
+                attempt_started = time.monotonic()
+                try:
+                    completed = subprocess.run(
+                        command,
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout_seconds,
+                        check=False,
+                        env={**os.environ, "SEMGREP_SEND_METRICS": "off"},
+                    )
+                    attempts.append({"attempt": attempt_number, "status": "complete", "duration_ms": round((time.monotonic() - attempt_started) * 1000)})
+                    break
+                except subprocess.TimeoutExpired:
+                    attempts.append({"attempt": attempt_number, "status": "timeout", "duration_ms": round((time.monotonic() - attempt_started) * 1000)})
+            if completed is None:
+                return {
+                    "name": "semgrep", "status": "timeout", "findings": [],
+                    "duration_ms": round((time.monotonic() - started) * 1000),
+                    "attempts": attempts, "fallback_used": True,
+                    "message": "Semgrep exceeded its scan budget; the behavior engine still completed.",
+                }
         if completed.returncode not in {0, 1}:
             raise RuntimeError("Semgrep returned a non-scan exit status")
         payload = json.loads(completed.stdout or "{}")
@@ -4619,9 +4654,9 @@ def run_semgrep_scan(code: str, filename: str | None = None) -> dict:
             "status": "complete",
             "findings": findings,
             "duration_ms": round((time.monotonic() - started) * 1000),
+            "attempts": attempts,
+            "fallback_used": bool(len(attempts) > 1),
         }
-    except subprocess.TimeoutExpired:
-        return {"name": "semgrep", "status": "timeout", "findings": [], "duration_ms": 20000}
     except Exception as exc:
         log_server_issue("Semgrep scan could not complete", exc)
         return {
@@ -4629,6 +4664,9 @@ def run_semgrep_scan(code: str, filename: str | None = None) -> dict:
             "status": "error",
             "findings": [],
             "duration_ms": round((time.monotonic() - started) * 1000),
+            "attempts": attempts,
+            "fallback_used": True,
+            "message": "Semgrep could not complete; the behavior engine still completed.",
         }
 
 
@@ -5116,7 +5154,7 @@ def analyze_code_product(intent: str, code: str, plan: str = "free", filename: s
     result["engine_findings"] = semgrep_findings
     result["analysis_engines"] = [
         {"name": "behavior", "status": "complete", "findings": len(result.get("flags") or [])},
-        {"name": "semgrep", "status": semgrep.get("status"), "findings": len(semgrep_findings), "duration_ms": semgrep.get("duration_ms", 0)},
+        {"name": "semgrep", "status": semgrep.get("status"), "findings": len(semgrep_findings), "duration_ms": semgrep.get("duration_ms", 0), "attempts": semgrep.get("attempts", []), "fallback_used": bool(semgrep.get("fallback_used")), "message": semgrep.get("message", "")},
     ]
     effective_filename = filename or infer_code_filename(code)
     result["scanner_version"] = SCANNER_VERSION
@@ -5177,7 +5215,7 @@ def result_to_sarif(result: dict, filename: str = "snippet.py") -> dict:
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
         "version": "2.1.0",
         "runs": [{
-            "tool": {"driver": {"name": "AI Code Audit", "version": "16", "rules": list(rules.values())}},
+            "tool": {"driver": {"name": "AI Code Audit", "version": str(SCANNER_VERSION), "rules": list(rules.values())}},
             "results": sarif_results,
         }],
     }
@@ -6341,6 +6379,74 @@ def serialize_github_findings(findings: list[tuple[str, dict]]) -> list[dict]:
     return serialized
 
 
+def default_repository_policy(repository: str) -> dict:
+    return {"repository": repository, "enforcement_mode": "monitor", "block_at": "high"}
+
+
+def get_repository_policy(user_id: str, repository: str) -> dict:
+    rows = supabase_rest_request(
+        "GET", "repository_security_policies",
+        query=urlencode({
+            "user_id": f"eq.{user_id}", "repository": f"eq.{repository}",
+            "select": "repository,enforcement_mode,block_at,updated_at", "limit": "1",
+        }),
+    )
+    return rows[0] if isinstance(rows, list) and rows else default_repository_policy(repository)
+
+
+def get_active_suppressions(user_id: str, repository: str) -> dict[str, dict]:
+    now = datetime.now(timezone.utc).isoformat()
+    rows = supabase_rest_request(
+        "GET", "finding_suppressions",
+        query=urlencode({
+            "user_id": f"eq.{user_id}", "repository": f"eq.{repository}",
+            "select": "finding_id,disposition,reason,expires_at,created_at,updated_at",
+            "or": f"(expires_at.is.null,expires_at.gt.{now})", "limit": "500",
+        }),
+    )
+    return {str(row.get("finding_id")): row for row in rows} if isinstance(rows, list) else {}
+
+
+def annotate_suppressions(serialized: list[dict], suppressions: dict[str, dict]) -> list[dict]:
+    for finding in serialized:
+        suppression = suppressions.get(str(finding.get("finding_id") or ""))
+        finding["suppressed"] = bool(suppression)
+        if suppression:
+            finding["suppression"] = {
+                "disposition": suppression.get("disposition"),
+                "reason": suppression.get("reason"),
+                "expires_at": suppression.get("expires_at"),
+            }
+    return serialized
+
+
+def policy_blocks(policy: dict, serialized_findings: list[dict]) -> bool:
+    if str(policy.get("enforcement_mode") or "monitor") != "block":
+        return False
+    ranks = {"notice": 1, "medium": 2, "high": 3}
+    threshold = ranks.get(str(policy.get("block_at") or "high"), 3)
+    return any(
+        not finding.get("suppressed") and ranks.get(str(finding.get("severity") or "notice"), 1) >= threshold
+        for finding in serialized_findings
+    )
+
+
+def add_scan_comparisons(scans: list[dict]) -> list[dict]:
+    previous_by_key: dict[tuple[str, int], set[str]] = {}
+    for scan in reversed(scans):
+        key = (str(scan.get("repository") or ""), int(scan.get("pull_request_number") or 0))
+        current = {str(item.get("finding_id")) for item in (scan.get("findings") or []) if item.get("finding_id") and not item.get("suppressed")}
+        previous = previous_by_key.get(key)
+        scan["comparison"] = {
+            "new": len(current - previous) if previous is not None else len(current),
+            "fixed": len(previous - current) if previous is not None else 0,
+            "unchanged": len(current & previous) if previous is not None else 0,
+            "has_previous": previous is not None,
+        }
+        previous_by_key[key] = current
+    return scans
+
+
 def save_github_scan_history(
     user_id: str,
     installation_id: int,
@@ -6357,9 +6463,14 @@ def save_github_scan_history(
 ) -> dict:
     if not user_id:
         return {}
-    serialized = serialize_github_findings(findings or [])
+    serialized = annotate_suppressions(
+        serialize_github_findings(findings or []),
+        get_active_suppressions(str(user_id), str(full_name)),
+    )
     counts = {"high": 0, "medium": 0, "notice": 0}
     for finding in serialized:
+        if finding.get("suppressed"):
+            continue
         severity = str(finding.get("severity") or "notice")
         counts[severity if severity in counts else "notice"] += 1
     payload = {
@@ -6430,6 +6541,8 @@ def build_github_check_output(
     findings: list[tuple[str, dict]],
     files_scanned: int,
     files_skipped: int,
+    policy: dict | None = None,
+    suppressed_count: int = 0,
 ) -> dict:
     counts = {"High": 0, "Medium": 0, "Notice": 0}
     review_lines = []
@@ -6441,11 +6554,16 @@ def build_github_check_output(
             message = str(finding.get("message") or "Code behavior requires review.")
             review_lines.append(f"- **{severity.upper()}** `{path}:{line}` — {message}")
 
+    policy = policy or default_repository_policy("")
+    enforced = str(policy.get("enforcement_mode") or "monitor") == "block"
     summary = (
         f"**{counts['High']} high · {counts['Medium']} medium · {counts['Notice']} notice**\n\n"
-        "Monitor-only: this check does not block merging. No code was executed. "
+        + (f"Policy enforcement: findings at {policy.get('block_at', 'high')} severity or above block merging. " if enforced else "Monitor-only: this check does not block merging. ")
+        + "No code was executed. "
         f"Scanned {files_scanned} changed supported file(s); skipped {files_skipped}."
     )
+    if suppressed_count:
+        summary += f" {suppressed_count} reviewed finding(s) were suppressed and remain in the audit history."
     if len(findings) > 50:
         summary += f" GitHub displays the first 50 of {len(findings)} findings; review the changed files for the remainder."
     output = {
@@ -6514,9 +6632,14 @@ def process_github_pull_request(installation_id: int, full_name: str, pull_reque
         changed_files = list_github_pull_request_files(full_name, pull_request_number, token)
         archive = download_github_archive(full_name, sha, token)
         findings, files_scanned, files_skipped = scan_github_changed_files(archive, changed_files)
-        conclusion = "neutral" if findings else "success"
+        policy = get_repository_policy(history_user_id, full_name)
+        suppressions = get_active_suppressions(history_user_id, full_name)
+        serialized_findings = annotate_suppressions(serialize_github_findings(findings), suppressions)
+        active_findings = [item for item, serialized in zip(findings, serialized_findings) if not serialized.get("suppressed")]
+        suppressed_count = len(findings) - len(active_findings)
+        conclusion = "failure" if policy_blocks(policy, serialized_findings) else "neutral" if active_findings else "success"
         annotations = []
-        for path, finding in findings[:50]:
+        for path, finding in active_findings[:50]:
             line = max(1, int(finding.get("line") or 1))
             severity = float(finding.get("severity", 0) or 0)
             annotations.append({
@@ -6527,7 +6650,7 @@ def process_github_pull_request(installation_id: int, full_name: str, pull_reque
                 "message": github_annotation_message(finding),
                 "title": f"AI Code Audit • {github_finding_severity(severity)} severity",
             })
-        check_output = build_github_check_output(findings, files_scanned, files_skipped)
+        check_output = build_github_check_output(active_findings, files_scanned, files_skipped, policy, suppressed_count)
         check_output["annotations"] = annotations
         upsert_github_check(
             full_name,
@@ -6758,6 +6881,42 @@ def github_dashboard(request: Request):
         }),
     )
     scans = scan_rows if isinstance(scan_rows, list) else []
+    policy_rows = supabase_rest_request(
+        "GET", "repository_security_policies",
+        query=urlencode({
+            "user_id": f"eq.{user_id}",
+            "select": "repository,enforcement_mode,block_at,updated_at",
+            "limit": "200",
+        }),
+    )
+    policies = {str(row.get("repository")): row for row in policy_rows} if isinstance(policy_rows, list) else {}
+    suppression_rows = supabase_rest_request(
+        "GET", "finding_suppressions",
+        query=urlencode({
+            "user_id": f"eq.{user_id}",
+            "select": "repository,finding_id,disposition,reason,expires_at,created_at,updated_at",
+            "limit": "500",
+        }),
+    )
+    suppressions_by_repo: dict[str, dict[str, dict]] = {}
+    if isinstance(suppression_rows, list):
+        now = datetime.now(timezone.utc)
+        for row in suppression_rows:
+            expires_at = str(row.get("expires_at") or "")
+            if expires_at:
+                try:
+                    if datetime.fromisoformat(expires_at.replace("Z", "+00:00")) <= now:
+                        continue
+                except ValueError:
+                    continue
+            suppressions_by_repo.setdefault(str(row.get("repository") or ""), {})[str(row.get("finding_id") or "")] = row
+    for repository in repositories_by_name.values():
+        repository["policy"] = policies.get(repository["full_name"], default_repository_policy(repository["full_name"]))
+    for scan in scans:
+        findings = scan.get("findings") if isinstance(scan.get("findings"), list) else []
+        annotate_suppressions(findings, suppressions_by_repo.get(str(scan.get("repository") or ""), {}))
+        scan["accepted_count"] = sum(1 for item in findings if item.get("suppressed"))
+    add_scan_comparisons(scans)
     return private_json({
         "connected": bool(installations),
         "plan": str(access.get("plan") or "free"),
@@ -6765,9 +6924,81 @@ def github_dashboard(request: Request):
         "repositories": sorted(repositories_by_name.values(), key=lambda item: item["full_name"].lower()),
         "scans": scans,
         "history_storage_ready": isinstance(scan_rows, list),
+        "policy_storage_ready": isinstance(policy_rows, list) and isinstance(suppression_rows, list),
         "stored_code": False,
         "scanner_version": SCANNER_VERSION,
     })
+
+
+def require_github_repository_access(request: Request, repository: str) -> tuple[dict, str]:
+    access = enrich_access_with_admin_metadata(get_request_access_context(request))
+    enforce_rate_limit(request, access, "github")
+    if not access.get("authenticated") or not access.get("user_id"):
+        raise HTTPException(status_code=401, detail="Sign in to manage repository security settings.")
+    if not GITHUB_REPOSITORY_PATTERN.fullmatch(repository):
+        raise HTTPException(status_code=400, detail="The repository name is invalid.")
+    user_id = str(access["user_id"])
+    rows = supabase_rest_request(
+        "GET", "github_installations",
+        query=urlencode({"user_id": f"eq.{user_id}", "status": "eq.active", "select": "installation_id", "limit": "20"}),
+    )
+    for row in rows if isinstance(rows, list) else []:
+        try:
+            if any(item["full_name"].lower() == repository.lower() for item in list_github_installation_repositories(int(row.get("installation_id") or 0))):
+                return access, user_id
+        except Exception as exc:
+            log_server_issue("Repository access verification failed", exc)
+    raise HTTPException(status_code=403, detail="That repository is not connected to this account.")
+
+
+@app.post("/github/repositories/{owner}/{repo}/policy")
+def save_repository_policy(owner: str, repo: str, req: RepositoryPolicyRequest, request: Request):
+    repository = f"{owner}/{repo}"
+    access, user_id = require_github_repository_access(request, repository)
+    mode = str(req.enforcement_mode or "monitor").lower()
+    block_at = str(req.block_at or "high").lower()
+    if mode not in {"monitor", "block"} or block_at not in {"high", "medium", "notice"}:
+        raise HTTPException(status_code=400, detail="Choose monitor or block, with a valid severity threshold.")
+    if mode == "block" and access.get("plan") not in {"pro", "admin"} and access.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="An active Pro account is required to enforce blocking policies.")
+    payload = {
+        "user_id": user_id, "repository": repository, "enforcement_mode": mode,
+        "block_at": block_at, "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    saved = supabase_rest_request(
+        "POST", "repository_security_policies", payload=payload,
+        query="on_conflict=user_id,repository", prefer="resolution=merge-duplicates,return=representation",
+    )
+    if not saved:
+        return private_json({"detail": "Repository policy storage still needs its one-time database setup."}, status_code=503)
+    return private_json({"saved": True, "policy": payload})
+
+
+@app.post("/github/suppressions")
+def save_finding_suppression(req: FindingSuppressionRequest, request: Request):
+    _access, user_id = require_github_repository_access(request, req.repository)
+    disposition = str(req.disposition or "").lower()
+    reason = str(req.reason or "").strip()
+    if disposition not in {"accepted_risk", "false_positive", "temporary"}:
+        raise HTTPException(status_code=400, detail="Choose accepted risk, false positive, or temporary suppression.")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", str(req.finding_id or "")) or len(reason) < 5:
+        raise HTTPException(status_code=400, detail="A valid finding and a short audit reason are required.")
+    expires_at = None
+    if disposition == "temporary":
+        days = max(1, min(int(req.expires_in_days or 30), 365))
+        expires_at = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+    payload = {
+        "user_id": user_id, "repository": req.repository, "finding_id": req.finding_id,
+        "disposition": disposition, "reason": reason[:500], "expires_at": expires_at,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    saved = supabase_rest_request(
+        "POST", "finding_suppressions", payload=payload,
+        query="on_conflict=user_id,repository,finding_id", prefer="resolution=merge-duplicates,return=representation",
+    )
+    if not saved:
+        return private_json({"detail": "Suppression storage still needs its one-time database setup."}, status_code=503)
+    return private_json({"saved": True, "suppression": payload})
 
 
 @app.post("/github/link-installation")
