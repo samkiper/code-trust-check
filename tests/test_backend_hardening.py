@@ -45,7 +45,10 @@ class RateLimitAndPrivacyTests(unittest.TestCase):
     def test_rate_limit_rejects_excess_requests(self):
         request = make_request({"User-Agent": "benchmark"})
         access = {"authenticated": False}
-        with patch.dict(main.RATE_LIMITS_PER_MINUTE, {"scan": {"anonymous": 1, "authenticated": 1}}):
+        with patch.object(main, "consume_persistent_rate_limit", return_value=None), patch.dict(
+            main.RATE_LIMITS_PER_MINUTE,
+            {"scan": {"anonymous": 1, "authenticated": 1}},
+        ):
             main.enforce_rate_limit(request, access, "scan")
             with self.assertRaises(HTTPException) as caught:
                 main.enforce_rate_limit(request, access, "scan")
@@ -78,7 +81,10 @@ class RateLimitAndPrivacyTests(unittest.TestCase):
             "billing": {"anonymous": 1, "authenticated": 1},
             "github": {"anonymous": 1, "authenticated": 1},
         }
-        with patch.dict(main.RATE_LIMITS_PER_MINUTE, limits):
+        with patch.object(main, "consume_persistent_rate_limit", return_value=None), patch.dict(
+            main.RATE_LIMITS_PER_MINUTE,
+            limits,
+        ):
             main.enforce_rate_limit(request, access, "billing")
             main.enforce_rate_limit(request, access, "github")
             with self.assertRaises(HTTPException):
