@@ -194,6 +194,7 @@ RATE_LIMITS_PER_MINUTE = {
     "scan": {"anonymous": 20, "authenticated": 60},
     "repo": {"anonymous": 5, "authenticated": 15},
     "billing": {"anonymous": 3, "authenticated": 10},
+    "github": {"anonymous": 5, "authenticated": 30},
     "feedback": {"anonymous": 2, "authenticated": 20},
 }
 RATE_LIMIT_STATE: dict[str, list[float]] = {}
@@ -6138,6 +6139,7 @@ def github_status():
         "pro_enforcement": GITHUB_ENFORCE_PRO,
         "secure_linking": bool(GITHUB_LINK_STATE_SECRET),
         "existing_install_linking": bool(GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET and GITHUB_LINK_STATE_SECRET),
+        "connection_revision": 2,
         "scanner_version": SCANNER_VERSION,
     })
 
@@ -6145,7 +6147,7 @@ def github_status():
 @app.get("/github/connect-url")
 def github_connect_url(request: Request):
     access = enrich_access_with_admin_metadata(get_request_access_context(request))
-    enforce_rate_limit(request, access, "billing")
+    enforce_rate_limit(request, access, "github")
     if not access.get("authenticated") or not access.get("user_id"):
         return private_json({"detail": "Sign in before connecting GitHub."}, status_code=401)
     if access.get("plan") not in {"pro", "admin"} and access.get("role") != "admin":
@@ -6161,7 +6163,7 @@ def github_connect_url(request: Request):
 @app.get("/github/install-url")
 def github_install_url(request: Request):
     access = enrich_access_with_admin_metadata(get_request_access_context(request))
-    enforce_rate_limit(request, access, "billing")
+    enforce_rate_limit(request, access, "github")
     if not access.get("authenticated") or not access.get("user_id"):
         return private_json({"detail": "Sign in before installing the GitHub App."}, status_code=401)
     if access.get("plan") not in {"pro", "admin"} and access.get("role") != "admin":
@@ -6224,7 +6226,7 @@ def github_oauth_callback(code: str = "", state: str = "", error: str = ""):
 @app.get("/github/account-status")
 def github_account_status(request: Request):
     access = enrich_access_with_admin_metadata(get_request_access_context(request))
-    enforce_rate_limit(request, access, "billing")
+    enforce_rate_limit(request, access, "github")
     if not access.get("authenticated") or not access.get("user_id"):
         return private_json({"detail": "Sign in to view connected GitHub installations."}, status_code=401)
     rows = supabase_rest_request(
@@ -6248,7 +6250,7 @@ def github_account_status(request: Request):
 @app.post("/github/link-installation")
 def link_github_installation(req: GitHubInstallationLinkRequest, request: Request):
     access = enrich_access_with_admin_metadata(get_request_access_context(request))
-    enforce_rate_limit(request, access, "billing")
+    enforce_rate_limit(request, access, "github")
     if not access.get("authenticated") or not access.get("user_id"):
         return private_json({"detail": "Sign in before connecting a GitHub installation."}, status_code=401)
     if access.get("plan") not in {"pro", "admin"} and access.get("role") != "admin":

@@ -52,6 +52,22 @@ class RateLimitAndPrivacyTests(unittest.TestCase):
         self.assertEqual(caught.exception.status_code, 429)
         self.assertIn("Retry-After", caught.exception.headers)
 
+    def test_github_and_billing_requests_use_independent_buckets(self):
+        request = make_request({"User-Agent": "browser"})
+        access = {"authenticated": True, "user_id": "user-123"}
+        limits = {
+            "billing": {"anonymous": 1, "authenticated": 1},
+            "github": {"anonymous": 1, "authenticated": 1},
+        }
+        with patch.dict(main.RATE_LIMITS_PER_MINUTE, limits):
+            main.enforce_rate_limit(request, access, "billing")
+            main.enforce_rate_limit(request, access, "github")
+            with self.assertRaises(HTTPException):
+                main.enforce_rate_limit(request, access, "github")
+
+        self.assertIn("billing:user:user-123", main.RATE_LIMIT_STATE)
+        self.assertIn("github:user:user-123", main.RATE_LIMIT_STATE)
+
     def test_private_responses_disable_caching(self):
         response = main.private_json({"ok": True})
         self.assertEqual(response.headers["cache-control"], "no-store, max-age=0")
