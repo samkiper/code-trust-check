@@ -28,7 +28,7 @@ class EvidenceModelTests(unittest.TestCase):
         self.assertEqual(execution["status"], "high")
 
 
-class ProductIntegrityV19Tests(unittest.TestCase):
+class ProductIntegrityV20Tests(unittest.TestCase):
     def test_github_install_state_is_signed_and_bound_to_user(self):
         with patch.object(main, "GITHUB_LINK_STATE_SECRET", "state-secret"):
             state = main.create_github_install_state("user-1")
@@ -95,7 +95,7 @@ class ProductIntegrityV19Tests(unittest.TestCase):
     def test_safe_result_uses_supported_signal_language_and_action(self):
         with patch.object(main, "SEMGREP_ENABLED", False):
             result = main.analyze_code_product("Print a greeting", "print('hello')", filename="hello.py")
-        self.assertEqual(result["scanner_version"], 19)
+        self.assertEqual(result["scanner_version"], 20)
         self.assertEqual(result["verdict"]["id"], "continue_with_review")
         self.assertIn("No major supported risks", result["verdict"]["label"])
         self.assertEqual(result["coverage"]["language"], "Python")
@@ -191,7 +191,7 @@ class ProductIntegrityV19Tests(unittest.TestCase):
             "plan": "pro",
         }), patch.object(main, "enrich_access_with_admin_metadata", side_effect=lambda value: value), \
                 patch.object(main, "enforce_rate_limit"), \
-                patch.object(main, "supabase_rest_request", side_effect=[installations, scans]) as database, \
+                patch.object(main, "supabase_rest_request", side_effect=[installations, scans, [], []]) as database, \
                 patch.object(main, "list_github_installation_repositories", return_value=[{
                     "full_name": "owner/repo",
                     "private": True,
@@ -203,8 +203,30 @@ class ProductIntegrityV19Tests(unittest.TestCase):
         self.assertFalse(payload["stored_code"])
         self.assertEqual(payload["repositories"][0]["full_name"], "owner/repo")
         self.assertEqual(payload["scans"][0]["scan_id"], "a" * 24)
+        self.assertEqual(payload["repositories"][0]["policy"]["enforcement_mode"], "monitor")
+        self.assertEqual(payload["scans"][0]["comparison"]["new"], 0)
         for call in database.call_args_list:
             self.assertIn("user_id=eq.user-1", call.kwargs["query"])
+
+    def test_repository_policy_defaults_to_monitor_and_only_blocks_when_enabled(self):
+        findings = [{"severity": "high", "suppressed": False}]
+        self.assertFalse(main.policy_blocks(main.default_repository_policy("owner/repo"), findings))
+        self.assertTrue(main.policy_blocks({"enforcement_mode": "block", "block_at": "high"}, findings))
+        self.assertFalse(main.policy_blocks({"enforcement_mode": "block", "block_at": "high"}, [{"severity": "high", "suppressed": True}]))
+
+    def test_scan_comparison_reports_new_fixed_and_unchanged_findings(self):
+        scans = [
+            {"repository": "owner/repo", "pull_request_number": 1, "findings": [{"finding_id": "new"}, {"finding_id": "same"}]},
+            {"repository": "owner/repo", "pull_request_number": 1, "findings": [{"finding_id": "old"}, {"finding_id": "same"}]},
+        ]
+        main.add_scan_comparisons(scans)
+        self.assertEqual(scans[0]["comparison"], {"new": 1, "fixed": 1, "unchanged": 1, "has_previous": True})
+
+    def test_suppression_keeps_finding_visible_with_audit_reason(self):
+        finding = {"finding_id": "abc", "severity": "high"}
+        result = main.annotate_suppressions([finding], {"abc": {"disposition": "accepted_risk", "reason": "Reviewed by owner", "expires_at": None}})
+        self.assertTrue(result[0]["suppressed"])
+        self.assertEqual(result[0]["suppression"]["reason"], "Reviewed by owner")
 
     def test_feedback_queue_requires_admin_before_database_access(self):
         request = Request({"type": "http", "method": "GET", "path": "/admin/feedback", "headers": [], "client": ("127.0.0.1", 1)})
@@ -584,6 +606,18 @@ class SemgrepAdapterTests(unittest.TestCase):
         self.assertEqual(result["status"], "complete")
         self.assertEqual(result["findings"][0]["line"], 3)
         self.assertEqual(result["findings"][0]["severity"], 18)
+
+    def test_semgrep_retries_once_within_a_bounded_budget(self):
+        completed = type("Completed", (), {"returncode": 0, "stdout": '{"results": []}'})()
+        with patch("main.shutil.which", return_value="/usr/bin/semgrep"), \
+                patch.object(main, "SEMGREP_BUDGET_SECONDS", 40), \
+                patch.object(main, "SEMGREP_FIRST_ATTEMPT_SECONDS", 28), \
+                patch("main.subprocess.run", side_effect=[main.subprocess.TimeoutExpired("semgrep", 28), completed]) as runner:
+            result = main.run_semgrep_scan("print('hello')", "app.py")
+        self.assertEqual(result["status"], "complete")
+        self.assertTrue(result["fallback_used"])
+        self.assertEqual(len(result["attempts"]), 2)
+        self.assertEqual(runner.call_count, 2)
 
 
 class GitHubWebhookTests(unittest.TestCase):
