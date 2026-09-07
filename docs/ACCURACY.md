@@ -38,6 +38,8 @@ Scanner v18 adds privacy-safe GitHub scan history, connected-repository visibili
 
 Scanner v19 adds six safe and six risky JavaScript/TypeScript cases, including typed TypeScript data flows. That exposed and fixed a real gap in typed assignment tracking. The internal set now contains 65 labeled base cases and 325 formatting variants. These additions are internally curated, not an external JavaScript/TypeScript benchmark; claims remain limited accordingly. The two OWASP Python sets remain unchanged and still pass their release thresholds.
 
+Scanner v20 does not change detection weights or accuracy claims. It reports engine completion, timeout, retry, and fallback state; exposes separate Beginner and Developer result views; and labels analysis depth as Deep for Python, Standard for JavaScript/TypeScript, and Basic for other accepted languages. The exact per-language internal confusion matrices remain available under `internal.by_language` in `accuracy-report.json`. JavaScript and TypeScript measurements are internally curated regression evidence—not independent production benchmarks.
+
 ## Next accuracy work
 
 1. Preserve the no-hint holdout without tuning against its three misses; use a new development set for weak-randomness improvements.
