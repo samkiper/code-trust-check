@@ -800,5 +800,45 @@ class GitHubWebhookTests(unittest.TestCase):
         self.assertIn("could not complete", failure_payload["output"]["title"].lower())
 
 
+class LaunchReadinessV201Tests(unittest.TestCase):
+    def test_score_colors_and_verdicts_share_one_policy(self):
+        cases = [
+            ("red", 65, "#ef4444", "do_not_run"),
+            ("yellow", 90, "#d4aa21", "review_first"),
+            ("green", 91, "#22c55e", "continue_with_review"),
+        ]
+        for risk, score, color, verdict in cases:
+            with self.subTest(risk=risk, score=score):
+                self.assertEqual(main.badge_color_from_risk(risk, score), color)
+                self.assertEqual(main.build_action_verdict(risk, score)["id"], verdict)
+
+    def test_public_information_pages_exist_and_disclose_boundaries(self):
+        expected = {
+            "methodology.html": "It does not prove that code is safe",
+            "privacy.html": "does not retain a raw source-code copy",
+            "terms.html": "does not provide a guarantee of safety",
+            "security.html": "private GitHub Security Advisory",
+            "support.html": "Do not post secrets or private account information",
+        }
+        for filename, phrase in expected.items():
+            with self.subTest(filename=filename):
+                html = Path("static", filename).read_text(encoding="utf-8")
+                self.assertIn(phrase, html)
+
+    def test_homepage_uses_audit_score_and_complete_pro_positioning(self):
+        html = Path("static/index.html").read_text(encoding="utf-8")
+        self.assertIn("AUDIT SCORE", html)
+        self.assertNotIn("RISK-WEIGHTED SCORE", html)
+        self.assertIn("Dashboard, history, and scan comparisons", html)
+        self.assertIn("Repository policies and optional merge blocking", html)
+        self.assertIn('href="/privacy"', html)
+        self.assertIn('href="/methodology"', html)
+
+    def test_repository_readiness_files_exist(self):
+        for filename in ("README.md", "SECURITY.md", "CONTRIBUTING.md", "CHANGELOG.md"):
+            with self.subTest(filename=filename):
+                self.assertTrue(Path(filename).is_file())
+
+
 if __name__ == "__main__":
     unittest.main()

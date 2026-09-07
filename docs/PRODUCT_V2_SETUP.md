@@ -2,7 +2,7 @@
 
 ## What is now built
 
-- The intent-aware behavior engine remains the source of the calibrated trust score.
+- The intent-aware behavior engine remains the source of the deterministic, risk-weighted Audit Score.
 - A local Semgrep engine independently checks structural security rules. Code is written only to a temporary directory for the scan and is not sent to Semgrep's registry or telemetry service.
 - Results include six evidence categories, reviewable patch previews, JSON downloads, and SARIF 2.1 output.
 - A GitHub App webhook scans changed supported pull-request files and publishes a monitor-only GitHub Check with line annotations.
@@ -14,6 +14,14 @@
 - Scanner v18 adds a signed-in security dashboard with connected repositories, the latest 25 pull-request scans, severity counts, expandable finding explanations, and false-positive feedback. Stored history contains metadata and finding explanations only; source code is never stored. Detection rules and weights remain unchanged from v17.
 - Scanner v19 adds shared Supabase rate limiting, an admin-only feedback review queue and sanitized candidate export, common direct-manifest and lockfile parsing across six dependency ecosystems, and typed JavaScript/TypeScript regression coverage.
 - Scanner v20 adds bounded Semgrep cold-start retries and engine telemetry, opt-in repository severity policies, auditable accepted-risk/false-positive/temporary suppressions, scan-to-scan comparisons, Beginner and Developer result views, and severity filtering with pagination. Repository checks remain monitor-only until a Pro user explicitly saves a blocking policy.
+- The v20.1 launch-readiness pass keeps scanner detection at v20 while aligning every score color and verdict to the same risk policy, renaming the displayed number to Audit Score, expanding the public Free/Pro comparison, and adding methodology, privacy, terms, security, support, repository onboarding, and issue-reporting documentation.
+
+## Public product positioning
+
+- Lead with the three-state verdict; treat the 0–100 Audit Score as a secondary deterministic comparison index, not a probability or certification.
+- Free provides complete manual findings for pasted code and smaller public repositories. Pro provides larger limits and continuous GitHub workflow features: pull-request checks, history, comparisons, reviewed-finding workflows, repository policies, and optional blocking.
+- Public language must describe supported static evidence and avoid claiming that the scanner proved safety, correctness, or complete runtime behavior.
+- Python has Deep analysis, JavaScript and TypeScript have Standard analysis, and other accepted languages have Basic supported-pattern analysis. The live Methodology page is the canonical public explanation.
 
 ## Accuracy gate
 

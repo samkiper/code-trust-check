@@ -243,6 +243,8 @@ GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "").strip()
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 
 SCANNER_VERSION = 20
+AUDIT_SCORE_HIGH_RISK_MAX = 65
+AUDIT_SCORE_REVIEW_MAX = 90
 
 GITHUB_REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 GITHUB_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -448,9 +450,10 @@ BADGE_CACHE: dict[str, dict] = {}
 
 
 def badge_color_from_risk(risk: str, trust_score: int) -> str:
-    if risk == "green" or trust_score >= 75:
+    normalized_risk = str(risk or "").lower()
+    if normalized_risk == "green" or (not normalized_risk and trust_score > AUDIT_SCORE_REVIEW_MAX):
         return "#22c55e"
-    if risk == "yellow" or trust_score >= 60:
+    if normalized_risk == "yellow" or (not normalized_risk and trust_score > AUDIT_SCORE_HIGH_RISK_MAX):
         return "#d4aa21"
     return "#ef4444"
 
@@ -1012,14 +1015,14 @@ def calculate_trust_score_from_points(points: float) -> int:
 
 
 def build_trust_badge(trust_score: int, risk: str) -> dict:
-    if risk == "red" or trust_score <= 40:
+    if risk == "red" or trust_score <= AUDIT_SCORE_HIGH_RISK_MAX:
         return {
             "label": "High Risk",
             "emoji": "🔴",
             "color": "red",
             "message": "This code needs careful review before running."
         }
-    elif risk == "yellow" or trust_score <= 70:
+    elif risk == "yellow" or trust_score <= AUDIT_SCORE_REVIEW_MAX:
         return {
             "label": "Review Carefully",
             "emoji": "🟡",
@@ -1058,14 +1061,14 @@ def build_action_verdict(risk: str, trust_score: int, insufficient: bool = False
             "action": "Provide supported code or reduce the scan size, then run the audit again.",
             "tone": "neutral",
         }
-    if risk == "red" or trust_score <= 40:
+    if risk == "red" or trust_score <= AUDIT_SCORE_HIGH_RISK_MAX:
         return {
             "id": "do_not_run",
             "label": "Do not run this yet",
             "action": "Fix the high-risk findings first, then scan the revised code again.",
             "tone": "danger",
         }
-    if risk == "yellow" or trust_score <= 70:
+    if risk == "yellow" or trust_score <= AUDIT_SCORE_REVIEW_MAX:
         return {
             "id": "review_first",
             "label": "Review before running",
@@ -7107,6 +7110,52 @@ def apple_touch_icon_precomposed():
 @app.get("/")
 def home():
     return FileResponse("static/index.html")
+
+
+@app.get("/methodology")
+def methodology_page():
+    return FileResponse("static/methodology.html")
+
+
+@app.get("/privacy")
+def privacy_page():
+    return FileResponse("static/privacy.html")
+
+
+@app.get("/terms")
+def terms_page():
+    return FileResponse("static/terms.html")
+
+
+@app.get("/security")
+def security_page():
+    return FileResponse("static/security.html")
+
+
+@app.get("/support")
+def support_page():
+    return FileResponse("static/support.html")
+
+
+@app.get("/robots.txt")
+def robots_txt():
+    return Response(
+        "User-agent: *\nAllow: /\nSitemap: https://code-trust-check.onrender.com/sitemap.xml\n",
+        media_type="text/plain",
+    )
+
+
+@app.get("/sitemap.xml")
+def sitemap_xml():
+    pages = ("", "methodology", "privacy", "terms", "security", "support")
+    urls = "".join(
+        f"<url><loc>https://code-trust-check.onrender.com/{page}</loc></url>"
+        for page in pages
+    )
+    return Response(
+        f"<?xml version='1.0' encoding='UTF-8'?><urlset xmlns='http://www.sitemaps.org/schemas/sitemap/0.9'>{urls}</urlset>",
+        media_type="application/xml",
+    )
 
 
 @app.get("/health")

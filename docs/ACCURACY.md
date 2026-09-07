@@ -40,6 +40,8 @@ Scanner v19 adds six safe and six risky JavaScript/TypeScript cases, including t
 
 Scanner v20 does not change detection weights or accuracy claims. It reports engine completion, timeout, retry, and fallback state; exposes separate Beginner and Developer result views; and labels analysis depth as Deep for Python, Standard for JavaScript/TypeScript, and Basic for other accepted languages. The exact per-language internal confusion matrices remain available under `internal.by_language` in `accuracy-report.json`. JavaScript and TypeScript measurements are internally curated regression evidence—not independent production benchmarks.
 
+The v20.1 launch-readiness pass does not change detection rules, weights, datasets, or accuracy claims. It aligns score colors and verdicts to the existing risk bands and changes the public label from Trust Score to Audit Score. The number remains a deterministic risk-weighted index for comparing revisions, not a calibrated probability or certification.
+
 ## Next accuracy work
 
 1. Preserve the no-hint holdout without tuning against its three misses; use a new development set for weak-randomness improvements.

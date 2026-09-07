@@ -1,0 +1,48 @@
+name: Bug report
+description: Report a reproducible product or integration problem.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "Do not include credentials, payment data, private source code, or private repository names."
+  - type: input
+    id: version
+    attributes:
+      label: Scanner version
+      placeholder: v20
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where did this happen?
+      options:
+        - Paste-code audit
+        - Public repository audit
+        - GitHub pull-request check
+        - Account or billing
+        - Dashboard or policy
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Use only non-sensitive information.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+    validations:
+      required: true
+

@@ -5,6 +5,13 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="description" content="Verify AI-generated code and public repositories before you trust or run them.">
   <meta name="theme-color" content="#07110f">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="AI Code Audit — Verify Before You Trust">
+  <meta property="og:description" content="Intent-aware static review for AI-generated code, public repositories, and GitHub pull requests.">
+  <meta property="og:url" content="https://code-trust-check.onrender.com/">
+  <meta property="og:image" content="https://code-trust-check.onrender.com/static/logo.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="canonical" href="https://code-trust-check.onrender.com/">
   <link rel="icon" type="image/svg+xml" href="/static/brand-mark.svg?v=2">
   <link rel="alternate icon" type="image/png" href="/static/favicon.png?v=2">
   <link rel="apple-touch-icon" href="/static/favicon.png?v=2">
@@ -143,9 +150,9 @@
     .price-card ul{list-style:none;padding:12px 0;margin:0;border-top:1px solid #dfe5e1}.price-card.pro ul{border-color:#293c35}
     .price-card li{display:flex;gap:8px;align-items:center;font-size:.79rem;margin:12px 0}.price-card li i{color:#168858;font-style:normal}
     .price-card button{width:100%;height:44px;border-radius:8px;border:1px solid #b9c6be;background:#fff;font-weight:700}
-    .price-card.pro button{background:var(--acid);border:0}
+    .price-card.pro button{background:var(--acid);border:0}.pricing-note{grid-column:2/-1;margin:0;color:#64736e;font-size:.7rem;line-height:1.5}
     .popular{position:absolute;right:18px;top:-11px;background:var(--acid);color:#0a1512;border-radius:20px;padding:6px 9px;font-size:.6rem;font-weight:800;letter-spacing:.08em}
-    footer{min-height:190px;display:flex;align-items:center;justify-content:space-between;padding:40px max(24px,calc((100vw - 1120px)/2));color:#687e76}footer p{color:#94aaa2}
+    footer{min-height:190px;display:flex;align-items:center;justify-content:space-between;gap:22px;padding:40px max(24px,calc((100vw - 1120px)/2));color:#687e76}footer p{color:#94aaa2}.footer-meta{display:flex;flex-direction:column;align-items:flex-end;gap:10px}.footer-links{display:flex;gap:13px;flex-wrap:wrap;justify-content:flex-end}.footer-links a{color:#94aaa2;font-size:.7rem;text-decoration:none}.footer-links a:hover{color:var(--mint)}
     .modal-overlay{position:fixed;inset:0;background:#000b;display:none;align-items:center;justify-content:center;padding:20px;z-index:80}
     .modal{width:min(430px,100%);background:#0d1a17;border:1px solid #314640;border-radius:16px;padding:25px;box-shadow:0 30px 80px #000}
     .modal-top{display:flex;justify-content:space-between;align-items:start}.modal h2{margin:0 0 8px}.modal p{color:var(--muted);line-height:1.5;margin:0 0 20px}
@@ -168,7 +175,7 @@
     @keyframes pulse{50%{box-shadow:0 0 0 18px #49dfa408}}
     .scan-button,.nav-cta,.price-card button,.report-button,.mode-tabs button{transition:.2s}
     .scan-button:hover,.nav-cta:hover,.price-card.pro button:hover{background:#bdff65;transform:translateY(-1px)}
-    @media(max-width:850px){.topbar nav>a,.text-btn{display:none}.workspace{grid-template-columns:1fr}.results{border-left:0;border-top:1px solid var(--line)}.how{grid-template-columns:1fr;gap:45px}.pricing,.integrity{grid-template-columns:1fr}.pricing>div:first-child{margin-bottom:25px}footer{flex-direction:column;justify-content:center;gap:10px;text-align:center}}
+    @media(max-width:850px){.topbar nav>a,.text-btn{display:none}.workspace{grid-template-columns:1fr}.results{border-left:0;border-top:1px solid var(--line)}.how{grid-template-columns:1fr;gap:45px}.pricing,.integrity{grid-template-columns:1fr}.pricing>div:first-child{margin-bottom:25px}.pricing-note{grid-column:auto}footer{flex-direction:column;justify-content:center;gap:10px;text-align:center}.footer-meta{align-items:center}.footer-links{justify-content:center}}
     @media(max-width:520px){.intro{padding-top:50px}.intro h1{font-size:3.35rem}.scan-panel,.results{padding:19px}.workspace{width:calc(100% - 20px)}.result-head{align-items:flex-start}.score strong{font-size:2.1rem}.proof-strip{justify-content:flex-start}.how,.pricing{padding-block:75px}.topbar{padding:0 15px}.brand{font-size:.72rem}.nav-cta{font-size:.76rem}.code-label span{display:none}.account-btn{max-width:135px}.result-actions{flex-direction:column}.evidence-grid,.dashboard-summary{grid-template-columns:1fr}.scan-run-top{flex-direction:column}}
   </style>
 </head>
@@ -177,6 +184,7 @@
     <a class="brand" href="#top"><img class="brand-mark" src="/static/brand-mark.svg?v=2" alt=""><span>AI CODE <b>AUDIT</b></span></a>
     <nav>
       <a href="#how">How it works</a>
+      <a href="/methodology">Methodology</a>
       <a href="#pricing">Pricing</a>
       <button class="text-btn" id="loginBtn">Log in</button>
       <div class="account-wrap hidden" id="accountWrap">
@@ -196,9 +204,9 @@
   <div class="status-banner" id="statusBanner"></div>
 
   <section class="intro" id="top">
-    <div class="eyebrow"><span></span>Independent verification for AI-generated code</div>
+    <div class="eyebrow"><span></span>Intent-aware static review for AI-generated code</div>
     <h1>Verify AI code<br>before you trust it.</h1>
-    <p>See what the code actually does, where it takes risks, and whether it matches what you asked for—before you run it.</p>
+    <p>See the supported behaviors detected in the code, where risk appears, and whether it matches what you asked for—before you run it.</p>
   </section>
 
   <section class="workspace" id="audit" aria-label="Code audit workspace">
@@ -234,7 +242,7 @@ def build_report(data):
         <label for="repoUrl">Public GitHub repository</label>
         <div class="repo-field"><span>▣</span><input id="repoUrl" type="url" placeholder="https://github.com/owner/repository"></div>
         <div class="repo-note"><span>◈</span><div><b>Public repositories only</b><span>We inspect supported source files, package manifests, and known dependency vulnerabilities.</span></div></div>
-        <div class="github-app-card hidden" id="githubAppCard"><div><b>Automatic pull-request checks</b><span>Scan only changed supported files. Monitor-only results never block merging.</span></div><div class="github-app-action"><b class="github-connected-status hidden" id="githubConnectedStatus">✓ GitHub Connected</b><a id="githubInstallLink" href="#" target="_blank" rel="noopener noreferrer">Connect GitHub</a></div></div>
+        <div class="github-app-card hidden" id="githubAppCard"><div><b>Automatic pull-request checks</b><span>Scan changed supported files. Monitor-only by default; Pro users can explicitly enable repository blocking policies.</span></div><div class="github-app-action"><b class="github-connected-status hidden" id="githubConnectedStatus">✓ GitHub Connected</b><a id="githubInstallLink" href="#" target="_blank" rel="noopener noreferrer">Connect GitHub</a></div></div>
       </div>
 
       <div class="scan-error" id="scanError"><span>⚠</span><span id="scanErrorText"></span></div>
@@ -250,11 +258,11 @@ def build_report(data):
   <section class="proof-strip"><span>Checks for</span><b>Secret exposure</b><b>Hidden network calls</b><b>Risky execution</b><b>Intent mismatch</b><b>Suspicious dependencies</b><b>Hidden telemetry</b></section>
 
   <section class="how" id="how">
-    <div class="section-copy"><span class="section-no">01 / HOW IT WORKS</span><h2>AI writes quickly.<br>We verify carefully.</h2><p>AI Code Audit translates complex code behavior into a clear decision: safe to continue, needs review, or do not run.</p></div>
+    <div class="section-copy"><span class="section-no">01 / HOW IT WORKS</span><h2>AI writes quickly.<br>We verify carefully.</h2><p>AI Code Audit translates supported static evidence into a clear next step: continue testing, review first, or do not run yet.</p></div>
     <div class="steps">
       <article><span>01</span><div><h3>Describe the intent</h3><p>Tell us what the code or repository was supposed to do.</p></div></article>
-      <article><span>02</span><div><h3>Audit the behavior</h3><p>We inspect code paths, secrets, network activity, files, and dependencies.</p></div></article>
-      <article><span>03</span><div><h3>Act with context</h3><p>Get a trust score, plain-English findings, exact lines, and suggested fixes.</p></div></article>
+      <article><span>02</span><div><h3>Audit the behavior</h3><p>We inspect supported code patterns, local data flows, dependencies, and declared intent.</p></div></article>
+      <article><span>03</span><div><h3>Act with context</h3><p>Get a plain-English verdict, exact lines, suggested fixes, and a secondary audit score for tracking changes.</p></div></article>
     </div>
   </section>
 
@@ -262,17 +270,18 @@ def build_report(data):
     <div><span class="section-no">02 / PRICING</span><h2>Start with the code<br>in front of you.</h2><p>No credit card required for the free audit.</p></div>
     <div class="price-card">
       <div class="price-head"><span>FREE</span><b>$0</b></div>
-      <p>Fast confidence checks for code and public repositories.</p>
-      <ul><li><i>✓</i>Up to 10,000 lines per file</li><li><i>✓</i>Up to 50 source files per repo</li><li><i>✓</i>Dependency vulnerability checks</li><li><i>✓</i>Trust score and flagged lines</li></ul>
+      <p>Complete manual reviews for individual code and smaller public repositories.</p>
+      <ul><li><i>✓</i>Up to 10,000 lines per file</li><li><i>✓</i>Up to 50 source files / 1 MB per repo</li><li><i>✓</i>Full findings, fixes, and dependency checks</li><li><i>✓</i>Beginner and Developer result views</li><li><i>✓</i>JSON report and audit score</li></ul>
       <button id="freePlanBtn">Run a free audit</button>
     </div>
     <div class="price-card pro">
       <div class="popular">MOST USEFUL</div>
       <div class="price-head"><span>PRO</span><b>$12<small>/mo</small></b></div>
-      <p>Broader coverage for builders shipping larger projects.</p>
-      <ul><li><i>✓</i>Up to 20,000 lines per file</li><li><i>✓</i>Up to 200 source files per repo</li><li><i>✓</i>Up to 10 MB of repository code</li><li><i>✓</i>Automatic GitHub pull-request checks</li></ul>
+      <p>Continuous GitHub review and policy tools for builders actively shipping projects.</p>
+      <ul><li><i>✓</i>Up to 20,000 lines per file</li><li><i>✓</i>Up to 200 source files / 10 MB per repo</li><li><i>✓</i>Automatic GitHub pull-request checks</li><li><i>✓</i>Dashboard, history, and scan comparisons</li><li><i>✓</i>Accepted-risk and false-positive workflow</li><li><i>✓</i>Repository policies and optional merge blocking</li></ul>
       <button id="proPlanBtn">Start Pro →</button>
     </div>
+    <p class="pricing-note">All plans are subject to reasonable abuse-prevention and service-availability limits. Pro expands workflow and scale; it does not certify that code is safe.</p>
   </section>
 
   <section class="integrity" id="limitations">
@@ -280,7 +289,7 @@ def build_report(data):
     <article><h3>What it cannot prove</h3><ul><li>Code is never executed, so runtime-only behavior may be missed.</li><li>A clean result is not a guarantee that code is safe.</li><li>Cross-file analysis and dependency coverage vary by language and project structure.</li><li>Use the findings as review evidence, not a replacement for testing or professional security review.</li></ul></article>
   </section>
 
-  <footer><a class="brand" href="#top"><img class="brand-mark" src="/static/brand-mark.svg?v=2" alt=""><span>AI CODE <b>AUDIT</b></span></a><p>Know what the code does before it does it.</p><span>Scanner v20 · © 2026 AI Code Audit</span></footer>
+  <footer><a class="brand" href="#top"><img class="brand-mark" src="/static/brand-mark.svg?v=2" alt=""><span>AI CODE <b>AUDIT</b></span></a><p>Know what the code does before it does it.</p><div class="footer-meta"><span>Scanner v20 · © 2026 AI Code Audit</span><nav class="footer-links" aria-label="Product information"><a href="/methodology">Methodology</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/security">Security</a><a href="/support">Support</a><a href="https://github.com/samkiper/code-trust-check">GitHub</a></nav></div></footer>
 
   <div class="modal-overlay" id="authModal">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="authTitle">
@@ -378,7 +387,7 @@ def build_report(data):
       currentResult=data;
       const findings=collectFindings(data),score=Math.round(Number(data.trust_score||0));
       const high=findings.filter(function(f){return f.severity==="high"}).length,medium=findings.filter(function(f){return f.severity==="medium"}).length;
-      const scoreClass=score>79?"good":score>49?"warn":"bad";
+      const scoreClass=data.risk==="green"?"good":data.risk==="yellow"?"warn":"bad";
       const heading=data.trust_badge&&data.trust_badge.label?data.trust_badge.label:(findings.length?"Review needed":"No major risks found");
       let cards="";findings.forEach(function(f,index){const feedback=data.scan_id&&f.findingId?'<div class="finding-feedback"><button data-verdict="correct" data-finding="'+escapeHtml(f.findingId)+'" data-category="'+escapeHtml(f.category)+'">Accurate</button><button data-verdict="false_positive" data-finding="'+escapeHtml(f.findingId)+'" data-category="'+escapeHtml(f.category)+'">False alarm</button></div>':"";cards+='<article data-result-finding="true" data-severity="'+escapeHtml(f.severity)+'" data-original-index="'+index+'" class="finding '+f.severity+(index>=12?' extra-finding hidden':'')+'"><div class="finding-top"><span>⚠</span><div><span class="beginner-label">What happened</span><b>'+escapeHtml(f.title)+'</b><span>'+escapeHtml((f.line?"Line "+f.line+" · ":"")+f.severity+" severity")+'</span></div></div><span class="beginner-label">Why it matters</span><p>'+escapeHtml(f.detail)+'</p>'+(f.fix?'<div class="fix"><b>What to do next</b>'+escapeHtml(f.fix)+'</div>':"")+'<div class="developer-only">Engine: '+escapeHtml(f.source||"behavior")+' · Rule: '+escapeHtml(f.ruleId||"unclassified")+' · Confidence: '+escapeHtml(f.confidence)+'</div>'+feedback+'</article>'});
       const meta=data.repo_name?escapeHtml(data.repo_name)+" · "+Number(data.files_scanned_count||0)+" of "+Number(data.files_available_count||data.files_scanned_count||0)+" supported files scanned":"";
@@ -397,7 +406,7 @@ def build_report(data):
       let badge="";if(data.readme_badge&&data.readme_badge.badge_markdown){badge='<div class="badge-tool"><small>README badge — click to copy Markdown</small><code id="badgeCode">'+escapeHtml(data.readme_badge.badge_markdown)+'</code><button class="report-button" id="copyBadgeBtn">Copy badge</button></div>'}
       const scanFeedback=data.scan_id?'<div class="scan-feedback"><span>Help improve this scanner</span><button id="missedRiskBtn">It missed a risk</button></div>':"";
       const moreButton=findings.length>12?'<button class="show-findings" id="showFindingsBtn">Show all '+findings.length+' findings</button>':"";
-      byId("results").innerHTML='<div class="result-head"><div><span class="result-kicker">STATIC AUDIT COMPLETE · V'+escapeHtml(data.scanner_version||19)+'</span><h2>'+escapeHtml(heading)+'</h2>'+(meta?'<small>'+meta+'</small>':"")+'</div><div class="score '+scoreClass+'"><strong>'+score+'</strong><span>/ 100<br>RISK-WEIGHTED SCORE</span></div></div>'+verdictCard+'<div class="summary"><span>✦</span><p>'+escapeHtml(summary)+'</p></div>'+technical+evidence+'<div class="risk-row"><span class="'+(high?"risk high":"risk clear")+'">'+high+' high risk</span><span class="'+(medium?"risk medium":"risk clear")+'">'+medium+' medium</span><span class="risk clear">'+Number((data.touches||[]).length)+' systems touched</span>'+(data.dependency_summary&&typeof data.dependency_summary.vulnerabilities_found==="number"?'<span class="'+(data.dependency_summary.vulnerabilities_found?"risk high":"risk clear")+'">'+data.dependency_summary.vulnerabilities_found+' vulnerable dependencies</span>':"")+'</div><div class="findings-title"><span>Flagged findings</span><span>'+findings.length+'</span></div>'+(findings.length?'<div class="finding-list">'+cards+'</div>'+moreButton:'<div class="all-clear"><span>✓</span><b>No supported risk signals found</b><span>This static result is not proof that the code is safe. Review the coverage details above.</span></div>')+patches+scanFeedback+badge+'<div class="result-actions"><button class="report-button" id="downloadBtn">↓ Download JSON report</button></div>';
+      byId("results").innerHTML='<div class="result-head"><div><span class="result-kicker">STATIC AUDIT COMPLETE · V'+escapeHtml(data.scanner_version||20)+'</span><h2>'+escapeHtml(heading)+'</h2>'+(meta?'<small>'+meta+'</small>':"")+'</div><div class="score '+scoreClass+'"><strong>'+score+'</strong><span>/ 100<br>AUDIT SCORE</span></div></div>'+verdictCard+'<div class="summary"><span>✦</span><p>'+escapeHtml(summary)+'</p></div>'+technical+evidence+'<div class="risk-row"><span class="'+(high?"risk high":"risk clear")+'">'+high+' high risk</span><span class="'+(medium?"risk medium":"risk clear")+'">'+medium+' medium</span><span class="risk clear">'+Number((data.touches||[]).length)+' systems touched</span>'+(data.dependency_summary&&typeof data.dependency_summary.vulnerabilities_found==="number"?'<span class="'+(data.dependency_summary.vulnerabilities_found?"risk high":"risk clear")+'">'+data.dependency_summary.vulnerabilities_found+' vulnerable dependencies</span>':"")+'</div><div class="findings-title"><span>Flagged findings</span><span>'+findings.length+'</span></div>'+(findings.length?'<div class="finding-list">'+cards+'</div>'+moreButton:'<div class="all-clear"><span>✓</span><b>No supported risk signals found</b><span>This static result is not proof that the code is safe. Review the coverage details above.</span></div>')+patches+scanFeedback+badge+'<div class="result-actions"><button class="report-button" id="downloadBtn">↓ Download JSON report</button></div>';
       byId("downloadBtn").addEventListener("click",downloadReport);if(byId("copyBadgeBtn"))byId("copyBadgeBtn").addEventListener("click",copyBadge);
       document.querySelectorAll(".copy-patch").forEach(function(button){button.addEventListener("click",async function(){const item=(data.fix_previews||[])[Number(button.dataset.index)];if(item){await navigator.clipboard.writeText(item.patched_code);showBanner("Safer code copied for your review.",false)}})});
       document.querySelectorAll(".finding-feedback button").forEach(function(button){button.addEventListener("click",function(){submitScannerFeedback(button.dataset.verdict,button.dataset.finding,button.dataset.category)})});
