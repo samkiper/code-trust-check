@@ -836,6 +836,13 @@ class LaunchReadinessV201Tests(unittest.TestCase):
         self.assertIn("North Third Street Media and Design LLC", html)
         self.assertIn("support.aicodeaudit@gmail.com", html)
 
+    def test_results_toolbar_controls_remain_readable_on_dark_background(self):
+        html = Path("static/index.html").read_text(encoding="utf-8")
+        self.assertIn(".v20-toolbar button,.v20-toolbar select", html)
+        self.assertIn("color:#dce8e3;color-scheme:dark", html)
+        self.assertIn(".v20-toolbar button:disabled", html)
+        self.assertIn("color:#81958d", html)
+
     def test_repository_readiness_files_exist(self):
         for filename in ("README.md", "SECURITY.md", "CONTRIBUTING.md", "CHANGELOG.md", "LICENSE"):
             with self.subTest(filename=filename):
