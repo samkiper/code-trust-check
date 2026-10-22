@@ -235,7 +235,8 @@ APP_BASE_URL = os.getenv("APP_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
 SEMGREP_ENABLED = os.getenv("SEMGREP_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
 SEMGREP_CONFIG_PATH = Path(__file__).with_name("semgrep.yml")
 SEMGREP_BUDGET_SECONDS = max(15, min(int(os.getenv("SEMGREP_BUDGET_SECONDS", "40")), 60))
-SEMGREP_FIRST_ATTEMPT_SECONDS = max(10, min(int(os.getenv("SEMGREP_FIRST_ATTEMPT_SECONDS", "28")), SEMGREP_BUDGET_SECONDS))
+SEMGREP_FIRST_ATTEMPT_SECONDS = max(5, min(int(os.getenv("SEMGREP_FIRST_ATTEMPT_SECONDS", "10")), SEMGREP_BUDGET_SECONDS))
+SEMGREP_NATIVE_CLI = os.getenv("SEMGREP_NATIVE_CLI", "true").lower() == "true"
 GITHUB_APP_ID = os.getenv("GITHUB_APP_ID", "").strip()
 GITHUB_PRIVATE_KEY = os.getenv("GITHUB_PRIVATE_KEY", "").replace("\\n", "\n").strip()
 GITHUB_WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET", "").strip()
@@ -245,7 +246,7 @@ GITHUB_LINK_STATE_SECRET = os.getenv("GITHUB_LINK_STATE_SECRET", "").strip() or 
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "").strip()
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 
-SCANNER_VERSION = 22
+SCANNER_VERSION = 23
 AUDIT_SCORE_HIGH_RISK_MAX = 65
 AUDIT_SCORE_REVIEW_MAX = 90
 
@@ -4608,6 +4609,22 @@ def infer_code_filename(code: str) -> str:
     return select_filename(code)
 
 
+def valid_semgrep_payload(payload: object) -> bool:
+    if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
+        return False
+    paths = payload.get("paths")
+    if not isinstance(paths, dict) or not isinstance(paths.get("scanned"), list):
+        return False
+    if not all(isinstance(path, str) for path in paths["scanned"]):
+        return False
+    if not isinstance(payload.get("errors", []), list) or not all(isinstance(e, dict) for e in payload.get("errors", [])):
+        return False
+    return all(isinstance(r, dict) and isinstance(r.get("extra"), dict)
+               and isinstance(r.get("start"), dict)
+               and isinstance(r["extra"].get("metadata", {}), dict)
+               for r in payload["results"])
+
+
 def run_semgrep_scan(code: str, filename: str | None = None) -> dict:
     """Run the local, pinned Semgrep rules without sending code over the network."""
     started = time.monotonic()
@@ -4631,34 +4648,42 @@ def run_semgrep_scan(code: str, filename: str | None = None) -> dict:
             ]
             completed = None
             deadline = started + SEMGREP_BUDGET_SECONDS
-            for attempt_number in (1, 2):
+            variants = [("native", command + ["--experimental"]), ("default", command)] if SEMGREP_NATIVE_CLI else [("default", command)]
+            for attempt_number, (cli_mode, attempt_command) in enumerate(variants, 1):
                 remaining = max(0, deadline - time.monotonic())
                 if remaining < 2:
                     break
                 timeout_seconds = min(
-                    SEMGREP_FIRST_ATTEMPT_SECONDS if attempt_number == 1 else remaining,
+                    SEMGREP_FIRST_ATTEMPT_SECONDS if cli_mode == "native" else remaining,
                     remaining,
                 )
                 attempt_started = time.monotonic()
                 try:
-                    completed = subprocess.run(
-                        command,
+                    candidate = subprocess.run(
+                        attempt_command,
                         capture_output=True,
                         text=True,
                         timeout=timeout_seconds,
                         check=False,
                         env={**os.environ, "SEMGREP_SEND_METRICS": "off"},
                     )
-                    attempts.append({"attempt": attempt_number, "status": "complete", "duration_ms": round((time.monotonic() - attempt_started) * 1000)})
+                    # Never interpret a broken native response as a clean scan.
+                    candidate_payload = json.loads(candidate.stdout or "{}")
+                    if candidate.returncode not in {0, 1} or not valid_semgrep_payload(candidate_payload):
+                        raise ValueError("Invalid Semgrep response")
+                    completed = candidate
+                    attempts.append({"attempt": attempt_number, "cli": cli_mode, "status": "complete", "duration_ms": round((time.monotonic() - attempt_started) * 1000)})
                     break
                 except subprocess.TimeoutExpired:
-                    attempts.append({"attempt": attempt_number, "status": "timeout", "duration_ms": round((time.monotonic() - attempt_started) * 1000)})
+                    attempts.append({"attempt": attempt_number, "cli": cli_mode, "status": "timeout", "duration_ms": round((time.monotonic() - attempt_started) * 1000)})
+                except (ValueError, OSError):
+                    attempts.append({"attempt": attempt_number, "cli": cli_mode, "status": "error", "duration_ms": round((time.monotonic() - attempt_started) * 1000)})
             if completed is None:
                 return {
-                    "name": "semgrep", "status": "timeout", "findings": [],
+                    "name": "semgrep", "status": "timeout" if any(a["status"] == "timeout" for a in attempts) else "error", "findings": [],
                     "duration_ms": round((time.monotonic() - started) * 1000),
                     "attempts": attempts, "fallback_used": True,
-                    "message": "Semgrep exceeded its scan budget; the behavior engine still completed.",
+                    "message": "Semgrep could not complete within its scan budget; review the reported behavior-engine coverage.",
                 }
         if completed.returncode not in {0, 1}:
             raise RuntimeError("Semgrep returned a non-scan exit status")
