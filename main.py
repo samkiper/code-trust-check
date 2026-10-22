@@ -245,7 +245,7 @@ GITHUB_LINK_STATE_SECRET = os.getenv("GITHUB_LINK_STATE_SECRET", "").strip() or 
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "").strip()
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 
-SCANNER_VERSION = 21
+SCANNER_VERSION = 22
 AUDIT_SCORE_HIGH_RISK_MAX = 65
 AUDIT_SCORE_REVIEW_MAX = 90
 
@@ -1861,6 +1861,38 @@ def call_expression_is_complete(text: str, opening_index: int) -> bool:
         index += 1
 
     return False
+
+
+def inline_environment_egress(code: str, intent: str) -> list[dict]:
+    """Trace direct environment reads inside supported Python request arguments."""
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError):
+        return []
+    def source(node):
+        name = None
+        if isinstance(node, ast.Call) and ast.unparse(node.func) in {"os.getenv", "os.environ.get"} and node.args:
+            name = node.args[0]
+        elif isinstance(node, ast.Subscript) and ast.unparse(node.value) == "os.environ":
+            name = node.slice
+        return name.value if isinstance(name, ast.Constant) and isinstance(name.value, str) and SENSITIVE_ENV_NAME_PATTERN.search(name.value) else None
+    findings = []
+    sinks = {"requests.get", "requests.post", "requests.put", "requests.patch", "requests.delete", "requests.request", "urllib.request.Request", "urllib.request.urlopen", "httpx.get", "httpx.post"}
+    for call in ast.walk(tree):
+        if not isinstance(call, ast.Call) or ast.unparse(call.func) not in sinks:
+            continue
+        sources = [(node, source(node)) for node in ast.walk(call) if source(node)]
+        if not sources:
+            continue
+        url_node = next((kw.value for kw in call.keywords if kw.arg == "url"), call.args[1] if ast.unparse(call.func) == "requests.request" and len(call.args)>1 else call.args[0] if call.args else None)
+        url = url_node.value if isinstance(url_node, ast.Constant) and isinstance(url_node.value, str) else ""
+        parsed = urllib.parse.urlparse(url)
+        headers_node = next((kw.value for kw in call.keywords if kw.arg == "headers"), None)
+        header_nodes = {id(node) for node in ast.walk(headers_node)} if headers_node is not None else set()
+        expected = (parsed.scheme == "https" and bool(parsed.hostname) and intent_mentions_any(intent, [parsed.hostname]) and intent_mentions_any(intent, ["authenticate", "authentication", "authorization", "api key", "credential"]) and all(id(node) in header_nodes for node, _ in sources))
+        names = ", ".join(sorted({name for _, name in sources}))
+        findings.append(make_flag(line=call.lineno, flag_type="credential_use" if expected else "secret_exfiltration", pattern="credential_authentication" if expected else "secret_exfiltration_chain", message="Environment credential used in expected authentication" if expected else "Environment credential flows directly into an outbound request", severity=3 if expected else 32, explanation=f"Direct source: {names}. Destination: {url or 'dynamic or unresolved'}. " + ("The credential occurs in headers and the HTTPS destination is named in the authentication intent. Verify provider ownership and redirects." if expected else "The credential value is passed directly into this request. Verify the destination and permitted purpose before running it.")))
+    return findings
 
 
 def add_secret_flow_heuristics(
@@ -3685,7 +3717,7 @@ def has_meaningful_intent(intent: str) -> bool:
 
 def intent_mentions_any(intent_lower: str, terms: list[str]) -> bool:
     """Match affirmative clauses, never turn prohibitions into permission."""
-    clauses = re.split(r"[.;!\n]|\b(?:but|however)\b", intent_lower.lower())
+    clauses = re.split(r"[;!\n]|\.(?=\s|$)|\b(?:but|however)\b", intent_lower.lower())
     for clause in clauses:
         if re.search(r"\b(?:no|not|never|without|avoid|prohibit|forbid|don't|mustn't|cannot)\b", clause):
             continue
@@ -4949,7 +4981,7 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
 
     flags = [
         flag
-        for flag in dedupe_flags(regex_flags + ast_flags + heuristic_flags + secret_source_flags + secret_flow_flags)
+        for flag in dedupe_flags(regex_flags + ast_flags + heuristic_flags + secret_source_flags + secret_flow_flags + inline_environment_egress(analysis_code, intent))
         if float(flag.get("severity", 0) or 0) > 0
     ]
 
@@ -4964,13 +4996,12 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
                     " The credential source is part of the separately scored transmission chain, "
                     "so it is not counted as a second major risk."
                 )
-            elif secret_access_expected:
-                flag["severity"] = 5.0
-                flag["explanation"] += " The stated intent appears to expect credential access, so this finding was reduced."
             else:
-                flag["severity"] = 15.0
+                flag["severity"] = 5.0
                 flag["explanation"] += (
-                    " Credential access was not stated in the intent, so it still requires review."
+                    " This finding identifies a credential source, not a demonstrated leak. "
+                    "No transmission chain was detected for this source by the supported checks. "
+                    "Missing intent wording alone is not evidence of a vulnerability; review its uses."
                 )
         elif flag.get("pattern") == "secret_exfiltration_chain":
             flag["severity"] = max(32.0, float(flag.get("severity", 0) or 0))

