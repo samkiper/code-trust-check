@@ -2,6 +2,7 @@ from fastapi import BackgroundTasks, FastAPI, Request, HTTPException
 from fastapi.responses import FileResponse, Response, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from scan_contract import select_filename, inspect_source, finalize_snippet
 import re
 import os
 import io
@@ -80,6 +81,8 @@ async def unhandled_application_error(request: Request, exc: Exception):
 class ScanRequest(BaseModel):
     intent: str
     code: str
+    language: str | None = None
+    filename: str | None = None
     is_example: bool = False
 
 
@@ -242,7 +245,7 @@ GITHUB_LINK_STATE_SECRET = os.getenv("GITHUB_LINK_STATE_SECRET", "").strip() or 
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "").strip()
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 
-SCANNER_VERSION = 20
+SCANNER_VERSION = 21
 AUDIT_SCORE_HIGH_RISK_MAX = 65
 AUDIT_SCORE_REVIEW_MAX = 90
 
@@ -259,7 +262,7 @@ if STRIPE_SECRET_KEY:
 def log_server_issue(context: str, exc: Exception | None = None):
     message = f"[server] {context}"
     if exc is not None:
-        message += f": {exc}"
+        message += f": {type(exc).__name__}"  # Exceptions can contain source, URLs, or credentials.
     print(message)
 
 
@@ -2115,7 +2118,7 @@ def add_multi_signal_heuristics(
     obfuscated_execution_line = find_dataflow_chain_line(
         scannable_lines,
         r"base64\.(?:b64decode|standard_b64decode|urlsafe_b64decode)\s*\(|bytes\.fromhex\s*\(|\batob\s*\(|\bBuffer\.from\s*\(",
-        r"(?<![\w.])exec\s*\(|(?<![\w.])eval\s*\(|\bos\.system\s*\(|\bsubprocess\.(?:run|Popen|call|check_call|check_output)\s*\(",
+        r"\bos\.system\s*\(|\bsubprocess\.(?:run|Popen|call|check_call|check_output)\s*\(",
     )
     download_execute_line = find_dataflow_chain_line(
         scannable_lines,
@@ -3681,11 +3684,14 @@ def has_meaningful_intent(intent: str) -> bool:
 
 
 def intent_mentions_any(intent_lower: str, terms: list[str]) -> bool:
-    """Match whole intent terms so words like 'report' do not count as 'repo'."""
-    return any(
-        re.search(rf"(?<![a-z0-9_]){re.escape(term.lower())}(?![a-z0-9_])", intent_lower)
-        for term in terms
-    )
+    """Match affirmative clauses, never turn prohibitions into permission."""
+    clauses = re.split(r"[.;!\n]|\b(?:but|however)\b", intent_lower.lower())
+    for clause in clauses:
+        if re.search(r"\b(?:no|not|never|without|avoid|prohibit|forbid|don't|mustn't|cannot)\b", clause):
+            continue
+        if any(re.search(rf"(?<![a-z0-9_]){re.escape(term.lower())}(?![a-z0-9_])", clause) for term in terms):
+            return True
+    return False
 
 
 def normalize_manifest_version(raw_version: str) -> tuple[str | None, str]:
@@ -4567,18 +4573,7 @@ def build_focused_code_blocks(code: str, flags: list[dict], context_lines: int =
 
 
 def infer_code_filename(code: str) -> str:
-    lowered = code.lower()
-    if re.search(r"<\?(?:php|=)", lowered):
-        return "snippet.php"
-    if re.search(r"\b(?:const|let|var)\s+\w+|=>|require\s*\(", code):
-        return "snippet.js"
-    if re.search(r"^\s*(?:select|insert|update|delete|create\s+table)\b", lowered, re.MULTILINE):
-        return "snippet.sql"
-    if re.search(r"^\s*(?:#!/bin/(?:ba)?sh|curl\s|wget\s)", lowered, re.MULTILINE):
-        return "snippet.sh"
-    if re.search(r"<\/?(?:html|main|script|div|body|head)\b", lowered):
-        return "snippet.html"
-    return "snippet.py"
+    return select_filename(code)
 
 
 def run_semgrep_scan(code: str, filename: str | None = None) -> dict:
@@ -4598,6 +4593,7 @@ def run_semgrep_scan(code: str, filename: str | None = None) -> dict:
             target.write_text(code, encoding="utf-8")
             command = [
                 executable, "scan", "--json", "--metrics=off", "--quiet",
+                "--disable-version-check", "--oss-only",
                 "--jobs", "1", "--timeout", "5", "--max-memory", "512",
                 "--config", str(SEMGREP_CONFIG_PATH), str(target),
             ]
@@ -4650,11 +4646,16 @@ def run_semgrep_scan(code: str, filename: str | None = None) -> dict:
                 "message": extra.get("message") or "Semgrep detected code that needs review.",
                 "explanation": metadata.get("explanation") or extra.get("message") or "A structural code rule matched this line.",
                 "severity": severity,
-                "confidence": str(metadata.get("confidence") or "medium").lower(),
+                **({"confidence": str(metadata["confidence"]).lower()} if metadata.get("confidence") else {}),
+                "when_legitimate": "A matching operation can be legitimate with trusted inputs and appropriate controls. Confirm the input source and context; a match alone does not establish exploitability.",
+                "what_to_check": "Review the cited operation, trace its inputs, and confirm the trust boundary and runtime permissions.",
             })
         return {
             "name": "semgrep",
-            "status": "complete",
+            "status": "partial" if payload.get("errors") or not (payload.get("paths") or {}).get("scanned") else "complete",
+            "targets_analyzed": len((payload.get("paths") or {}).get("scanned") or []),
+            "parse_errors": [{"type": str(e.get("type") or "Engine error"), "message": "The engine reported incomplete parsing or analysis."} for e in payload.get("errors") or []],
+            "message": "Parser errors or no analyzed targets; findings may be incomplete." if payload.get("errors") or not (payload.get("paths") or {}).get("scanned") else "",
             "findings": findings,
             "duration_ms": round((time.monotonic() - started) * 1000),
             "attempts": attempts,
@@ -4991,10 +4992,13 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
         touches.append("files")
 
     if re.search(
-        r"(?<![\w.])exec\s*\(|(?<![\w.])eval\s*\(|\bos\.system\s*\(|\bsubprocess\.(?:run|Popen|call|check_call|check_output)\s*\(|\bchild_process\.(?:exec|execFile|spawn|fork)\s*\(",
+        r"\bos\.system\s*\(|\bsubprocess\.(?:run|Popen|call|check_call|check_output)\s*\(|\bchild_process\.(?:exec|execFile|spawn|fork)\s*\(",
         cleaned_code_lower,
     ):
         touches.append("system execution")
+
+    if re.search(r"(?<![\w.])(?:eval|exec)\s*\(", cleaned_code_lower):
+        touches.append("dynamic execution")
 
     if re.search(
         r"\b__import__\s*\(|\bimportlib\.import_module\s*\(",
@@ -5046,6 +5050,12 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
         mismatch_flags.append("Code runs system-level commands not clearly mentioned in the intent.")
         risk_points += 2.5
 
+    if meaningful_intent and "dynamic execution" in touches and not intent_mentions_any(
+        intent_lower, ["eval", "exec", "evaluate code", "execute code", "dynamic execution"]
+    ):
+        mismatch_flags.append("Code evaluates or executes source text dynamically; confirm its origin and input controls.")
+        risk_points += 2.5
+
     if meaningful_intent and "dynamic imports" in touches and not intent_mentions_any(
         intent_lower, ["plugin", "module", "import", "extension", "dynamic"]
     ):
@@ -5088,6 +5098,9 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
 
     if "system execution" in touches:
         behavior_summary.append("Executes system-level commands.")
+
+    if "dynamic execution" in touches:
+        behavior_summary.append("Evaluates or executes source text dynamically.")
 
     if "dynamic imports" in touches:
         behavior_summary.append("Dynamically loads code or modules at runtime.")
@@ -5140,7 +5153,8 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
     }
 
 
-def analyze_code_product(intent: str, code: str, plan: str = "free", filename: str | None = None) -> dict:
+def analyze_code_product(intent: str, code: str, plan: str = "free", filename: str | None = None, language: str | None = None) -> dict:
+    filename = select_filename(code, language, filename)
     result = analyze_code(intent, code, plan=plan)
     scan_id = hashlib.sha256(f"{intent}\0{code}".encode("utf-8", errors="ignore")).hexdigest()[:24]
     result["scan_id"] = scan_id
@@ -5184,7 +5198,7 @@ def analyze_code_product(intent: str, code: str, plan: str = "free", filename: s
         "status": "not_enabled",
         "reason": "Untrusted code is never executed inside the web service.",
     }
-    return result
+    return finalize_snippet(result, code, filename, semgrep)
 
 
 def result_to_sarif(result: dict, filename: str = "snippet.py") -> dict:
@@ -7191,7 +7205,7 @@ def scan(req: ScanRequest, request: Request):
 
     is_example_scan = bool(req.is_example)
 
-    result = analyze_code_product(req.intent, req.code, plan=access["plan"])
+    result = analyze_code_product(req.intent, req.code, plan=access["plan"], filename=req.filename, language=req.language)
     result["access"] = access
     result["is_example"] = is_example_scan
     result["privacy"] = {
@@ -7208,7 +7222,7 @@ def scan_sarif(req: ScanRequest, request: Request):
     max_code_bytes = MAX_PASTED_CODE_BYTES_PRO if access.get("plan") in {"pro", "admin"} else MAX_PASTED_CODE_BYTES_FREE
     if len(req.code.encode("utf-8", errors="ignore")) > max_code_bytes:
         return private_json({"detail": "Pasted code exceeds this plan's request limit."}, status_code=413)
-    result = analyze_code_product(req.intent, req.code, plan=access.get("plan") or "free")
+    result = analyze_code_product(req.intent, req.code, plan=access.get("plan") or "free", filename=req.filename, language=req.language)
     return private_json(result_to_sarif(result, infer_code_filename(req.code)))
 
 
@@ -7431,14 +7445,17 @@ def scan_repo(req: RepoScanRequest, request: Request):
                 continue
 
             result = analyze_code(req.intent, code_text, plan=access["plan"])
+            source_coverage = inspect_source(code_text, file_name)
             weight = file_weight_for_repo(file_name)
             weighted_file_points = weighted_repository_file_points(file_name, result["risk_points"])
             repo_weighted_points.append(weighted_file_points)
 
             files_scanned.append({
                 "file": file_name,
+                "coverage": source_coverage,
+                "scan_status": "complete" if source_coverage["meaningful_coverage"] else "not-rated",
                 "risk": result["risk"],
-                "trust_score": result["trust_score"],
+                "trust_score": result["trust_score"] if source_coverage["meaningful_coverage"] else None,
                 "summary": result["summary"],
                 "touches": result["touches"],
                 "flags": result["flags"],
@@ -7461,7 +7478,7 @@ def scan_repo(req: RepoScanRequest, request: Request):
                 highest_file_risk = "yellow"
 
     files_available_count = len(all_code_files)
-    coverage_partial = len(code_files) < files_available_count
+    coverage_partial = len(files_scanned) < files_available_count or any(not f["coverage"]["meaningful_coverage"] for f in files_scanned)
 
     if not files_scanned and not dependency_findings:
         return private_json({
@@ -7469,7 +7486,9 @@ def scan_repo(req: RepoScanRequest, request: Request):
             "repo_url": req.repo_url,
             "repo_name": f"{owner}/{repo}",
             "risk": "limited",
-            "trust_score": 0,
+            "scan_status": "not-rated",
+            "coverage_validated": True,
+            "trust_score": None,
             "trust_badge": {
                 "label": "No scannable code",
                 "emoji": "⚪",
@@ -7572,14 +7591,31 @@ def scan_repo(req: RepoScanRequest, request: Request):
         coverage_partial=coverage_partial,
     )
 
+    meaningful_files = sum(bool(f["coverage"]["meaningful_coverage"]) for f in files_scanned)
+    incomplete = coverage_partial or bool(dependency_scan.get("dependency_scan_error")) or bool(dependency_scan.get("dependencies_skipped"))
+    repo_status = "not-rated" if not meaningful_files else "partial" if incomplete else "complete"
+    repo_verdict = build_action_verdict(overall_risk, trust_score, insufficient=repo_status=="not-rated")
+    if any(float(f.get("severity") or 0) >= 18 for f in flattened_repo_flags + dependency_findings):
+        overall_risk = "red"
+        repo_verdict = build_action_verdict("red", min(trust_score, 65))
+        trust_score = min(trust_score, 65)
+    elif repo_status == "partial":
+        repo_verdict = {"id":"review_first", "label":"Partial repository analysis", "action":"Review per-file coverage and rerun incomplete checks.", "tone":"warning"}
+    repo_coverage = build_repo_coverage([str(f.get("file") or "") for f in files_scanned], files_available_count, dependency_scan)
+    repo_coverage["files_analyzed"] = meaningful_files
+    repo_coverage["limitations"].append("Repository behavior checks validate Python, JavaScript, and TypeScript syntax. Other languages retain pattern findings but are not rated; Semgrep is not run for repository files.")
+    if repo_status != "complete": trust_score = None
+
     return private_json({
         "scanner_version": SCANNER_VERSION,
         "repo_url": req.repo_url,
         "repo_name": f"{owner}/{repo}",
         "risk": overall_risk,
+        "scan_status": repo_status,
+        "coverage_validated": True,
         "trust_score": trust_score,
-        "trust_badge": trust_badge,
-        "readme_badge": generate_readme_badge(str(request.base_url), owner, repo, trust_score, overall_risk),
+        "trust_badge": {"label":repo_verdict["label"], "message":repo_verdict["action"], "color":"red" if overall_risk=="red" else "gray" if repo_status!="complete" else "green"},
+        "readme_badge": generate_readme_badge(str(request.base_url), owner, repo, trust_score, overall_risk) if trust_score is not None else None,
         "files_scanned_count": len(files_scanned),
         "files_available_count": files_available_count,
         "files_scanned_limit": repo_file_limit if repo_file_limit is not None else "Unlimited",
@@ -7590,12 +7626,8 @@ def scan_repo(req: RepoScanRequest, request: Request):
         "score_explanation": score_explanation,
         "score_explanation_lines": score_explanation_lines,
         "scan_confidence": scan_confidence,
-        "verdict": build_action_verdict(overall_risk, trust_score),
-        "coverage": build_repo_coverage(
-            [str(item.get("file") or "") for item in files_scanned],
-            files_available_count,
-            dependency_scan,
-        ),
+        "verdict": repo_verdict,
+        "coverage": repo_coverage,
         "evidence": evidence,
         "analysis_engines": [
             {"name": "behavior", "status": "complete", "findings": len(flattened_repo_flags)},

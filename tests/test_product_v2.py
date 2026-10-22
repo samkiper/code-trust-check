@@ -95,9 +95,10 @@ class ProductIntegrityV20Tests(unittest.TestCase):
     def test_safe_result_uses_supported_signal_language_and_action(self):
         with patch.object(main, "SEMGREP_ENABLED", False):
             result = main.analyze_code_product("Print a greeting", "print('hello')", filename="hello.py")
-        self.assertEqual(result["scanner_version"], 20)
-        self.assertEqual(result["verdict"]["id"], "continue_with_review")
-        self.assertIn("No major supported risks", result["verdict"]["label"])
+        self.assertEqual(result["scanner_version"], 21)
+        self.assertEqual(result["verdict"]["id"], "review_first")
+        self.assertEqual(result["scan_status"], "partial")
+        self.assertIsNone(result["trust_score"])
         self.assertEqual(result["coverage"]["language"], "Python")
         self.assertEqual(result["coverage"]["analysis_depth"], "Deep")
         self.assertTrue(any("not that the code was proven safe" in item for item in result["coverage"]["limitations"]))
@@ -595,7 +596,7 @@ class SemgrepAdapterTests(unittest.TestCase):
         self.assertEqual(result["findings"], [])
 
     def test_semgrep_json_is_normalized(self):
-        payload = {"results": [{
+        payload = {"paths": {"scanned": ["app.py"]}, "results": [{
             "check_id": "python.dynamic-eval",
             "start": {"line": 3},
             "extra": {"severity": "ERROR", "message": "Dynamic eval", "metadata": {"confidence": "high"}},
@@ -608,7 +609,7 @@ class SemgrepAdapterTests(unittest.TestCase):
         self.assertEqual(result["findings"][0]["severity"], 18)
 
     def test_semgrep_retries_once_within_a_bounded_budget(self):
-        completed = type("Completed", (), {"returncode": 0, "stdout": '{"results": []}'})()
+        completed = type("Completed", (), {"returncode": 0, "stdout": '{"results": [], "paths": {"scanned": ["app.py"]}}'})()
         with patch("main.shutil.which", return_value="/usr/bin/semgrep"), \
                 patch.object(main, "SEMGREP_BUDGET_SECONDS", 40), \
                 patch.object(main, "SEMGREP_FIRST_ATTEMPT_SECONDS", 28), \
