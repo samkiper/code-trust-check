@@ -5238,6 +5238,14 @@ def result_to_sarif(result: dict, filename: str = "snippet.py") -> dict:
     }
 
 
+def get_billing_return_url(request: Request) -> str:
+    # Accept only the known private frontend; never trust arbitrary redirect input.
+    origin = request.headers.get("x-audit-return-origin", "")
+    if origin == "https://ai-code-audit.samkiper.chatgpt.site":
+        return origin
+    return get_app_base_url(request)
+
+
 def get_app_base_url(request: Request | None = None) -> str:
     configured = str(APP_BASE_URL or "").strip().rstrip("/")
     if configured:
@@ -5541,7 +5549,7 @@ async def create_billing_portal_session(request: Request):
     try:
         session = stripe.billing_portal.Session.create(
             customer=stripe_customer_id,
-            return_url=f"{get_app_base_url(request)}/",
+            return_url=f"{get_billing_return_url(request)}/#account",
         )
     except Exception as exc:
         log_server_issue("Could not start Stripe billing portal", exc)
@@ -5577,8 +5585,8 @@ async def create_stripe_checkout_session(request: Request):
     checkout_kwargs = {
         "mode": "subscription",
         "line_items": [{"price": STRIPE_PRICE_ID, "quantity": 1}],
-        "success_url": f"{get_app_base_url(request)}/?checkout=success&session_id={{CHECKOUT_SESSION_ID}}",
-        "cancel_url": f"{get_app_base_url(request)}/?checkout=cancel",
+        "success_url": f"{get_billing_return_url(request)}/?checkout=success&session_id={{CHECKOUT_SESSION_ID}}",
+        "cancel_url": f"{get_billing_return_url(request)}/?checkout=cancel",
         "client_reference_id": str(access["user_id"]),
         "metadata": {
             "user_id": str(access["user_id"]),
@@ -5668,11 +5676,10 @@ async def stripe_checkout_session_status(request: Request, session_id: str):
     payment_completed = payment_status in {"paid", "no_payment_required"}
 
     if subscription_id and checkout_completed and payment_completed:
-        provisional_plan = "pro"
-        subscription_status = "checkout_completed"
+        subscription_status = ""
         try:
             subscription = stripe.Subscription.retrieve(subscription_id)
-            subscription_status = str(stripe_object_value(subscription, "status", "active") or "active")
+            subscription_status = str(stripe_object_value(subscription, "status") or "")
             cancel_at_period_end = bool(stripe_object_value(subscription, "cancel_at_period_end", False) or False)
             current_period_end = stripe_object_value(subscription, "current_period_end")
             plan = plan_from_subscription_status(
@@ -5680,11 +5687,9 @@ async def stripe_checkout_session_status(request: Request, session_id: str):
                 cancel_at_period_end=cancel_at_period_end,
                 current_period_end=current_period_end,
             )
-            if plan != "pro":
-                plan = provisional_plan
         except Exception as exc:
-            log_server_issue("Could not retrieve subscription during checkout verification; applying provisional Pro access", exc)
-            plan = provisional_plan
+            log_server_issue("Could not retrieve subscription during checkout verification", exc)
+            raise HTTPException(status_code=503, detail="Subscription verification is temporarily unavailable. Retry shortly.") from exc
 
         synced = sync_user_plan_from_subscription(
             user_id,
@@ -5808,7 +5813,7 @@ async def reconcile_stripe_subscription(request: Request):
     request.state.operation_stage = "reading the Stripe subscription"
     try:
         subscription = stripe.Subscription.retrieve(subscription_id)
-        status = str(stripe_object_value(subscription, "status", "active") or "active").lower()
+        status = str(stripe_object_value(subscription, "status") or "").lower()
         cancel_at_period_end = bool(
             stripe_object_value(subscription, "cancel_at_period_end", False) or False
         )
@@ -5875,7 +5880,9 @@ async def stripe_webhook(request: Request):
     event_data = stripe_object_value(event, "data", {}) or {}
     event_object = stripe_object_value(event_data, "object", {}) or {}
 
-    if event_type == "checkout.session.completed":
+    if event_type in {"checkout.session.completed", "checkout.session.async_payment_succeeded"}:
+        if stripe_object_value(event_object, "payment_status") not in {"paid", "no_payment_required"}:
+            return {"received": True, "pending_payment": True}
         metadata = stripe_object_value(event_object, "metadata", {}) or {}
         subscription_id = stripe_reference_id(stripe_object_value(event_object, "subscription")) or None
         customer_id = stripe_reference_id(stripe_object_value(event_object, "customer")) or None
@@ -5888,17 +5895,18 @@ async def stripe_webhook(request: Request):
             stripe_subscription_id=str(subscription_id) if subscription_id else None,
         )
         if user_id:
-            subscription_status = "active"
+            subscription_status = ""
             cancel_at_period_end = False
             current_period_end = None
             try:
                 if subscription_id:
                     subscription = stripe.Subscription.retrieve(subscription_id)
-                    subscription_status = str(stripe_object_value(subscription, "status", "active") or "active")
+                    subscription_status = str(stripe_object_value(subscription, "status") or "")
                     cancel_at_period_end = bool(stripe_object_value(subscription, "cancel_at_period_end", False) or False)
                     current_period_end = stripe_object_value(subscription, "current_period_end")
             except Exception as exc:
-                log_server_issue("Failed to retrieve subscription after checkout.session.completed", exc)
+                log_server_issue("Failed to retrieve subscription after checkout completion", exc)
+                return JSONResponse({"received": False, "error": "Subscription lookup unavailable; retry."}, status_code=503)
 
             sync_user_plan_from_subscription(
                 user_id,
