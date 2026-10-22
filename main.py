@@ -5270,9 +5270,9 @@ def result_to_sarif(result: dict, filename: str = "snippet.py") -> dict:
 
 
 def get_billing_return_url(request: Request) -> str:
-    # Accept only the known private frontend; never trust arbitrary redirect input.
+    # Accept only verified frontend origins; never trust arbitrary redirect input.
     origin = request.headers.get("x-audit-return-origin", "")
-    if origin == "https://ai-code-audit.samkiper.chatgpt.site":
+    if origin in {"https://ai-code-audit.samkiper.chatgpt.site", "https://aicodeaudit.org", "https://www.aicodeaudit.org"}:
         return origin
     return get_app_base_url(request)
 

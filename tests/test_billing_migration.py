@@ -9,7 +9,9 @@ class BillingMigrationTests(unittest.TestCase):
   def req(origin): return Request({'type':'http','headers':[(b'x-audit-return-origin',origin.encode())]})
   with patch.object(main,'APP_BASE_URL','https://code-trust-check.onrender.com'):
    self.assertEqual(main.get_billing_return_url(req('https://ai-code-audit.samkiper.chatgpt.site')),'https://ai-code-audit.samkiper.chatgpt.site')
-   for origin in ['https://evil.example','https://ai-code-audit.samkiper.chatgpt.site.evil.example','https://ai-code-audit.samkiper.chatgpt.site@evil.example']:
+   for origin in ['https://aicodeaudit.org', 'https://www.aicodeaudit.org']:
+    self.assertEqual(main.get_billing_return_url(req(origin)),origin)
+   for origin in ['http://aicodeaudit.org','https://aicodeaudit.org.evil.example','https://aicodeaudit.org@evil.example','https://evil.example','https://ai-code-audit.samkiper.chatgpt.site.evil.example','https://ai-code-audit.samkiper.chatgpt.site@evil.example']:
     self.assertEqual(main.get_billing_return_url(req(origin)),'https://code-trust-check.onrender.com')
  def webhook(self,payment='paid',failure=False):
   event={'type':'checkout.session.completed','data':{'object':{'payment_status':payment,'subscription':'sub_existing','customer':'cus_existing','metadata':{'user_id':'user'}}}}
