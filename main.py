@@ -246,7 +246,7 @@ GITHUB_LINK_STATE_SECRET = os.getenv("GITHUB_LINK_STATE_SECRET", "").strip() or 
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "").strip()
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 
-SCANNER_VERSION = 23
+SCANNER_VERSION = 24
 AUDIT_SCORE_HIGH_RISK_MAX = 65
 AUDIT_SCORE_REVIEW_MAX = 90
 
@@ -2340,7 +2340,9 @@ def analyze_python_ast(code: str, intent: str = "") -> list[dict]:
         if isinstance(node, ast.Name):
             return node.id in weak_random_vars
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-            return attribute_root_name(node.func) == "random" and node.func.attr != "SystemRandom"
+            if attribute_root_name(node.func) == "random" and node.func.attr != "SystemRandom":
+                return True
+        # Encoding and conversion wrappers do not make predictable randomness secure.
         return any(is_weak_random_value(child) for child in ast.iter_child_nodes(node))
 
     def current_function_name() -> str:

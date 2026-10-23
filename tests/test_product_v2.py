@@ -95,7 +95,7 @@ class ProductIntegrityV20Tests(unittest.TestCase):
     def test_safe_result_uses_supported_signal_language_and_action(self):
         with patch.object(main, "SEMGREP_ENABLED", False):
             result = main.analyze_code_product("Print a greeting", "print('hello')", filename="hello.py")
-        self.assertEqual(result["scanner_version"], 23)
+        self.assertEqual(result["scanner_version"], 24)
         self.assertEqual(result["verdict"]["id"], "review_first")
         self.assertEqual(result["scan_status"], "partial")
         self.assertIsNone(result["trust_score"])
