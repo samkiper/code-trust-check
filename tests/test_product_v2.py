@@ -15,11 +15,12 @@ from starlette.requests import Request
 
 
 class EvidenceModelTests(unittest.TestCase):
-    def test_safe_code_has_six_clear_evidence_categories(self):
+    def test_safe_code_preserves_unchecked_dependency_evidence(self):
         with patch.object(main, "SEMGREP_ENABLED", False):
             result = main.analyze_code_product("Print a greeting", "print('hello')")
         self.assertEqual(len(result["evidence"]), 6)
-        self.assertTrue(all(item["status"] == "clear" for item in result["evidence"]))
+        self.assertTrue(all(item["status"] == "clear" for item in result["evidence"] if item["id"] != "dependencies"))
+        self.assertEqual(next(item for item in result["evidence"] if item["id"] == "dependencies")["status"], "not_checked")
 
     def test_execution_risk_is_visible_as_evidence(self):
         with patch.object(main, "SEMGREP_ENABLED", False):
@@ -95,7 +96,7 @@ class ProductIntegrityV20Tests(unittest.TestCase):
     def test_safe_result_uses_supported_signal_language_and_action(self):
         with patch.object(main, "SEMGREP_ENABLED", False):
             result = main.analyze_code_product("Print a greeting", "print('hello')", filename="hello.py")
-        self.assertEqual(result["scanner_version"], 24)
+        self.assertEqual(result["scanner_version"], 25)
         self.assertEqual(result["verdict"]["id"], "review_first")
         self.assertEqual(result["scan_status"], "partial")
         self.assertIsNone(result["trust_score"])

@@ -246,7 +246,7 @@ GITHUB_LINK_STATE_SECRET = os.getenv("GITHUB_LINK_STATE_SECRET", "").strip() or 
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "").strip()
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 
-SCANNER_VERSION = 24
+SCANNER_VERSION = 25
 AUDIT_SCORE_HIGH_RISK_MAX = 65
 AUDIT_SCORE_REVIEW_MAX = 90
 
@@ -4175,7 +4175,15 @@ def query_osv_batch(dependencies: list[dict]) -> list[dict]:
         }
 
         batch_response = fetch_json(OSV_API_BATCH_URL, method="POST", payload=payload)
-        batch_results = batch_response.get("results", [])
+        batch_results = batch_response.get("results") if isinstance(batch_response, dict) else None
+        if not isinstance(batch_results, list) or len(batch_results) != len(chunk):
+            raise ValueError("Incomplete advisory batch response")
+        for item in batch_results:
+            if not isinstance(item, dict) or not isinstance(item.get("vulns", []), list):
+                raise ValueError("Malformed advisory batch response")
+            if any(not isinstance(ref, dict) or not isinstance(ref.get("id"), str) or not ref["id"].strip()
+                   for ref in item.get("vulns", [])):
+                raise ValueError("Malformed advisory reference")
 
         for dep, item in zip(chunk, batch_results):
             results.append({
@@ -4193,6 +4201,8 @@ def fetch_osv_vulnerability(osv_id: str, cache: dict[str, dict]) -> dict | None:
     try:
         url = OSV_VULN_URL_TEMPLATE.format(osv_id=quote(osv_id, safe=""))
         vuln = fetch_json(url)
+        if not isinstance(vuln, dict) or vuln.get("id") != osv_id:
+            raise ValueError("Missing or mismatched advisory detail")
         cache[osv_id] = vuln
         return vuln
     except Exception:
@@ -4488,7 +4498,7 @@ def analyze_dependency_manifests(zip_file: zipfile.ZipFile) -> dict:
             "dependency_findings": reputation_findings,
             "dependency_reputation_findings": reputation_findings,
             "dependency_risk_points": reputation_risk,
-            "dependency_summary_lines": [f"Dependency vulnerability lookup failed: {exc}"],
+            "dependency_summary_lines": ["Dependency vulnerability lookup failed; coverage is incomplete."],
             "dependency_scan_error": "Dependency vulnerability lookup failed during the repo scan.",
             "dependency_rollup": {
                 "advisory_count": 0,
@@ -4498,7 +4508,13 @@ def analyze_dependency_manifests(zip_file: zipfile.ZipFile) -> dict:
             },
         }
 
-    vuln_cache: dict[str, dict] = {}
+    # Fetch each advisory once, concurrently, preserving every manifest association.
+    advisory_ids = sorted({ref["id"] for match in osv_matches
+                           for ref in match.get("vuln_refs", []) if isinstance(ref, dict) and ref.get("id")})
+    with ThreadPoolExecutor(max_workers=min(8, max(1, len(advisory_ids)))) as executor:
+        details = list(executor.map(lambda advisory_id: fetch_osv_vulnerability(advisory_id, {}), advisory_ids))
+    vuln_cache = dict(zip(advisory_ids, details))
+    missing_details = {key for key, value in vuln_cache.items() if not value}
     dependency_findings: list[dict] = []
 
     for match in osv_matches:
@@ -4510,8 +4526,15 @@ def analyze_dependency_manifests(zip_file: zipfile.ZipFile) -> dict:
             if not osv_id:
                 continue
 
-            vuln = fetch_osv_vulnerability(osv_id, vuln_cache)
+            vuln = vuln_cache.get(osv_id)
             if not vuln:
+                # The batch confirmed a match. Preserve that evidence without inventing severity.
+                finding = build_dependency_finding(dep, {"id": osv_id, "summary": "Advisory match returned, but full details could not be retrieved."})
+                finding.update(severity=0.0, base_severity=0.0, severity_label="UNKNOWN",
+                               detail_status="unavailable", message=f"Unresolved dependency advisory: {osv_id}",
+                               why_risky="The advisory service returned this match; impact and severity remain unverified.",
+                               suggested_fix="Retry the scan and review the advisory before deciding whether an update is required.")
+                dependency_findings.append(finding)
                 continue
 
             dependency_findings.append(build_dependency_finding(dep, vuln))
@@ -4541,6 +4564,8 @@ def analyze_dependency_manifests(zip_file: zipfile.ZipFile) -> dict:
     elif manifest_files:
         summary_lines.append("No known dependency vulnerabilities were found in the queried manifest versions.")
 
+    if missing_details:
+        manifest_scan_errors.append(f"Could not retrieve full details for {len(missing_details)} advisory record(s); references are retained.")
     summary_lines.extend(manifest_scan_errors)
     if reputation_findings:
         summary_lines.append(f"Found {len(reputation_findings)} package reputation or source-integrity warning(s).")
@@ -4554,7 +4579,7 @@ def analyze_dependency_manifests(zip_file: zipfile.ZipFile) -> dict:
         "dependency_reputation_findings": reputation_findings,
         "dependency_risk_points": dependency_risk_points,
         "dependency_summary_lines": summary_lines,
-        "dependency_scan_error": None,
+        "dependency_scan_error": " ".join(manifest_scan_errors) or None,
         "dependency_rollup": {**rollup, "advisory_count": advisory_count, "reputation_finding_count": len(reputation_findings)},
     }
 
@@ -4740,6 +4765,7 @@ def build_evidence_profile(
     semgrep_findings: list[dict] | None = None,
     dependency_points: float = 0,
     coverage_partial: bool = False,
+    dependency_summary: dict | None = None,
 ) -> list[dict]:
     semgrep_findings = semgrep_findings or []
     combined = flags + semgrep_findings
@@ -4802,6 +4828,13 @@ def build_evidence_profile(
             "confidence": "high" if category != "intent" else "medium",
             "signals": signals,
         })
+    dependency = next(item for item in profile if item["id"] == "dependencies")
+    if dependency_summary is None or not dependency_summary.get("dependencies_queried"):
+        dependency.update(status="not_checked", risk_points=None, confidence=None,
+                          summary="Dependency advisory coverage was not completed; no dependency safety conclusion is available.")
+    if dependency_summary and (dependency_summary.get("dependency_scan_error") or dependency_summary.get("dependencies_skipped")):
+        dependency.update(status="partial", risk_points=None, confidence=None,
+                          summary="Dependency checks are incomplete. Review retained findings and coverage limitations.")
     return profile
 
 
@@ -7655,6 +7688,7 @@ def scan_repo(req: RepoScanRequest, request: Request):
         repo_intent_mismatches,
         dependency_points=dependency_risk_points,
         coverage_partial=coverage_partial,
+        dependency_summary=dependency_scan,
     )
 
     meaningful_files = sum(bool(f["coverage"]["meaningful_coverage"]) for f in files_scanned)
