@@ -82,6 +82,12 @@ def finalize_snippet(result, code, filename, semgrep):
         result["verdict"] = {"id":"review_first", "label":"Review before running", "action":"Confirm the reported behavior against its evidence before running this code.", "tone":"warning"}
     elif status == "partial":
         result["verdict"] = {"id":"review_first", "label":"Partial analysis — review coverage", "action":"Review the available findings and rerun when all checks are available.", "tone":"warning"}
+    if status != "not-rated":
+        result["scan_confidence"] = {"level": "Not calibrated", "lines": [
+            "Detection confidence is not calibrated; completed checks do not prove safety.",
+            f"Parser: {source['parse_status']}. Meaningful source lines analyzed: {source['executable_lines']}.",
+            "Review each engine status and language limitation for the actual coverage.",
+        ]}
     if status != "complete": result["trust_score"] = None
     result["trust_badge"] = {"label":result["verdict"]["label"], "message":result["verdict"]["action"], "color":"red" if high else "gray" if status != "complete" else "yellow" if medium else "green"}
     return result

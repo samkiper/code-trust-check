@@ -18,7 +18,7 @@ def limit_scan_capacity(function):
             raise HTTPException(
                 status_code=429,
                 detail="The scanner is busy completing another audit. Your scan has not started. Retry shortly.",
-                headers={"Retry-After": "10", "Cache-Control": "no-store"},
+                headers={"Retry-After": "10", "Cache-Control": "no-store", "X-Scan-Rejection": "capacity"},
             )
         try:
             return function(*args, **kwargs)

@@ -4,6 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from scan_contract import select_filename, inspect_source, finalize_snippet
 from scan_capacity import limit_scan_capacity
+from flow_review import supplemental_flows, literal_eval_locations
 import re
 import os
 import io
@@ -247,7 +248,7 @@ GITHUB_LINK_STATE_SECRET = os.getenv("GITHUB_LINK_STATE_SECRET", "").strip() or 
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "").strip()
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 
-SCANNER_VERSION = 26
+SCANNER_VERSION = 27
 AUDIT_SCORE_HIGH_RISK_MAX = 65
 AUDIT_SCORE_REVIEW_MAX = 90
 
@@ -1211,72 +1212,13 @@ def build_scan_confidence(
     was_limited: bool = False,
 ) -> dict:
     dependency_summary = dependency_summary or {}
-    normalized_scope = str(scope_label or "repo").lower()
-
-    level = "High"
-    lines: list[str] = []
-
-    if normalized_scope == "repo":
-        files_scanned_count = int(files_scanned_count or 0)
-        files_total = int(files_total or files_scanned_count or 0)
-        dependencies_queried = int(dependency_summary.get("dependencies_queried", 0) or 0)
-        dependencies_skipped_count = int(dependency_summary.get("dependencies_skipped_count", 0) or 0)
-
-        if files_total and files_scanned_count and files_total != files_scanned_count:
-            lines.append(f"{files_scanned_count} of {files_total} files were analyzed.")
-        else:
-            noun = "file" if files_scanned_count == 1 else "files"
-            lines.append(f"{files_scanned_count} {noun} were analyzed.")
-
-        if scan_error or dependency_summary.get("scan_error"):
-            lines.append("Dependency scan was only partially completed.")
-        elif dependencies_queried > 0:
-            lines.append("Dependency scan completed.")
-        else:
-            lines.append("No dependency manifests with resolvable versions were analyzed.")
-
-        if dependencies_skipped_count > 0:
-            noun = "entry was" if dependencies_skipped_count == 1 else "entries were"
-            lines.append(f"{dependencies_skipped_count} dependency {noun} skipped.")
-
-        if was_limited or files_scanned_count == 0:
-            level = "Limited"
-        elif files_total > files_scanned_count:
-            level = "Medium"
-            lines.append("Only part of the repo could be analyzed.")
-        elif scan_error or dependency_summary.get("scan_error") or dependencies_skipped_count > 0:
-            level = "Medium"
-            lines.append("Some dependency analysis was incomplete, so confidence is moderate.")
-        else:
-            level = "High"
-            lines.append("All supported files were analyzed.")
-    else:
-        code_line_count = int(code_line_count or 0)
-        noun = "line" if code_line_count == 1 else "lines"
-        lines.append(f"{code_line_count} {noun} of code were analyzed.")
-
-        if line_limit_applied is not None and code_line_count >= int(line_limit_applied):
-            lines.append(f"This scan used the current line limit of {line_limit_applied} lines.")
-
-        if was_limited or code_line_count == 0:
-            level = "Limited"
-        elif line_limit_applied is not None and code_line_count >= int(line_limit_applied):
-            level = "Medium"
-            lines.append("The scan likely covered only part of the full file.")
-        elif code_line_count >= 50:
-            level = "High"
-            lines.append("The scan covered enough code for a high-confidence result.")
-        elif code_line_count >= 15:
-            level = "Medium"
-            lines.append("The scan covered a moderate amount of code.")
-        else:
-            level = "Limited"
-            lines.append("The scan covered only a small amount of code.")
-
-    return {
-        "level": level,
-        "lines": lines,
-    }
+    lines = ["Detection confidence is not calibrated. Coverage describes completed work, not the probability of finding every vulnerability."]
+    if str(scope_label or "repo").lower() == "repo":
+        lines.append(f"{files_scanned_count} of {files_total or files_scanned_count} supported files were analyzed.")
+        lines.append(f"{dependency_summary.get('dependencies_queried', 0)} dependency entries were queried.")
+    if scan_error or dependency_summary.get("scan_error") or was_limited:
+        lines.append("Some analysis was incomplete; review the engine and coverage details.")
+    return {"level": "Not calibrated", "lines": lines}
 
 
 def risk_from_points(points: float) -> str:
@@ -4154,6 +4096,13 @@ def fetch_json(url: str, method: str = "GET", payload: dict | None = None) -> di
         return json.loads(raw)
 
 
+class PartialAdvisoryError(ValueError):
+    def __init__(self, results, failed_count):
+        super().__init__("Dependency advisory lookup was incomplete")
+        self.results = results
+        self.failed_count = failed_count
+
+
 def query_osv_batch(dependencies: list[dict]) -> list[dict]:
     if not dependencies:
         return []
@@ -4175,16 +4124,19 @@ def query_osv_batch(dependencies: list[dict]) -> list[dict]:
             ]
         }
 
-        batch_response = fetch_json(OSV_API_BATCH_URL, method="POST", payload=payload)
-        batch_results = batch_response.get("results") if isinstance(batch_response, dict) else None
-        if not isinstance(batch_results, list) or len(batch_results) != len(chunk):
-            raise ValueError("Incomplete advisory batch response")
-        for item in batch_results:
-            if not isinstance(item, dict) or not isinstance(item.get("vulns", []), list):
-                raise ValueError("Malformed advisory batch response")
-            if any(not isinstance(ref, dict) or not isinstance(ref.get("id"), str) or not ref["id"].strip()
-                   for ref in item.get("vulns", [])):
-                raise ValueError("Malformed advisory reference")
+        try:
+            batch_response = fetch_json(OSV_API_BATCH_URL, method="POST", payload=payload)
+            batch_results = batch_response.get("results") if isinstance(batch_response, dict) else None
+            if not isinstance(batch_results, list) or len(batch_results) != len(chunk):
+                raise ValueError("Incomplete advisory batch response")
+            for item in batch_results:
+                if not isinstance(item, dict) or not isinstance(item.get("vulns", []), list):
+                    raise ValueError("Malformed advisory batch response")
+                if any(not isinstance(ref, dict) or not isinstance(ref.get("id"), str) or not ref["id"].strip()
+                       for ref in item.get("vulns", [])):
+                    raise ValueError("Malformed advisory reference")
+        except Exception as exc:
+            raise PartialAdvisoryError(results, len(dependencies) - start) from exc
 
         for dep, item in zip(chunk, batch_results):
             results.append({
@@ -4490,24 +4442,9 @@ def analyze_dependency_manifests(zip_file: zipfile.ZipFile) -> dict:
     try:
         osv_matches = query_osv_batch(deduped_dependencies)
     except Exception as exc:
-        reputation_risk = round(min(25.0, sum(float(item["severity"]) for item in reputation_findings) * 0.75), 2)
-        return {
-            "manifests_scanned": len(manifest_files),
-            "dependencies_parsed": len(deduped_dependencies),
-            "dependencies_queried": 0,
-            "dependencies_skipped": skipped_dependencies,
-            "dependency_findings": reputation_findings,
-            "dependency_reputation_findings": reputation_findings,
-            "dependency_risk_points": reputation_risk,
-            "dependency_summary_lines": ["Dependency vulnerability lookup failed; coverage is incomplete."],
-            "dependency_scan_error": "Dependency vulnerability lookup failed during the repo scan.",
-            "dependency_rollup": {
-                "advisory_count": 0,
-                "unique_package_versions": len({item.get("package") for item in reputation_findings}),
-                "unique_manifest_files": len({item.get("file") for item in reputation_findings}),
-                "unique_vulnerability_ids": 0,
-            },
-        }
+        osv_matches = getattr(exc, "results", [])
+        failed_count = getattr(exc, "failed_count", len(deduped_dependencies))
+        manifest_scan_errors.append(f"Advisory lookup incomplete for {failed_count} dependency entries; completed queries and findings are retained.")
 
     # Fetch each advisory once, concurrently, preserving every manifest association.
     advisory_ids = sorted({ref["id"] for match in osv_matches
@@ -4574,7 +4511,7 @@ def analyze_dependency_manifests(zip_file: zipfile.ZipFile) -> dict:
     return {
         "manifests_scanned": len(manifest_files),
         "dependencies_parsed": len(deduped_dependencies),
-        "dependencies_queried": len(deduped_dependencies),
+        "dependencies_queried": len(osv_matches),
         "dependencies_skipped": skipped_dependencies,
         "dependency_findings": dependency_findings,
         "dependency_reputation_findings": reputation_findings,
@@ -4717,19 +4654,24 @@ def run_semgrep_scan(code: str, filename: str | None = None) -> dict:
             raise RuntimeError("Semgrep returned a non-scan exit status")
         payload = json.loads(completed.stdout or "{}")
         findings = []
+        inert_locations = literal_eval_locations(code) if safe_name.endswith(".py") else set()
         for item in payload.get("results") or []:
             extra = item.get("extra") or {}
             metadata = extra.get("metadata") or {}
             raw_severity = str(extra.get("severity") or "WARNING").upper()
             severity = {"ERROR": 18, "WARNING": 10, "INFO": 4}.get(raw_severity, 10)
+            inert_eval = (item.get("check_id") == "python.dynamic-eval" and
+                          ((item.get("start") or {}).get("line"), (item.get("start") or {}).get("col")) in inert_locations)
+            if inert_eval:
+                severity = 4
             findings.append({
                 "engine": "semgrep",
                 "rule_id": item.get("check_id") or "semgrep-rule",
                 "type": "semgrep",
                 "pattern": item.get("check_id") or "semgrep-rule",
                 "line": ((item.get("start") or {}).get("line")),
-                "message": extra.get("message") or "Semgrep detected code that needs review.",
-                "explanation": metadata.get("explanation") or extra.get("message") or "A structural code rule matched this line.",
+                "message": "Fixed literal expression evaluated with eval()" if inert_eval else extra.get("message") or "Semgrep detected code that needs review.",
+                "explanation": "The argument is a fixed literal expression containing only arithmetic or data. No untrusted input reaches this expression. Prefer direct arithmetic or a data parser for clarity." if inert_eval else metadata.get("explanation") or extra.get("message") or "A structural code rule matched this line.",
                 "severity": severity,
                 **({"confidence": str(metadata["confidence"]).lower()} if metadata.get("confidence") else {}),
                 "when_legitimate": "A matching operation can be legitimate with trusted inputs and appropriate controls. Confirm the input source and context; a match alone does not establish exploitability.",
@@ -4826,7 +4768,7 @@ def build_evidence_profile(
             "status": status,
             "risk_points": points,
             "summary": summaries[category],
-            "confidence": "high" if category != "intent" else "medium",
+            "confidence": None,
             "signals": signals,
         })
     dependency = next(item for item in profile if item["id"] == "dependencies")
@@ -5042,7 +4984,7 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
 
     flags = [
         flag
-        for flag in dedupe_flags(regex_flags + ast_flags + heuristic_flags + secret_source_flags + secret_flow_flags + inline_environment_egress(analysis_code, intent))
+        for flag in dedupe_flags(regex_flags + ast_flags + heuristic_flags + secret_source_flags + secret_flow_flags + inline_environment_egress(analysis_code, intent) + supplemental_flows(analysis_code))
         if float(flag.get("severity", 0) or 0) > 0
     ]
 
