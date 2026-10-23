@@ -3,6 +3,7 @@ from fastapi.responses import FileResponse, Response, JSONResponse, RedirectResp
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from scan_contract import select_filename, inspect_source, finalize_snippet
+from scan_capacity import limit_scan_capacity
 import re
 import os
 import io
@@ -246,7 +247,7 @@ GITHUB_LINK_STATE_SECRET = os.getenv("GITHUB_LINK_STATE_SECRET", "").strip() or 
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "").strip()
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 
-SCANNER_VERSION = 25
+SCANNER_VERSION = 26
 AUDIT_SCORE_HIGH_RISK_MAX = 65
 AUDIT_SCORE_REVIEW_MAX = 90
 
@@ -7286,6 +7287,7 @@ def accuracy_status():
 
 
 @app.post("/scan")
+@limit_scan_capacity
 def scan(req: ScanRequest, request: Request):
     access = get_request_access_context(request)
     access = enrich_access_with_admin_metadata(access)
@@ -7315,6 +7317,7 @@ def scan(req: ScanRequest, request: Request):
 
 
 @app.post("/scan/sarif")
+@limit_scan_capacity
 def scan_sarif(req: ScanRequest, request: Request):
     access = enrich_access_with_admin_metadata(get_request_access_context(request))
     enforce_rate_limit(request, access, "scan")
@@ -7326,6 +7329,7 @@ def scan_sarif(req: ScanRequest, request: Request):
 
 
 @app.post("/fix-preview")
+@limit_scan_capacity
 def fix_preview(req: FixPreviewRequest, request: Request):
     access = enrich_access_with_admin_metadata(get_request_access_context(request))
     enforce_rate_limit(request, access, "scan")
@@ -7479,6 +7483,7 @@ def export_admin_feedback(request: Request, status: str = "accepted"):
 
 
 @app.post("/scan-repo")
+@limit_scan_capacity
 def scan_repo(req: RepoScanRequest, request: Request):
     access = get_request_access_context(request)
     access = enrich_access_with_admin_metadata(access)
