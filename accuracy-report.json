@@ -680,15 +680,15 @@
     "selection": "deterministic category-balanced cases excluded from the published 750-case set",
     "intent_mode": "neutral; vulnerability category withheld",
     "overall": {
-      "tp": 94,
+      "tp": 97,
       "fp": 0,
       "tn": 203,
-      "fn": 3,
+      "fn": 0,
       "cases": 300,
       "precision": 1.0,
-      "recall": 0.9691,
+      "recall": 1.0,
       "false_positive_rate": 0.0,
-      "f1": 0.9843
+      "f1": 1.0
     },
     "by_vulnerability": {
       "hash": {
@@ -714,15 +714,15 @@
         "f1": 1.0
       },
       "weakrand": {
-        "tp": 23,
+        "tp": 26,
         "fp": 0,
         "tn": 53,
-        "fn": 3,
+        "fn": 0,
         "cases": 79,
         "precision": 1.0,
-        "recall": 0.8846,
+        "recall": 1.0,
         "false_positive_rate": 0.0,
-        "f1": 0.9388
+        "f1": 1.0
       },
       "xpathi": {
         "tp": 16,
