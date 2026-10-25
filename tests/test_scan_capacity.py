@@ -16,7 +16,7 @@ class ScanCapacityTests(unittest.TestCase):
             started.set()
             if not finish.wait(5): raise RuntimeError('test worker stalled')
             return dict(expected)
-        access={'plan':'free','authenticated':False,'limits':main.get_plan_limits('free')}
+        access={'plan':'admin','authenticated':True,'user_id':'test-admin','limits':main.get_plan_limits('free')}
         payload={'intent':'Review','code':'eval(input())','language':'Python'}
         with patch.object(main,'get_request_access_context',return_value=access), patch.object(main,'enrich_access_with_admin_metadata',side_effect=lambda x:x), patch.object(main,'enforce_rate_limit'), patch.object(main,'analyze_code_product',side_effect=analyze) as engine, TestClient(main.app) as client, ThreadPoolExecutor(max_workers=1) as pool:
             active=pool.submit(client.post,'/scan',json=payload)

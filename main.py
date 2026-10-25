@@ -4,6 +4,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from scan_contract import select_filename, inspect_source, finalize_snippet
 from scan_capacity import limit_scan_capacity
+from scan_jobs import ScanJobs
+from functools import wraps
+import uuid
 from flow_review import supplemental_flows, literal_eval_locations
 import re
 import os
@@ -198,12 +201,12 @@ SUPPORTED_CODE_EXTENSIONS = {
     ".sql", ".html", ".css", ".json", ".yaml", ".yml", ".xml"
 }
 
-FREE_LINE_LIMIT = 10000
-FREE_REPO_FILE_LIMIT = 50
+FREE_LINE_LIMIT = 2000
+FREE_REPO_FILE_LIMIT = 20
 FREE_REPO_SIZE_LIMIT_BYTES = 1_000_000
 FREE_DAILY_SCAN_LIMIT = None
-PRO_LINE_LIMIT = 20000
-PRO_REPO_FILE_LIMIT = 200
+PRO_LINE_LIMIT = 10000
+PRO_REPO_FILE_LIMIT = 50
 PRO_REPO_SIZE_LIMIT_BYTES = 10_000_000
 PRO_DAILY_SCAN_LIMIT = None
 
@@ -248,7 +251,7 @@ GITHUB_LINK_STATE_SECRET = os.getenv("GITHUB_LINK_STATE_SECRET", "").strip() or 
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "").strip()
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 
-SCANNER_VERSION = 27
+SCANNER_VERSION = 28
 AUDIT_SCORE_HIGH_RISK_MAX = 65
 AUDIT_SCORE_REVIEW_MAX = 90
 
@@ -512,6 +515,7 @@ def get_plan_limits(plan: str) -> dict:
             "repo_file_limit": None,
             "repo_size_limit_bytes": None,
             "daily_scan_limit": None,
+            "monthly_scan_limit": None, "monthly_repo_limit": None,
         }
 
     if normalized == "pro":
@@ -520,6 +524,7 @@ def get_plan_limits(plan: str) -> dict:
             "repo_file_limit": PRO_REPO_FILE_LIMIT,
             "repo_size_limit_bytes": PRO_REPO_SIZE_LIMIT_BYTES,
             "daily_scan_limit": PRO_DAILY_SCAN_LIMIT,
+            "monthly_scan_limit": 300, "monthly_repo_limit": 20,
         }
 
     return {
@@ -527,7 +532,100 @@ def get_plan_limits(plan: str) -> dict:
         "repo_file_limit": FREE_REPO_FILE_LIMIT,
         "repo_size_limit_bytes": FREE_REPO_SIZE_LIMIT_BYTES,
         "daily_scan_limit": FREE_DAILY_SCAN_LIMIT,
+        "monthly_scan_limit": 20, "monthly_repo_limit": 2,
     }
+
+
+def monthly_usage(access, action="status", receipt=None, kind="code", charge=False):
+    if access.get("plan")=="admin": return {"unlimited":True}
+    if not access.get("authenticated") or not access.get("user_id"):
+        raise HTTPException(401,"Sign in to use your monthly scan allowance.")
+    limits=access["limits"]
+    result=supabase_rest_request("POST","rpc/audit_monthly_usage",payload={
+        "p_user":access["user_id"],"p_action":action,"p_receipt":receipt,"p_kind":kind,
+        "p_total":limits["monthly_scan_limit"],"p_repos":limits["monthly_repo_limit"],"p_charge":charge})
+    if not isinstance(result,dict) or not isinstance(result.get("total_remaining"),int):
+        raise HTTPException(503,"Usage tracking is temporarily unavailable. Please retry; no new scan will start.")
+    return result
+
+
+def validate_scan_request(req,access):
+    if not access.get("authenticated"):raise HTTPException(401,"Sign in to use your monthly scan allowance.")
+    if not req.intent.strip() or len(req.intent)>2000:raise HTTPException(400,"Describe the intended behavior in 1–2,000 characters.")
+    if hasattr(req,"code"):
+        if not req.code.strip():raise HTTPException(400,"Paste some code to audit.")
+        limit=access["limits"].get("line_limit")
+        if limit and len(req.code.splitlines())>limit:raise HTTPException(413,f"Your plan allows {limit:,} lines per snippet. No allowance was used.")
+        max_bytes=MAX_PASTED_CODE_BYTES_PRO if access.get("plan") in {"pro","admin"} else MAX_PASTED_CODE_BYTES_FREE
+        if len(req.code.encode())>max_bytes:raise HTTPException(413,"Pasted code exceeds this plan's size limit. No allowance was used.")
+    else:
+        if len(req.repo_url)>500:raise HTTPException(400,"Repository URL is too long.")
+        try:parse_github_repo(req.repo_url)
+        except ValueError as exc:raise HTTPException(400,str(exc))
+
+
+def metered_scan(kind):
+    def decorate(function):
+        @wraps(function)
+        def wrapped(req,request):
+            access=get_request_access_context(request)
+            validate_scan_request(req,access)
+            receipt=str(uuid.uuid4())
+            usage=monthly_usage(access,"reserve",receipt,kind)
+            if usage.get("allowed") is False:
+                raise HTTPException(429,"Your monthly scan allowance is used up. Check Account for remaining repository scans and your reset date.",headers={"X-Scan-Rejection":"quota"})
+            charged=False
+            try:
+                response=function(req,request)
+                data=json.loads(response.body)
+                coverage=data.get("coverage") or {}
+                charged=response.status_code==200 and data.get("coverage_validated") is True and data.get("scan_status") in {"complete","partial"} and (coverage.get("meaningful_coverage") is True or isinstance(coverage.get("files_analyzed"),int) and coverage["files_analyzed"]>0)
+                return response
+            finally:
+                # Idempotent settlement; a failed database call cannot double charge.
+                # Unsettled reservations expire in 15 minutes and never become charges.
+                settled=None
+                for attempt in range(2):
+                    try:settled=monthly_usage(access,"settle",receipt,kind,charged);break
+                    except HTTPException:pass
+                if settled is None:log_server_issue("Usage settlement unavailable; reservation will expire")
+        return wrapped
+    return decorate
+
+SCAN_JOBS=ScanJobs()
+
+@app.post("/scan-jobs")
+def submit_scan_job(req: dict, request: Request):
+    access=get_request_access_context(request)
+    kind=req.get("kind")
+    if kind not in {"code","repo"}:raise HTTPException(400,"Choose code or repository scan.")
+    from pydantic import ValidationError
+    try:payload=(ScanRequest if kind=="code" else RepoScanRequest)(**req)
+    except ValidationError:raise HTTPException(400,"Provide valid scan input.")
+    validate_scan_request(payload,access)
+    enforce_rate_limit(request,access,"scan" if kind=="code" else "repo")
+    usage=monthly_usage(access)
+    if not usage.get("unlimited") and (usage["total_remaining"]<=0 or (kind=="repo" and usage["repo_remaining"]<=0)):
+        raise HTTPException(429,"Your monthly scan allowance is used up. See Account for your reset date.",headers={"X-Scan-Rejection":"quota"})
+    def work():
+        response=(scan if kind=="code" else scan_repo)(payload,request)
+        data=json.loads(response.body)
+        if response.status_code>=400:raise HTTPException(response.status_code,data.get("detail") or data.get("error") or "Scan failed.")
+        data.pop("code",None);data.pop("access",None)
+        return data
+    return private_json(SCAN_JOBS.submit(access["user_id"],work),202)
+
+@app.get("/scan-jobs/{job_id}")
+def get_scan_job(job_id:str, request:Request):
+    access=get_request_access_context(request)
+    if not access.get("authenticated"):raise HTTPException(401,"Sign in to view this audit.")
+    return private_json(SCAN_JOBS.get(access["user_id"],job_id))
+
+@app.delete("/scan-jobs/{job_id}")
+def cancel_scan_job(job_id:str, request:Request):
+    access=get_request_access_context(request)
+    if not access.get("authenticated"):raise HTTPException(401,"Sign in to cancel this audit.")
+    return private_json(SCAN_JOBS.cancel(access["user_id"],job_id))
 
 
 def get_bearer_token(request: Request) -> str | None:
@@ -5549,7 +5647,9 @@ async def auth_access(request: Request):
     access_token = await extract_request_access_token(request)
     access = get_request_access_context(request, access_token=access_token)
     access = enrich_access_with_admin_metadata(access)
-    return JSONResponse(build_access_payload(access), headers={"Cache-Control": "no-store"})
+    payload=build_access_payload(access)
+    payload["usage"]=monthly_usage(access) if access.get("authenticated") else None
+    return JSONResponse(payload, headers={"Cache-Control": "no-store"})
 
 
 @app.post("/stripe/create-billing-portal-session")
@@ -7230,6 +7330,7 @@ def accuracy_status():
 
 @app.post("/scan")
 @limit_scan_capacity
+@metered_scan("code")
 def scan(req: ScanRequest, request: Request):
     access = get_request_access_context(request)
     access = enrich_access_with_admin_metadata(access)
@@ -7261,25 +7362,18 @@ def scan(req: ScanRequest, request: Request):
 @app.post("/scan/sarif")
 @limit_scan_capacity
 def scan_sarif(req: ScanRequest, request: Request):
-    access = enrich_access_with_admin_metadata(get_request_access_context(request))
-    enforce_rate_limit(request, access, "scan")
-    max_code_bytes = MAX_PASTED_CODE_BYTES_PRO if access.get("plan") in {"pro", "admin"} else MAX_PASTED_CODE_BYTES_FREE
-    if len(req.code.encode("utf-8", errors="ignore")) > max_code_bytes:
-        return private_json({"detail": "Pasted code exceeds this plan's request limit."}, status_code=413)
-    result = analyze_code_product(req.intent, req.code, plan=access.get("plan") or "free", filename=req.filename, language=req.language)
-    return private_json(result_to_sarif(result, infer_code_filename(req.code)))
+    response=scan.__wrapped__(req,request)
+    if response.status_code!=200:return response
+    return private_json(result_to_sarif(json.loads(response.body),infer_code_filename(req.code)))
 
 
 @app.post("/fix-preview")
 @limit_scan_capacity
 def fix_preview(req: FixPreviewRequest, request: Request):
-    access = enrich_access_with_admin_metadata(get_request_access_context(request))
-    enforce_rate_limit(request, access, "scan")
-    result = analyze_code(req.intent, req.code, plan=access.get("plan") or "free")
-    return private_json({
-        "fix_previews": build_fix_previews(req.code, result.get("flags") or []),
-        "applied": False,
-    })
+    response=scan.__wrapped__(ScanRequest(intent=req.intent,code=req.code),request)
+    if response.status_code!=200:return response
+    result=json.loads(response.body)
+    return private_json({"fix_previews":result.get("fix_previews",[]),"applied":False})
 
 
 @app.post("/feedback")
@@ -7426,6 +7520,7 @@ def export_admin_feedback(request: Request, status: str = "accepted"):
 
 @app.post("/scan-repo")
 @limit_scan_capacity
+@metered_scan("repo")
 def scan_repo(req: RepoScanRequest, request: Request):
     access = get_request_access_context(request)
     access = enrich_access_with_admin_metadata(access)
