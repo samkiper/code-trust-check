@@ -251,7 +251,7 @@ GITHUB_LINK_STATE_SECRET = os.getenv("GITHUB_LINK_STATE_SECRET", "").strip() or 
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "").strip()
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 
-SCANNER_VERSION = 29
+SCANNER_VERSION = 30
 AUDIT_SCORE_HIGH_RISK_MAX = 65
 AUDIT_SCORE_REVIEW_MAX = 90
 
@@ -564,12 +564,24 @@ def validate_scan_request(req,access):
         except ValueError as exc:raise HTTPException(400,str(exc))
 
 
+# Exact server-owned demos only; a client is_example flag cannot bypass metering.
+with open(Path(__file__).with_name("demo_examples.json"), encoding="utf-8") as _demo_file:
+    DEMO_EXAMPLES = json.load(_demo_file)
+
+
+def is_free_demo(req):
+    return (getattr(req,"language",None)=="Python" and getattr(req,"filename",None) in (None,"","snippet.py")
+            and any(req.code==sample["code"] and req.intent==sample["intent"] for sample in DEMO_EXAMPLES.values()))
+
+
 def metered_scan(kind):
     def decorate(function):
         @wraps(function)
         def wrapped(req,request):
             access=get_request_access_context(request)
             validate_scan_request(req,access)
+            if kind=="code" and is_free_demo(req):
+                return function(req,request)
             receipt=str(uuid.uuid4())
             usage=monthly_usage(access,"reserve",receipt,kind)
             if usage.get("allowed") is False:
@@ -604,7 +616,7 @@ def submit_scan_job(req: dict, request: Request):
     except ValidationError:raise HTTPException(400,"Provide valid scan input.")
     validate_scan_request(payload,access)
     enforce_rate_limit(request,access,"scan" if kind=="code" else "repo")
-    usage=monthly_usage(access)
+    usage={"unlimited":True} if kind=="code" and is_free_demo(payload) else monthly_usage(access)
     if not usage.get("unlimited") and (usage["total_remaining"]<=0 or (kind=="repo" and usage["repo_remaining"]<=0)):
         raise HTTPException(429,"Your monthly scan allowance is used up. See Account for your reset date.",headers={"X-Scan-Rejection":"quota"})
     def work():
@@ -7350,7 +7362,7 @@ def scan(req: ScanRequest, request: Request):
     if len(req.intent) > 2000:
         return private_json({"detail": "The intent description is too long."}, status_code=413)
 
-    is_example_scan = bool(req.is_example)
+    is_example_scan = is_free_demo(req)
 
     result = analyze_code_product(req.intent, req.code, plan=access["plan"], filename=req.filename, language=req.language)
     result["access"] = access
