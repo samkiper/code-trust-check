@@ -85,3 +85,13 @@ Backend a5162a474b04b8a1c1d033d6ca68dd0e5ec0905d passed all 192 tests and GitHub
 - Immediate cancellation: evt_1UUiBZEKmNfjd7YMZ2kNSyji set canceled/Free. The account has no live Stripe customer mapping. No real funds or cards used; the test subscription is stopped.
 
 Destination disabled after validation; sandbox signing secret cleared in Render to disable the receiver. Live webhook/key configuration unchanged. This proves sandbox subscription-event delivery to persisted app entitlements, not the separate live checkout/invoice retrieval path or a refreshed customer-browser display. Earlier test-clock renewals are provider-only evidence; calendar renewal through this receiver remains unverified. Larger authenticated production queue saturation and induced production timeout remain open.
+
+### Calendar renewal delivered to app entitlements
+
+The existing sandbox clock customer cus_VViN3iDRNvL1Pz was temporarily bound to the same isolated receiver; deployment dep-dbffvv0m7kps738v93s0 became live. New test subscription sub_1UUiH9EKmNfjd7YMa7LtnKWi started at simulated February 3, 2027. Its initial invoice in_1UUiH9EKmNfjd7YMjwqu7TqB was paid; event evt_1UUiHBEKmNfjd7YMgojGyKfw persisted active/Pro.
+
+Advancing the existing clock to March 3 generated monthly subscription_cycle invoice in_1UUiHeEKmNfjd7YMM9lNtUcC. Event evt_1UUiHfEKmNfjd7YMfpxqCCBE retained active/Pro and advanced the persisted period end to April 3 (1806710400). Advancing to March 4 collected 1,200 test cents; the invoice was verified paid via Stripe API.
+
+Scheduled cancellation retained active status until April 3. Advancing the clock to April 4 ended the subscription at April 3, and real event evt_1UUiJTEKmNfjd7YM4oFC5XbK persisted canceled/Free in Supabase. No direct plan edits, real funds, new accounts or AI requests were used. This closes calendar renewal and period-end cancellation through the deployed isolated receiver, not live checkout/payment-return verification.
+
+Sandbox destination we_1UUi4rEKmNfjd7YMlFx6u7VX disabled again and signing secret cleared. Live billing settings remain unchanged. The available aicodeaudit.org browser session belongs to easystreammovies@gmail.com (Free); it is not the calendar-test identity. Refreshed browser entitlement display for that identity, larger authenticated queue saturation, induced production timeout, live checkout and the existing Serious/credit-pack mappings remain unverified launch gates. Two-customer and anonymous capacity results above must not be described as full queue-capacity verification.
