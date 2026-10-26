@@ -1,0 +1,105 @@
+"""Narrow Python cross-file evidence prototype; never imports or executes source.
+
+This is not wired into customer reports. Only a direct absolute import of a
+single-return credential getter passed directly into a requests/httpx payload is
+recognized. It is deliberately incomplete and must not be described as whole-app
+analysis. The caller must provide already-selected, bounded source files.
+"""
+import ast
+import re
+from pathlib import PurePosixPath
+
+_SECRET = re.compile(r'(?:^|[_-])(API[_-]?KEY|SECRET|PASSWORD|TOKEN|CREDENTIAL)(?:$|[_-]|\d)',re.I)
+_METHODS = {'post','put','patch','request'}
+
+
+def module_name(path):
+    p=PurePosixPath(path)
+    if p.suffix!='.py' or p.is_absolute() or '..' in p.parts:return ''
+    parts=list(p.with_suffix('').parts)
+    if parts and parts[-1]=='__init__':parts.pop()
+    return '.'.join(parts) if parts and all(x.isidentifier() for x in parts) else ''
+
+
+def shadowed(tree,name):
+    # Conservative: any assignment or function parameter with this name makes
+    # its binding ambiguous for this prototype, even in a different scope.
+    bindings=0
+    for node in ast.walk(tree):
+        if isinstance(node,ast.arg) and node.arg==name:return True
+        if isinstance(node,ast.Name) and isinstance(node.ctx,(ast.Store,ast.Del)) and node.id==name:return True
+        if isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef,ast.ClassDef)) and node.name==name:return True
+        if isinstance(node,(ast.Import,ast.ImportFrom)):
+            bindings+=sum((a.asname or a.name.split('.')[0])==name for a in node.names)
+            if bindings>1:return True
+    return False
+
+
+def getter_exports(tree):
+    aliases={}
+    for node in tree.body:
+        if isinstance(node,ast.Import):
+            for alias in node.names:
+                if alias.name=='os':aliases[alias.asname or 'os']='os'
+        elif isinstance(node,ast.ImportFrom) and node.module=='os' and node.level==0:
+            for alias in node.names:
+                if alias.name=='getenv':aliases[alias.asname or 'getenv']='getenv'
+    aliases={k:v for k,v in aliases.items() if not shadowed(tree,k)}
+    exports={}
+    for node in tree.body:
+        if not isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef)):continue
+        body=list(node.body)
+        if body and isinstance(body[0],ast.Expr) and isinstance(body[0].value,ast.Constant) and isinstance(body[0].value.value,str):body=body[1:]
+        if len(body)!=1 or not isinstance(body[0],ast.Return) or not isinstance(body[0].value,ast.Call):continue
+        call=body[0].value
+        is_getenv=(isinstance(call.func,ast.Name) and aliases.get(call.func.id)=='getenv') or (isinstance(call.func,ast.Attribute) and call.func.attr=='getenv' and isinstance(call.func.value,ast.Name) and aliases.get(call.func.value.id)=='os')
+        if not is_getenv or not call.args or not isinstance(call.args[0],ast.Constant) or not isinstance(call.args[0].value,str):continue
+        if _SECRET.search(call.args[0].value):exports[node.name]=body[0].lineno
+    return exports
+
+
+def direct_getters(node, imported):
+    if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id in imported:
+        yield node.func.id
+    elif isinstance(node,ast.Dict):
+        for value in node.values:
+            yield from direct_getters(value,imported)
+    elif isinstance(node,(ast.List,ast.Tuple)):
+        for value in node.elts:
+            yield from direct_getters(value,imported)
+
+
+def analyze(files: dict[str,str]) -> dict:
+    if not isinstance(files,dict) or len(files)>500 or any(not isinstance(k,str) or not isinstance(v,str) for k,v in files.items()):
+        raise ValueError('Supply at most 500 selected source files.')
+    if sum(len(v.encode('utf-8')) for v in files.values())>25_000_000:
+        raise ValueError('Selected source exceeds 25 MB.')
+    modules={};ambiguous=set();failed=[]
+    for path,code in files.items():
+        name=module_name(path)
+        if not name:continue
+        if name in modules:ambiguous.add(name);continue
+        try:tree=ast.parse(code)
+        except (SyntaxError,ValueError,RecursionError):failed.append(path);continue
+        modules[name]=(path,tree,getter_exports(tree))
+    findings=[]
+    for path,tree,_ in modules.values():
+        imported={};network=set()
+        for node in tree.body:
+            if isinstance(node,ast.Import):
+                for alias in node.names:
+                    if alias.name in {'requests','httpx'}:network.add(alias.asname or alias.name)
+            elif isinstance(node,ast.ImportFrom) and node.level==0 and node.module in modules and node.module not in ambiguous:
+                source_path,_,exports=modules[node.module]
+                for alias in node.names:
+                    if alias.name in exports:imported[alias.asname or alias.name]=(source_path,exports[alias.name])
+        imported={k:v for k,v in imported.items() if not shadowed(tree,k)}
+        network={name for name in network if not shadowed(tree,name)}
+        for node in ast.walk(tree):
+            if not isinstance(node,ast.Call) or not isinstance(node.func,ast.Attribute) or node.func.attr not in _METHODS or not isinstance(node.func.value,ast.Name) or node.func.value.id not in network:continue
+            payloads=[kw.value for kw in node.keywords if kw.arg in {'json','data'}]
+            for payload in payloads:
+                for getter in direct_getters(payload,imported):
+                    source_path,source_line=imported[getter]
+                    findings.append({'pattern':'cross_file_credential_payload','file':path,'line':node.lineno,'source_file':source_path,'source_line':source_line,'message':'An imported function that reads a credential is called in a network request payload. Verify the destination and intended behavior.'})
+    return {'findings':findings,'parse_failures':failed,'ambiguous_modules':sorted(ambiguous),'limitations':['Prototype: direct absolute Python imports, single-return getenv getters and direct requests/httpx JSON or data payload calls only. Other cross-file flows are not traced.','Static evidence does not prove that a call executed or that code is safe.']}
