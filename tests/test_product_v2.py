@@ -57,6 +57,7 @@ class ProductIntegrityV20Tests(unittest.TestCase):
             self.assertEqual(query["client_id"], ["client-id"])
             self.assertEqual(query["code_challenge"], ["a" * 43])
             self.assertEqual(query["code_challenge_method"], ["S256"])
+            self.assertEqual(query["allow_signup"], ["false"])
             self.assertEqual(query["redirect_uri"], ["https://audit.example/github/oauth/callback"])
             self.assertEqual(main.read_github_install_state(query["state"][0], "oauth")["user_id"], "user-1")
 
@@ -66,6 +67,7 @@ class ProductIntegrityV20Tests(unittest.TestCase):
             {"installations": [
                 {"id": 10, "app_id": 123, "account": {"login": "samkiper", "id": 101, "type": "User"}},
                 {"id": 20, "app_id": 999, "account": {"login": "someone-else"}},
+                {"id": 30, "app_id": 123, "suspended_at": "2026-10-26T00:00:00Z", "account": {"login": "samkiper", "id": 101, "type": "User"}},
             ]},
         ]
         with patch.object(main, "GITHUB_APP_ID", "123"), \
@@ -86,7 +88,8 @@ class ProductIntegrityV20Tests(unittest.TestCase):
                 patch.object(main, "enrich_access_with_admin_metadata", side_effect=lambda a: a), \
                 patch.object(main, "enforce_rate_limit"), \
                 patch.object(main, "github_oauth_exchange", return_value="user-token") as exchange, \
-                patch.object(main, "list_github_user_installations", return_value=({"login": "samkiper"}, [installation])), \
+                patch.object(main, "list_github_user_installations", return_value=({"login": "samkiper", "id": 101}, [installation])), \
+                patch.object(main, "GITHUB_USER_AUTHORIZATIONS"), \
                 patch.object(main, "save_github_installation_link", return_value={"installation_id": 10}):
             response = main.complete_github_oauth(main.GitHubOAuthCompleteRequest(code="code",state=state,code_verifier=verifier), Request({"type":"http","headers":[]}))
         self.assertEqual(response.status_code, 200)
@@ -125,6 +128,7 @@ class ProductIntegrityV20Tests(unittest.TestCase):
     def test_serious_account_has_github_pull_request_entitlement(self):
         with patch.object(main, "GITHUB_ENFORCE_PRO", True), \
                 patch.object(main, "supabase_rest_request", return_value=[{"user_id": "user-1"}]), \
+                patch.object(main, "github_installation_still_authorized", return_value=True), \
                 patch.object(main, "get_supabase_admin_user", return_value={"app_metadata": {"plan": "serious"}}):
             self.assertTrue(main.github_installation_entitlement(123)["allowed"])
 
@@ -236,6 +240,7 @@ class ProductIntegrityV20Tests(unittest.TestCase):
             "plan": "pro",
         }), patch.object(main, "enrich_access_with_admin_metadata", side_effect=lambda value: value), \
                 patch.object(main, "enforce_rate_limit"), \
+                patch.object(main, "github_fresh_authorized_installations", return_value={123}), \
                 patch.object(main, "supabase_rest_request", side_effect=[installations, scans, [], []]) as database, \
                 patch.object(main, "list_github_installation_repositories", return_value=[{
                     "full_name": "owner/repo",
@@ -747,6 +752,7 @@ class GitHubWebhookTests(unittest.TestCase):
     def test_pro_enforcement_accepts_linked_pro_account(self):
         with patch.object(main, "GITHUB_ENFORCE_PRO", True), \
                 patch.object(main, "supabase_rest_request", return_value=[{"user_id": "user-1"}]), \
+                patch.object(main, "github_installation_still_authorized", return_value=True), \
                 patch.object(main, "get_supabase_admin_user", return_value={"app_metadata": {"plan": "pro"}}):
             result = main.github_installation_entitlement(123)
         self.assertTrue(result["allowed"])

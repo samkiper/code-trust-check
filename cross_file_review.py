@@ -1,7 +1,7 @@
 """Narrow Python cross-file evidence prototype; never imports or executes source.
 
 This is not wired into customer reports. Only a direct absolute import of a
-single-return credential getter passed directly into a requests/httpx payload is
+parameterless synchronous single-return credential getter passed directly into a requests/httpx payload is
 recognized. It is deliberately incomplete and must not be described as whole-app
 analysis. The caller must provide already-selected, bounded source files.
 """
@@ -28,6 +28,8 @@ def shadowed(tree,name):
     for node in ast.walk(tree):
         if isinstance(node,ast.arg) and node.arg==name:return True
         if isinstance(node,ast.Name) and isinstance(node.ctx,(ast.Store,ast.Del)) and node.id==name:return True
+        if isinstance(node,ast.Attribute) and isinstance(node.ctx,(ast.Store,ast.Del)) and isinstance(node.value,ast.Name) and node.value.id==name:return True
+        if isinstance(node,ast.Subscript) and isinstance(node.ctx,(ast.Store,ast.Del)) and isinstance(node.value,ast.Attribute) and isinstance(node.value.value,ast.Name) and node.value.value.id==name:return True
         if isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef,ast.ClassDef)) and node.name==name:return True
         if isinstance(node,(ast.Import,ast.ImportFrom)):
             bindings+=sum((a.asname or a.name.split('.')[0])==name for a in node.names)
@@ -47,7 +49,8 @@ def getter_exports(tree):
     aliases={k:v for k,v in aliases.items() if not shadowed(tree,k)}
     exports={}
     for node in tree.body:
-        if not isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef)):continue
+        if not isinstance(node,ast.FunctionDef):continue
+        if node.args.posonlyargs or node.args.args or node.args.kwonlyargs or node.args.vararg or node.args.kwarg:continue
         body=list(node.body)
         if body and isinstance(body[0],ast.Expr) and isinstance(body[0].value,ast.Constant) and isinstance(body[0].value.value,str):body=body[1:]
         if len(body)!=1 or not isinstance(body[0],ast.Return) or not isinstance(body[0].value,ast.Call):continue
@@ -59,7 +62,7 @@ def getter_exports(tree):
 
 
 def direct_getters(node, imported):
-    if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id in imported:
+    if isinstance(node,ast.Call) and not node.args and not node.keywords and isinstance(node.func,ast.Name) and node.func.id in imported:
         yield node.func.id
     elif isinstance(node,ast.Dict):
         for value in node.values:
@@ -102,4 +105,4 @@ def analyze(files: dict[str,str]) -> dict:
                 for getter in direct_getters(payload,imported):
                     source_path,source_line=imported[getter]
                     findings.append({'pattern':'cross_file_credential_payload','file':path,'line':node.lineno,'source_file':source_path,'source_line':source_line,'message':'An imported function that reads a credential is called in a network request payload. Verify the destination and intended behavior.'})
-    return {'findings':findings,'parse_failures':failed,'ambiguous_modules':sorted(ambiguous),'limitations':['Prototype: direct absolute Python imports, single-return getenv getters and direct requests/httpx JSON or data payload calls only. Other cross-file flows are not traced.','Static evidence does not prove that a call executed or that code is safe.']}
+    return {'findings':findings,'parse_failures':failed,'ambiguous_modules':sorted(ambiguous),'limitations':['Prototype: direct absolute Python imports, parameterless synchronous single-return getenv getters and direct requests/httpx JSON or data payload calls only. Other cross-file flows are not traced.','Static evidence does not prove that a call executed or that code is safe.']}

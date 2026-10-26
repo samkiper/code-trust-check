@@ -20,7 +20,10 @@ def execute(message):
         base=urlsplit(message['base_url'])
         request=Request({'type':'http','method':'POST','path':'/scan-repo','root_path':'',
                          'headers':[],'scheme':base.scheme,'server':(base.hostname,base.port or (443 if base.scheme=='https' else 80))})
-        return main.scan_repo_work(main.RepoScanRequest(**message['payload']),access,request)
+        payload=dict(message['payload'])
+        archive=payload.pop('_private_archive',None)
+        decoded=base64.b64decode(archive,validate=True) if archive is not None else None
+        return main.scan_repo_work(main.RepoScanRequest(**payload),access,request,decoded)
     if message['kind']=='github_pr':
         # Archive bytes arrive over stdin; the worker has no GitHub or billing secrets.
         from fastapi.responses import JSONResponse

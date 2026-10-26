@@ -2,7 +2,9 @@
 import base64
 import hashlib
 import json
+import logging
 import unittest
+from urllib.parse import urlparse, parse_qs
 from unittest.mock import patch, MagicMock
 from starlette.requests import Request
 import main
@@ -50,9 +52,10 @@ class GitHubOAuthBindingTests(unittest.TestCase):
     def test_token_exchange_sends_verifier_to_github(self):
         response = MagicMock()
         response.__enter__.return_value.read.return_value = b'{"access_token":"test-token"}'
-        with patch.object(main.urllib.request, "urlopen", return_value=response) as call:
+        opener=MagicMock();opener.open.return_value=response
+        with patch.object(main.urllib.request, "build_opener", return_value=opener):
             self.assertEqual(main.github_oauth_exchange("test-code", "v" * 43), "test-token")
-        request = call.call_args.args[0]
+        request = opener.open.call_args.args[0]
         self.assertEqual(request.full_url, "https://github.com/login/oauth/access_token")
         self.assertEqual(json.loads(request.data)["code_verifier"], "v" * 43)
 
@@ -61,3 +64,24 @@ class GitHubOAuthBindingTests(unittest.TestCase):
             for challenge in ["", "short", "a" * 44, "!" * 43]:
                 with self.assertRaises(ValueError):
                     main.github_oauth_authorize_url("owner", challenge)
+
+    def test_callback_forwards_only_to_signed_allowlisted_frontend_fragment(self):
+        with patch.object(main,'GITHUB_LINK_STATE_SECRET','test-state-secret'), \
+                patch.object(main,'github_oauth_exchange') as exchange:
+            state=main.create_github_install_state('owner',purpose='oauth',code_challenge='a'*43,return_origin='https://aicodeaudit.org')
+            response=main.github_oauth_callback(code='synthetic-code',state=state)
+            target=urlparse(response.headers['location'])
+            self.assertEqual((target.scheme,target.netloc,target.path),('https','aicodeaudit.org','/account/github/callback'))
+            self.assertEqual(target.query,'')
+            self.assertEqual(parse_qs(target.fragment)['code'],['synthetic-code'])
+            self.assertEqual(parse_qs(target.fragment)['state'],[state])
+            exchange.assert_not_called()
+            with self.assertRaises(ValueError):
+                main.create_github_install_state('owner',purpose='oauth',code_challenge='a'*43,return_origin='https://attacker.example')
+
+    def test_oauth_callback_access_log_hides_code_and_state(self):
+        record=logging.LogRecord('uvicorn.access',logging.INFO,'test',1,'%s - "%s %s HTTP/%s" %d',('client','GET','/github/oauth/callback?code=secret-code&state=private-state','1.1',303),None)
+        main.OAuthAccessLogFilter().filter(record)
+        self.assertNotIn('secret-code',record.getMessage())
+        self.assertNotIn('private-state',record.getMessage())
+        self.assertIn('[redacted]',record.getMessage())

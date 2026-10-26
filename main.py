@@ -5,6 +5,8 @@ from pydantic import BaseModel
 from scan_contract import select_filename, inspect_source, finalize_snippet
 from scan_capacity import limit_scan_capacity
 from scan_jobs import ScanJobs
+from github_authorization import AuthorizationCache
+import cross_file_review
 from scanner_process import run_scanner
 from audit_runtime import run_audit_process
 from billing_plans import subscription_plan, subscription_period_end
@@ -17,6 +19,7 @@ import io
 import ast
 import base64
 import json
+import logging
 import zipfile
 import urllib.request
 import urllib.error
@@ -40,6 +43,20 @@ from html import escape as html_escape
 from dotenv import load_dotenv
 from datetime import date, datetime, timezone, timedelta
 from urllib.parse import urlparse, quote, urlencode
+
+
+class OAuthAccessLogFilter(logging.Filter):
+    """Avoid writing short-lived GitHub authorization codes or state to access logs."""
+    def filter(self, record):
+        args = record.args
+        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str):
+            path = args[2]
+            if path.split('?', 1)[0] == '/github/oauth/callback' and '?' in path:
+                record.args = (*args[:2], '/github/oauth/callback?[redacted]', *args[3:])
+        return True
+
+
+logging.getLogger('uvicorn.access').addFilter(OAuthAccessLogFilter())
 import stripe
 import jwt
 
@@ -100,6 +117,7 @@ class ScanRequest(BaseModel):
 class RepoScanRequest(BaseModel):
     intent: str
     repo_url: str
+    private_repo: bool = False
 
 
 class GitHubInstallationLinkRequest(BaseModel):
@@ -274,6 +292,9 @@ GITHUB_ENFORCE_PRO = os.getenv("GITHUB_ENFORCE_PRO", "false").strip().lower() in
 GITHUB_LINK_STATE_SECRET = os.getenv("GITHUB_LINK_STATE_SECRET", "").strip() or GITHUB_WEBHOOK_SECRET
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "").strip()
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
+# Automatic PR work is paused until its customer usage semantics are approved.
+# Interactive repository audits retain the existing, separately metered limits.
+GITHUB_PR_SCANS_ENABLED = False
 
 SCANNER_VERSION = 38
 AUDIT_SCORE_HIGH_RISK_MAX = 65
@@ -612,6 +633,7 @@ def metered_scan(kind):
     return decorate
 
 SCAN_JOBS=ScanJobs()
+GITHUB_USER_AUTHORIZATIONS=AuthorizationCache()
 
 @app.post("/scan-jobs")
 def submit_scan_job(req: dict, request: Request):
@@ -1245,11 +1267,11 @@ def build_code_coverage(code: str, filename: str, semgrep_status: str) -> dict:
     }
 
 
-def build_repo_coverage(file_names: list[str], files_available: int, dependency_summary: dict) -> dict:
+def build_repo_coverage(file_names: list[str], files_available: int, dependency_summary: dict, private_repo: bool = False) -> dict:
     languages = sorted({language_from_filename(name) for name in file_names if language_from_filename(name) != "Unknown"})
     manifests = int(dependency_summary.get("manifests_scanned", 0) or 0)
     return {
-        "scope": "public_repository",
+        "scope": "private_repository" if private_repo else "public_repository",
         "languages": languages,
         "files_analyzed": len(file_names),
         "supported_files_found": int(files_available or 0),
@@ -1257,7 +1279,7 @@ def build_repo_coverage(file_names: list[str], files_available: int, dependency_
         "dependency_ecosystems": ["PyPI", "npm", "Go", "crates.io", "Packagist", "RubyGems"],
         "limitations": [
             "Static review only: repository code was not executed.",
-            "Files are analyzed individually; cross-file data flows and runtime configuration are not followed.",
+            "A narrow Python check follows only selected direct cross-file credential-to-payload flows. Most cross-file flows, other languages, and runtime configuration are not traced.",
             "Dependency lookup covers common direct manifests and lockfiles, but generated, private-registry, and platform-specific resolution can still differ from production.",
             "A clean result means no supported signal was found, not that the repository was proven safe.",
         ],
@@ -1444,12 +1466,12 @@ def calculate_repository_risk_points(
 def parse_github_repo(repo_url: str) -> tuple[str, str]:
     parsed = urlparse(repo_url)
     parts = [p for p in parsed.path.split("/") if p]
-
-    if parsed.netloc not in {"github.com", "www.github.com"} or len(parts) < 2:
-        raise ValueError("Please provide a valid public GitHub repository URL.")
-
+    if parsed.scheme != "https" or parsed.netloc not in {"github.com", "www.github.com"} or parsed.query or parsed.fragment or len(parts) != 2:
+        raise ValueError("Provide an HTTPS GitHub repository root URL.")
     owner = parts[0]
-    repo = parts[1].replace(".git", "")
+    repo = parts[1][:-4] if parts[1].endswith(".git") else parts[1]
+    if owner in {".", ".."} or repo in {".", ".."} or not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", owner) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", repo):
+        raise ValueError("Provide an HTTPS GitHub repository root URL.")
     return owner, repo
 
 
@@ -6251,7 +6273,19 @@ def github_app_jwt() -> str:
     )
 
 
+class GitHubApiNoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
 def github_api_request(method: str, url: str, token: str, body: dict | None = None) -> dict | list:
+    parsed = urlparse(url)
+    try:
+        valid_port = parsed.port in (None, 443)
+    except ValueError:
+        valid_port = False
+    if parsed.scheme != "https" or parsed.hostname != "api.github.com" or parsed.username is not None or parsed.password is not None or not valid_port or parsed.fragment:
+        raise ValueError("Untrusted GitHub API URL")
     data = json.dumps(body).encode("utf-8") if body is not None else None
     request = urllib.request.Request(
         url,
@@ -6265,7 +6299,8 @@ def github_api_request(method: str, url: str, token: str, body: dict | None = No
             "Content-Type": "application/json",
         },
     )
-    with urllib.request.urlopen(request, timeout=20, context=ssl.create_default_context(cafile=certifi.where())) as response:
+    opener = urllib.request.build_opener(GitHubApiNoRedirect(), urllib.request.HTTPSHandler(context=ssl.create_default_context(cafile=certifi.where())))
+    with opener.open(request, timeout=20) as response:
         return json.loads(response.read().decode("utf-8") or "{}")
 
 
@@ -6333,9 +6368,13 @@ def github_installation_entitlement(installation_id: int) -> dict:
     metadata = user.get("app_metadata") or {}
     role = str(metadata.get("role") or "user").lower()
     plan = str(metadata.get("plan") or ("admin" if role == "admin" else "free")).lower()
+    if role != "admin" and plan not in {"pro", "serious"}:
+        return {"allowed": False, "reason": "pro_required", "user_id": user_id}
+    if not github_installation_still_authorized(user_id, int(installation_id)):
+        return {"allowed": False, "reason": "github_reauthorization_required", "user_id": user_id}
     return {
-        "allowed": role == "admin" or plan in {"pro", "serious"},
-        "reason": "active_pro" if role == "admin" or plan in {"pro", "serious"} else "pro_required",
+        "allowed": True,
+        "reason": "active_pro",
         "user_id": user_id,
     }
 
@@ -6345,6 +6384,7 @@ def create_github_install_state(
     ttl_seconds: int = 900,
     purpose: str = "installation",
     code_challenge: str = "",
+    return_origin: str = "",
 ) -> str:
     if not GITHUB_LINK_STATE_SECRET:
         raise RuntimeError("GitHub installation linking is not configured")
@@ -6358,6 +6398,10 @@ def create_github_install_state(
         if not re.fullmatch(r"[A-Za-z0-9_-]{43}", code_challenge):
             raise ValueError("A valid S256 browser challenge is required.")
         payload["code_challenge"] = code_challenge
+    if return_origin:
+        if return_origin not in GITHUB_FRONTEND_ORIGINS:
+            raise ValueError("Invalid GitHub return origin.")
+        payload["return_origin"] = return_origin
     encoded = base64.urlsafe_b64encode(
         json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
     ).decode("ascii").rstrip("=")
@@ -6399,18 +6443,22 @@ def github_oauth_callback_url() -> str:
     return f"{APP_BASE_URL}/github/oauth/callback"
 
 
-def github_oauth_authorize_url(user_id: str, code_challenge: str) -> str:
+GITHUB_FRONTEND_ORIGINS = {"https://aicodeaudit.org", "https://www.aicodeaudit.org", "https://ai-code-audit.samkiper.chatgpt.site"}
+
+
+def github_oauth_authorize_url(user_id: str, code_challenge: str, return_origin: str = "https://aicodeaudit.org") -> str:
     if not GITHUB_CLIENT_ID or not GITHUB_CLIENT_SECRET or not GITHUB_LINK_STATE_SECRET:
         raise RuntimeError("GitHub user authorization is not configured")
     if not re.fullmatch(r"[A-Za-z0-9_-]{43}", code_challenge):
         raise ValueError("Start GitHub authorization from the current signed-in browser.")
-    state = create_github_install_state(user_id, purpose="oauth", code_challenge=code_challenge)
+    state = create_github_install_state(user_id, purpose="oauth", code_challenge=code_challenge, return_origin=return_origin)
     return "https://github.com/login/oauth/authorize?" + urlencode({
         "client_id": GITHUB_CLIENT_ID,
         "redirect_uri": github_oauth_callback_url(),
         "state": state,
         "code_challenge": code_challenge,
         "code_challenge_method": "S256",
+        "allow_signup": "false",
     })
 
 
@@ -6434,11 +6482,8 @@ def github_oauth_exchange(code: str, code_verifier: str) -> str:
             "User-Agent": "AI-Code-Audit",
         },
     )
-    with urllib.request.urlopen(
-        request,
-        timeout=20,
-        context=ssl.create_default_context(cafile=certifi.where()),
-    ) as response:
+    opener = urllib.request.build_opener(GitHubApiNoRedirect(), urllib.request.HTTPSHandler(context=ssl.create_default_context(cafile=certifi.where())))
+    with opener.open(request, timeout=20) as response:
         payload = json.loads(response.read().decode("utf-8") or "{}")
     token = str(payload.get("access_token") or "") if isinstance(payload, dict) else ""
     if not token:
@@ -6467,11 +6512,17 @@ def github_user_owns_installation(user: dict, installation: dict, token: str) ->
 
 
 def list_github_user_installations(token: str) -> tuple[dict, list[dict]]:
+    deadline = time.monotonic() + 45
+    def within_deadline():
+        if time.monotonic() > deadline:
+            raise TimeoutError("GitHub authorization verification timed out")
+    within_deadline()
     user = github_api_request("GET", "https://api.github.com/user", token)
     if not isinstance(user, dict) or not user.get("login"):
         raise RuntimeError("GitHub did not return the authorized user")
     installations: list[dict] = []
     for page in range(1, 11):
+        within_deadline()
         result = github_api_request(
             "GET",
             f"https://api.github.com/user/installations?per_page=100&page={page}",
@@ -6480,14 +6531,87 @@ def list_github_user_installations(token: str) -> tuple[dict, list[dict]]:
         page_items = result.get("installations") if isinstance(result, dict) else []
         if not isinstance(page_items, list):
             raise RuntimeError("GitHub returned an invalid installation list")
-        installations.extend(
-            item for item in page_items
-            if isinstance(item, dict) and str(item.get("app_id") or "") == str(GITHUB_APP_ID)
-            and github_user_owns_installation(user, item, token)
-        )
+        for item in page_items:
+            if isinstance(item, dict) and not item.get("suspended_at") and str(item.get("app_id") or "") == str(GITHUB_APP_ID):
+                within_deadline()
+                if github_user_owns_installation(user, item, token):
+                    installations.append(item)
         if len(page_items) < 100:
             break
+    within_deadline()
     return user, installations
+
+
+def github_fresh_authorized_installations(user_id: str) -> set[int]:
+    """Revalidate the current GitHub user and installation ownership each time."""
+    cached = GITHUB_USER_AUTHORIZATIONS.get(user_id)
+    if not cached:
+        return set()
+    try:
+        user, installations = list_github_user_installations(cached["token"])
+        if str(user.get("id") or "") != str(cached["github_id"]):
+            GITHUB_USER_AUTHORIZATIONS.remove(user_id)
+            return set()
+        return {int(item["id"]) for item in installations if isinstance(item.get("id"), int) and not isinstance(item["id"], bool) and item["id"] > 0}
+    except Exception as exc:
+        log_server_issue("GitHub user authorization revalidation failed", exc)
+        return set()
+
+
+def github_installation_still_authorized(user_id: str, installation_id: int) -> bool:
+    return installation_id in github_fresh_authorized_installations(user_id)
+
+
+def download_private_repository(access: dict, repo_url: str) -> bytes:
+    """Check both the user's GitHub access and this App's owned installation."""
+    user_id = str(access.get("user_id") or "")
+    if not access.get("authenticated") or not user_id:
+        raise HTTPException(401, "Sign in before scanning a private repository.")
+    if access.get("role") != "admin" and access.get("plan") not in {"pro", "serious", "admin"}:
+        raise HTTPException(403, "Private repository audits require Pro or Serious.")
+    owner, repo = parse_github_repo(repo_url)
+    full_name = f"{owner}/{repo}"
+    cached = GITHUB_USER_AUTHORIZATIONS.get(user_id)
+    if not cached:
+        raise HTTPException(403, "Reconnect GitHub before scanning a private repository.")
+    try:
+        # A user token can only access the intersection of the user's and App's
+        # permissions. A JWT alone is not proof of this customer's access.
+        user_repo = github_api_request("GET", f"https://api.github.com/repos/{quote(full_name, safe='/')}", cached["token"])
+        if not isinstance(user_repo, dict) or str(user_repo.get("full_name") or "").lower() != full_name.lower():
+            raise ValueError("Repository is not available to this GitHub user")
+        installation = github_api_request("GET", f"https://api.github.com/repos/{quote(full_name, safe='/')}/installation", github_app_jwt())
+        installation_id = installation.get("id") if isinstance(installation, dict) else None
+        if isinstance(installation_id, bool) or not isinstance(installation_id, int) or installation_id <= 0:
+            raise ValueError("No valid installation")
+        rows = supabase_rest_request("GET", "github_installations", query=urlencode({
+            "user_id": f"eq.{user_id}", "installation_id": f"eq.{installation_id}", "status": "eq.active", "select": "installation_id", "limit": "1"}))
+        if not isinstance(rows, list) or not rows or not github_installation_still_authorized(user_id, installation_id):
+            raise ValueError("Installation is not currently authorized for this account")
+        branch = user_repo.get("default_branch")
+        if not isinstance(branch, str) or not branch or len(branch)>250:
+            raise ValueError("Repository default branch is unavailable")
+        commit = github_api_request("GET", f"https://api.github.com/repos/{quote(full_name, safe='/')}/commits/{quote(branch, safe='')}", cached["token"])
+        sha = commit.get("sha") if isinstance(commit, dict) else None
+        if not isinstance(sha, str) or not GITHUB_SHA_PATTERN.fullmatch(sha):
+            raise ValueError("Repository commit is unavailable")
+        current = GITHUB_USER_AUTHORIZATIONS.get(user_id)
+        if not current or not hmac.compare_digest(current["token"], cached["token"]):
+            raise ValueError("GitHub authorization changed")
+        installation_token = github_installation_token(installation_id)
+        if not installation_token:
+            raise ValueError("Installation token is unavailable")
+        return download_github_archive(full_name, sha, installation_token)
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        if str(exc) == "Repository archive exceeds the 25 MB safety limit.":
+            raise HTTPException(413, "The private repository archive exceeds the 25 MB download limit. No audit allowance was used.") from None
+        log_server_issue("Private repository access failed", exc)
+        raise HTTPException(403, "This repository is unavailable to your current GitHub connection. Check its access and reconnect.") from None
+    except Exception as exc:
+        log_server_issue("Private repository access failed", exc)
+        raise HTTPException(403, "This repository is unavailable to your current GitHub connection. Check its access and reconnect.") from None
 
 
 def github_user_has_pro(user_id: str) -> bool:
@@ -6511,13 +6635,25 @@ def save_github_installation_link(user_id: str, installation: dict) -> dict:
         "status": "active",
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
+    # An installation can belong to one account. An upsert would overwrite a
+    # different customer's existing link when two GitHub admins connect it.
     saved = supabase_rest_request(
         "POST",
         "github_installations",
         payload=payload,
-        prefer="resolution=merge-duplicates,return=representation",
+        prefer="resolution=ignore-duplicates,return=representation",
     )
-    return payload if saved else {}
+    if isinstance(saved, list) and saved:
+        return payload
+    if not isinstance(saved, list):
+        return {}
+    existing = supabase_rest_request("GET", "github_installations", query=urlencode({
+        "installation_id": f"eq.{installation_id}", "select": "user_id", "limit": "1"}))
+    if not isinstance(existing, list) or not existing or str(existing[0].get("user_id") or "") != str(user_id):
+        return {}
+    updated = supabase_rest_request("PATCH", "github_installations", payload=payload,
+        query=urlencode({"installation_id": f"eq.{installation_id}", "user_id": f"eq.{user_id}"}), prefer="return=representation")
+    return payload if isinstance(updated, list) and updated else {}
 
 
 def list_github_pull_request_files(full_name: str, pull_request_number: int, token: str) -> list[dict]:
@@ -7087,14 +7223,14 @@ def github_status():
         "has_webhook_secret": bool(GITHUB_WEBHOOK_SECRET),
         "has_app_slug": bool(valid_slug),
         "install_url": f"https://github.com/apps/{valid_slug}/installations/new" if valid_slug else "",
-        "pull_request_checks": True,
+        "pull_request_checks": GITHUB_PR_SCANS_ENABLED,
         "monitor_only": True,
         "scans_changed_files_only": True,
         "dynamic_sandbox": "not_enabled",
         "pro_enforcement": True,
         "secure_linking": bool(GITHUB_LINK_STATE_SECRET),
         "existing_install_linking": bool(GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET and GITHUB_LINK_STATE_SECRET),
-        "connection_revision": 4,
+        "connection_revision": 5,
         "scanner_version": SCANNER_VERSION,
     })
 
@@ -7111,8 +7247,11 @@ def github_connect_url(request: Request, code_challenge: str = ""):
         return private_json({"detail": "Connecting an existing GitHub installation is not configured yet."}, status_code=503)
     if not re.fullmatch(r"[A-Za-z0-9_-]{43}", code_challenge):
         return private_json({"detail": "Start GitHub authorization from the current signed-in browser."}, status_code=400)
+    origin = request.headers.get("x-audit-return-origin", "")
+    if origin not in GITHUB_FRONTEND_ORIGINS:
+        return private_json({"detail": "Start GitHub authorization from the AI Code Audit site."}, status_code=400)
     return private_json({
-        "url": github_oauth_authorize_url(str(access["user_id"]), code_challenge),
+        "url": github_oauth_authorize_url(str(access["user_id"]), code_challenge, origin),
         "expires_in": 900,
     })
 
@@ -7137,8 +7276,14 @@ def github_install_url(request: Request):
 
 @app.get("/github/oauth/callback")
 def github_oauth_callback(code: str = "", state: str = "", error: str = ""):
-    # A provider redirect has no app bearer session. It must never link accounts.
-    # Completion belongs to the authenticated frontend POST with its PKCE verifier.
+    # A provider redirect has no app bearer session and never links accounts.
+    # The code travels in a fragment, never as a query to the frontend server.
+    payload = read_github_install_state(state, "oauth")
+    origin = payload.get("return_origin")
+    if origin in GITHUB_FRONTEND_ORIGINS and (error or re.fullmatch(r"[A-Za-z0-9_-]{1,500}", code)):
+        fragment = urlencode({"state": state, **({"error": "denied"} if error else {"code": code})})
+        return RedirectResponse(f"{origin}/account/github/callback#{fragment}", status_code=303,
+            headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache", "Referrer-Policy": "no-referrer"})
     return RedirectResponse(
         f"{APP_BASE_URL}/?{urlencode({'github': 'cancelled' if error else 'authorization_incomplete'})}",
         status_code=303,
@@ -7175,6 +7320,8 @@ def complete_github_oauth(req: GitHubOAuthCompleteRequest, request: Request):
         saved = [save_github_installation_link(user_id, item) for item in installations]
         if not all(saved):
             raise RuntimeError("One or more GitHub installation links could not be saved")
+        github_id = github_user.get("id")
+        GITHUB_USER_AUTHORIZATIONS.put(user_id, github_id, token)
         return private_json({"linked": True, "github_account": str(github_user.get("login") or "")[:255], "github_installations": len(saved)})
     except Exception as exc:
         log_server_issue("GitHub user authorization failed", exc)
@@ -7197,11 +7344,14 @@ def github_account_status(request: Request):
             "order": "updated_at.desc",
         }),
     )
-    installations = rows if isinstance(rows, list) else []
+    stored = rows if isinstance(rows, list) else []
+    authorized = github_fresh_authorized_installations(str(access["user_id"]))
+    installations = [row for row in stored if int(row.get("installation_id") or 0) in authorized]
     return private_json({
         "connected": bool(installations),
         "installations": installations,
         "count": len(installations),
+        "reauthorization_required": bool(stored and not installations),
     })
 
 
@@ -7224,7 +7374,9 @@ def github_dashboard(request: Request):
             "limit": "10",
         }),
     )
-    installations = installation_rows if isinstance(installation_rows, list) else []
+    stored_installations = installation_rows if isinstance(installation_rows, list) else []
+    authorized = github_fresh_authorized_installations(user_id)
+    installations = [row for row in stored_installations if int(row.get("installation_id") or 0) in authorized]
 
     repositories_by_name = {}
     for installation in installations:
@@ -7288,6 +7440,7 @@ def github_dashboard(request: Request):
     add_scan_comparisons(scans)
     return private_json({
         "connected": bool(installations),
+        "reauthorization_required": bool(stored_installations and not installations),
         "plan": str(access.get("plan") or "free"),
         "installations": installations,
         "repositories": sorted(repositories_by_name.values(), key=lambda item: item["full_name"].lower()),
@@ -7311,9 +7464,11 @@ def require_github_repository_access(request: Request, repository: str) -> tuple
         "GET", "github_installations",
         query=urlencode({"user_id": f"eq.{user_id}", "status": "eq.active", "select": "installation_id", "limit": "20"}),
     )
+    authorized = github_fresh_authorized_installations(user_id)
     for row in rows if isinstance(rows, list) else []:
         try:
-            if any(item["full_name"].lower() == repository.lower() for item in list_github_installation_repositories(int(row.get("installation_id") or 0))):
+            installation_id = int(row.get("installation_id") or 0)
+            if installation_id in authorized and any(item["full_name"].lower() == repository.lower() for item in list_github_installation_repositories(installation_id)):
                 return access, user_id
         except Exception as exc:
             log_server_issue("Repository access verification failed", exc)
@@ -7395,6 +7550,13 @@ def link_github_installation(req: GitHubInstallationLinkRequest, request: Reques
     })
 
 
+def github_delivery_control(delivery_id: str, lease_id: str, action: str) -> dict:
+    result = supabase_rest_request("POST", "rpc/aca_github_delivery_control", payload={"p_delivery": delivery_id, "p_lease": lease_id, "p_action": action})
+    if not isinstance(result, dict) or result.get("ok") is not True or not isinstance(result.get("accepted"), bool):
+        raise HTTPException(status_code=503, detail="GitHub delivery tracking is unavailable. No new scan was queued.")
+    return result
+
+
 @app.post("/github/webhook")
 async def github_webhook(request: Request, background_tasks: BackgroundTasks):
     payload = await request.body()
@@ -7410,6 +7572,13 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=400, detail="Malformed GitHub webhook payload.")
     if event == "ping":
         return private_json({"received": True, "event": "ping"})
+    if event == "github_app_authorization" and body.get("action") == "revoked":
+        sender = body.get("sender")
+        github_id = sender.get("id") if isinstance(sender, dict) else None
+        if isinstance(github_id, bool) or not isinstance(github_id, int) or github_id <= 0:
+            raise HTTPException(status_code=400, detail="Invalid GitHub authorization event.")
+        GITHUB_USER_AUTHORIZATIONS.revoke_github_user(github_id)
+        return private_json({"received": True, "authorization_revoked": True})
     if event == "installation" and body.get("action") in {"deleted", "suspend"}:
         installation = body.get("installation")
         installation_id = installation.get("id") if isinstance(installation, dict) else None
@@ -7435,16 +7604,36 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
             return private_json({"received": True, "ignored": True})
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not GITHUB_PR_SCANS_ENABLED:
+        return private_json({"received": True, "queued": False, "reason": "pull_request_scans_paused"}, status_code=503)
     entitlement = await run_in_threadpool(github_installation_entitlement, installation_id)
     user_id = str(entitlement.get("user_id") or "")
     if not entitlement.get("allowed") or not user_id:
         return private_json({"received": True, "queued": False, "reason": "installation_not_entitled"}, status_code=403)
+    try:
+        delivery_id = str(uuid.UUID(request.headers.get("x-github-delivery", "")))
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(status_code=400, detail="A valid GitHub delivery ID is required.") from None
+    lease_id = str(uuid.uuid4())
+    delivery = await run_in_threadpool(github_delivery_control, delivery_id, lease_id, "reserve")
+    if not delivery["accepted"]:
+        return private_json({"received": True, "queued": False, "duplicate": True})
     # Share the same per-account and global queue as interactive audits. The
     # worker rechecks entitlement when it starts, so a queued job cannot revive
     # an installation suspended after the webhook arrived.
-    SCAN_JOBS.submit(user_id, lambda: process_github_pull_request(
-        installation_id, full_name, pull_request_number, sha,
-    ))
+    def work():
+        try:
+            process_github_pull_request(installation_id, full_name, pull_request_number, sha)
+        finally:
+            try:
+                github_delivery_control(delivery_id, lease_id, "complete")
+            except HTTPException:
+                log_server_issue("GitHub delivery completion could not be recorded")
+    try:
+        SCAN_JOBS.submit(user_id, work)
+    except Exception:
+        await run_in_threadpool(github_delivery_control, delivery_id, lease_id, "release")
+        raise
     return private_json({"received": True, "queued": True})
 
 
@@ -7750,16 +7939,25 @@ def scan_repo(req: RepoScanRequest, request: Request):
     access = get_request_access_context(request)
     access = enrich_access_with_admin_metadata(access)
     enforce_rate_limit(request, access, "repo")
-    return run_audit_process("repo",req.model_dump(),access,str(request.base_url))
+    payload = req.model_dump()
+    if req.private_repo:
+        archive = download_private_repository(access, req.repo_url)
+        payload["_private_archive"] = base64.b64encode(archive).decode("ascii")
+    return run_audit_process("repo",payload,access,str(request.base_url))
 
 
-def scan_repo_work(req,access,request):
+def scan_repo_work(req,access,request,private_archive=None):
     if len(req.intent) > 2000 or len(req.repo_url) > 500:
         return private_json({"error": "The repository request is too long."}, status_code=413)
 
     try:
         owner, repo = parse_github_repo(req.repo_url)
-        zip_bytes = download_repo_zip(owner, repo)
+        if req.private_repo:
+            if not isinstance(private_archive, bytes) or len(private_archive)>MAX_REPOSITORY_ARCHIVE_BYTES:
+                raise ValueError("Private repository authorization is unavailable.")
+            zip_bytes = private_archive
+        else:
+            zip_bytes = download_repo_zip(owner, repo)
     except ValueError as exc:
         return private_json({"error": str(exc)}, status_code=400)
     except Exception:
@@ -7773,6 +7971,10 @@ def scan_repo_work(req,access,request):
     all_touches = set()
     all_behavior_summary = []
     highest_file_risk = "green"
+    cross_file_sources: dict[str, str] = {}
+    cross_file_paths: dict[str, str] = {}
+    cross_file_bytes = 0
+    cross_file_omissions = 0
 
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
         dependency_scan = analyze_dependency_manifests(zf)
@@ -7818,6 +8020,16 @@ def scan_repo_work(req,access,request):
             if result.get("risk") in {"limit", "limited"}:
                 source_coverage.update(meaningful_coverage=False, executable_lines=0,
                     analysis_status="limit", limitation=result["summary"])
+            if file_name.lower().endswith('.py'):
+                relative_path = file_name.split('/', 1)[-1]
+                source_bytes = len(code_text.encode('utf-8'))
+                if (source_coverage.get('meaningful_coverage') and len(cross_file_sources) < 500
+                        and cross_file_bytes + source_bytes <= 25_000_000 and relative_path not in cross_file_sources):
+                    cross_file_sources[relative_path] = code_text
+                    cross_file_paths[relative_path] = file_name
+                    cross_file_bytes += source_bytes
+                else:
+                    cross_file_omissions += 1
             weight = file_weight_for_repo(file_name)
             # A skipped file is a coverage gap, not a fabricated risk finding.
             points = 0 if result.get("risk") in {"limit", "limited"} else result["risk_points"]
@@ -7899,7 +8111,7 @@ def scan_repo_work(req,access,request):
                 "lines": ["No supported source files were found. A safety rating was not produced."],
             },
             "verdict": build_action_verdict("limited", 0, insufficient=True),
-            "coverage": build_repo_coverage([], files_available_count, dependency_scan),
+            "coverage": build_repo_coverage([], files_available_count, dependency_scan, req.private_repo),
             "access": access,
             "privacy": {"stored_by_scanner": False, "response_cache_disabled": True},
         })
@@ -7913,7 +8125,22 @@ def scan_repo_work(req,access,request):
         if dep_summary_line not in all_behavior_summary:
             all_behavior_summary.append(dep_summary_line)
 
-    if files_scanned and not coverage_partial and not any(f["flags"] for f in files_scanned):
+    cross_result = cross_file_review.analyze(cross_file_sources)
+    cross_file_flags = []
+    for signal in cross_result['findings']:
+        sink = cross_file_paths.get(signal['file'], signal['file'])
+        source = cross_file_paths.get(signal['source_file'], signal['source_file'])
+        flag = make_flag(line=signal['line'], flag_type='cross_file_credential_flow', pattern=signal['pattern'],
+            message=signal['message'], severity=18,
+            explanation=f"The getter at {source}:{signal['source_line']} is called in the request payload at {sink}:{signal['line']}. Review the destination and whether the transmission is intended.")
+        flag.update(file=sink, engine='cross-file-python', source_file=source, source_line=signal['source_line'])
+        flag['finding_id'] = hashlib.sha256(f"cross-file\0{sink}\0{signal['line']}\0{source}\0{signal['source_line']}".encode('utf-8')).hexdigest()[:20]
+        cross_file_flags.append(flag)
+    cross_incomplete = bool(cross_file_omissions or cross_result['parse_failures'] or cross_result['ambiguous_modules'])
+    cross_status = 'partial' if cross_incomplete or not cross_file_sources else 'complete'
+    if cross_file_flags:
+        all_behavior_summary.append('A supported Python cross-file credential flow was reported. Review the source and request evidence below.')
+    if files_scanned and not coverage_partial and not cross_file_flags and not any(f["flags"] for f in files_scanned):
         all_behavior_summary.append("No supported code-behavior risk signals were detected in the analyzed files.")
 
     if dependency_findings:
@@ -7929,11 +8156,14 @@ def scan_repo_work(req,access,request):
         repo_weighted_points,
         dependency_risk_points,
     )
+    if cross_file_flags:
+        normalized_repo_points = max(normalized_repo_points, 35)
+        highest_file_risk = 'red'
 
     overall_risk = risk_from_points(normalized_repo_points)
     trust_score = calculate_trust_score_from_points(normalized_repo_points)
     trust_badge = build_trust_badge(trust_score, overall_risk)
-    flattened_repo_flags = [flag for file_result in files_scanned for flag in file_result.get("flags", [])]
+    flattened_repo_flags = [flag for file_result in files_scanned for flag in file_result.get("flags", [])] + cross_file_flags
     repo_behavior_categories = sorted(list(all_touches))
     repo_intent_mismatches = [
         mismatch
@@ -7963,12 +8193,12 @@ def scan_repo_work(req,access,request):
         repo_behavior_categories,
         repo_intent_mismatches,
         dependency_points=dependency_risk_points,
-        coverage_partial=coverage_partial,
+        coverage_partial=coverage_partial or cross_status != 'complete',
         dependency_summary=dependency_scan,
     )
 
     meaningful_files = sum(bool(f["coverage"]["meaningful_coverage"]) for f in files_scanned)
-    incomplete = coverage_partial or bool(dependency_scan.get("dependency_scan_error")) or bool(dependency_scan.get("dependencies_skipped"))
+    incomplete = coverage_partial or cross_status != 'complete' or bool(dependency_scan.get("dependency_scan_error")) or bool(dependency_scan.get("dependencies_skipped"))
     repo_status = "not-rated" if not meaningful_files else "partial" if incomplete else "complete"
     repo_verdict = build_action_verdict(overall_risk, trust_score, insufficient=repo_status=="not-rated")
     if any(float(f.get("severity") or 0) >= 18 for f in flattened_repo_flags + dependency_findings):
@@ -7977,9 +8207,10 @@ def scan_repo_work(req,access,request):
         trust_score = min(trust_score, 65)
     elif repo_status == "partial":
         repo_verdict = {"id":"review_first", "label":"Partial repository analysis", "action":"Review per-file coverage and rerun incomplete checks.", "tone":"warning"}
-    repo_coverage = build_repo_coverage([str(f.get("file") or "") for f in files_scanned], files_available_count, dependency_scan)
+    repo_coverage = build_repo_coverage([str(f.get("file") or "") for f in files_scanned], files_available_count, dependency_scan, req.private_repo)
     repo_coverage["files_analyzed"] = meaningful_files
     repo_coverage["limitations"].append("Repository behavior checks validate Python, JavaScript, and TypeScript syntax. Other languages retain pattern findings but are not rated; Semgrep is not run for repository files.")
+    repo_coverage["limitations"].extend(cross_result['limitations'])
     if repo_status != "complete": trust_score = None
 
     return private_json({
@@ -7991,12 +8222,12 @@ def scan_repo_work(req,access,request):
         "coverage_validated": True,
         "trust_score": trust_score,
         "trust_badge": {"label":repo_verdict["label"], "message":repo_verdict["action"], "color":"red" if overall_risk=="red" else "gray" if repo_status!="complete" else "green"},
-        "readme_badge": generate_readme_badge(str(request.base_url), owner, repo, trust_score, overall_risk) if trust_score is not None else None,
+        "readme_badge": generate_readme_badge(str(request.base_url), owner, repo, trust_score, overall_risk) if trust_score is not None and not req.private_repo else None,
         "files_scanned_count": meaningful_files,
         "files_inspected_count": len(files_scanned),
         "files_available_count": files_available_count,
         "files_scanned_limit": repo_file_limit if repo_file_limit is not None else "Unlimited",
-        "coverage_partial": coverage_partial,
+        "coverage_partial": coverage_partial or cross_status != 'complete',
         "repo_size_bytes": repo_code_size_bytes,
         "repo_size_limit_bytes": repo_size_limit_bytes,
         "touches": sorted(list(all_touches)),
@@ -8007,8 +8238,9 @@ def scan_repo_work(req,access,request):
         "coverage": repo_coverage,
         "evidence": evidence,
         "analysis_engines": [
-            {"name": "behavior", "status": "partial" if coverage_partial else "complete", "findings": len(flattened_repo_flags)},
+            {"name": "behavior", "status": "partial" if coverage_partial else "complete", "findings": len(flattened_repo_flags) - len(cross_file_flags)},
             {"name": "dependency-advisories", "status": "complete" if not dependency_scan.get("dependency_scan_error") else "partial", "findings": len(dependency_findings)},
+            {"name": "cross-file-python", "status": cross_status, "findings": len(cross_file_flags), "message": "Limited direct Python credential-to-payload patterns only."},
         ],
         "dynamic_sandbox": {"status": "not_enabled", "reason": "Repository code is inspected but never executed."},
         "behavior_summary": all_behavior_summary or ["Meaningful behavior coverage was not established. Review the per-file limits and parser status."],
@@ -8016,6 +8248,7 @@ def scan_repo_work(req,access,request):
         "risk_points": round(normalized_repo_points, 2),
         "highest_file_risk": highest_file_risk,
         "files": files_scanned,
+        "flags": cross_file_flags,
         "dependency_summary": {
             "manifests_scanned": dependency_scan["manifests_scanned"],
             "dependencies_parsed": dependency_scan["dependencies_parsed"],
