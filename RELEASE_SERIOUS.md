@@ -1,6 +1,6 @@
 # Serious tier and opt-in saved reports
 
-Scanner v31 / Site planned v31. Purchases remain paused. AI-assisted comparison is NOT enabled; no AI quota or provider-budget enforcement is live. Historical plan only; superseded by RELEASE_AI_REVIEW.md. No $100 production budget was approved. Current private test cap is $2 lifetime. Future balances: Free 5/month, Pro 100/month, Serious 400/month; paid plans have no additional daily pool. Basic comparison remains local and unlimited.
+Scanner v31 / Site planned v31. Purchases remain paused. AI-assisted comparison is NOT enabled; no AI quota or provider-budget enforcement is live. Historical plan only; superseded by RELEASE_AI_REVIEW.md. No $100 production budget was approved. Current approved private pilot cap is $25 per UTC calendar month; see RELEASE_AI_REVIEW.md. Future balances: Free 5/month, Pro 100/month, Serious 400/month; paid plans have no additional daily pool. Basic comparison remains local and unlimited.
 
 Serious: $69 monthly or $690 annually; 1,500 audits/month including 100 repositories; 20,000 snippet lines, 100 repository files, 20 MB analyzed repository code. Pro and Free audit allowances unchanged. Larger capacity is not a claim of unchanged latency or successful full coverage; load testing is required before sale.
 

@@ -17,12 +17,21 @@ begin
  assert (select cost_micro_usd=525 and state='complete' from public.aca_ai_usage where receipt=rid);
  perform public.aca_ai_usage_control(u,'settle',rid,0,false);
  assert (select cost_micro_usd=525 and state='complete' from public.aca_ai_usage where receipt=rid);
- for i in 1..19 loop
+ for i in 1..249 loop
   rid:=gen_random_uuid();assert (public.aca_ai_usage_control(u,'reserve',rid)->>'ok')::boolean;
   perform public.aca_ai_usage_control(u,'settle',rid,null,false);
+  if i=200 then assert public.aca_ai_usage_control(u,'status')->>'budget_warning'='80_percent'; end if;
+  if i=225 then assert public.aca_ai_usage_control(u,'status')->>'budget_warning'='90_percent'; end if;
  end loop;
  assert not (public.aca_ai_usage_control(u,'reserve',gen_random_uuid())->>'ok')::boolean;
  assert (public.aca_ai_usage_control(u,'status')->>'used')::int=1;
+ assert public.aca_ai_usage_control(u,'status')->>'budget_warning'='exhausted';
+ assert (public.aca_ai_usage_control(u,'status')->>'monthly_budget_usd')::int=25;
+ -- Simulate previous-month receipts: new month regains capacity without deleting history.
+ update public.aca_ai_usage set created_at=date_trunc('month',now() at time zone 'UTC') at time zone 'UTC'-interval '1 day' where user_id=u;
+ assert (public.aca_ai_usage_control(u,'status')->>'available')::boolean;
+ assert (select count(*) from public.aca_ai_usage where user_id=u)=250;
+ assert (public.aca_ai_usage_control(u,'reserve',gen_random_uuid())->>'ok')::boolean;
 end $$;
 reset role;
 set local role authenticated;
