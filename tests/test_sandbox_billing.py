@@ -28,7 +28,7 @@ class SandboxBillingTests(unittest.TestCase):
   for meta in [{'sandbox_event_id':'evt_1'},{'sandbox_event_created':101},{'sandbox_subscription_id':'sub_test','sandbox_subscription_status':'canceled'}]:
    self.assertIsNone(self.update(self.event(),{'app_metadata':meta}))
  def test_signed_endpoint_and_persistence_retry(self):
-  env={'STRIPE_SANDBOX_WEBHOOK_SECRET':'whsec_unit_test','STRIPE_SANDBOX_TEST_USER_ID':'user_test','STRIPE_SANDBOX_CUSTOMER_ID':'cus_test','STRIPE_SANDBOX_PRICE_ID':'price_test'}
+  env={'STRIPE_SANDBOX_WEBHOOK_SECRET':'whsec_unit_test','STRIPE_SANDBOX_TEST_USER_ID':'user_test','STRIPE_SANDBOX_CUSTOMER_ID':'cus_test','STRIPE_SANDBOX_PRICE_ID':'price_test','STRIPE_SANDBOX_PLAN':'pro'}
   body=json.dumps(self.event()).encode();stamp=int(time.time());sig=hmac.new(env['STRIPE_SANDBOX_WEBHOOK_SECRET'].encode(),str(stamp).encode()+b'.'+body,hashlib.sha256).hexdigest()
   with patch.dict(os.environ,env),patch.object(main,'get_supabase_admin_user',return_value={'id':'user_test','app_metadata':{}}),patch.object(main,'update_supabase_user_app_metadata',return_value=True) as save:
    client=TestClient(main.app)
