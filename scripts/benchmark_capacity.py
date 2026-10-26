@@ -20,16 +20,28 @@ def code_for(lines):
     code+='\nvalue = input()\neval(value)\n'
     return code
 
-def run(lines):
-    code=code_for(lines);t=time.monotonic()
+def compact_code_for(lines):
+    """Branching 50k-line fixture that fits the public 1 MB snippet bound."""
+    block=lambda i: f'def f{i}(r):\n t={{}}\n for a in r:\n  v=a["v"]\n  if v>0:\n   k=a["k"]\n   t[k]=t.get(k,0)+v\n return t\n\n'
+    count=max(0,(lines-2)//9)
+    code=''.join(block(i) for i in range(count))+'value=input()\neval(value)\n'
+    return code+'x=1\n'*max(0,lines-len(code.splitlines()))
+
+def run(lines,compact=False):
+    code=compact_code_for(lines) if compact else code_for(lines)
+    main.validate_scan_request(main.ScanRequest(intent='Summarize local category amounts. Do not execute dynamic input.',code=code,language='Python'),{'authenticated':True,'plan':'serious','limits':main.get_plan_limits('serious')})
+    t=time.monotonic()
     result=main.analyze_code_product('Summarize local category amounts. Do not execute dynamic input.',code,plan='serious',filename='summary.py',language='Python')
-    record={'requested_lines':lines,'actual_lines':len(code.splitlines()),'seconds':round(time.monotonic()-t,3),'state':result.get('scan_status'),'engines':result.get('analysis_engines'),'flags':len(result.get('flags',[])),'engine_findings':len(result.get('engine_findings',[]))}
+    record={'requested_lines':lines,'actual_lines':len(code.splitlines()),'bytes':len(code.encode()),'seconds':round(time.monotonic()-t,3),'state':result.get('scan_status'),'engines':result.get('analysis_engines'),'flags':len(result.get('flags',[])),'engine_findings':len(result.get('engine_findings',[]))}
     print(json.dumps(record),flush=True)
     assert result['scan_status']=='complete',record
     assert result.get('flags') or result.get('engine_findings'),record
     return record
 
 if __name__=='__main__':
+    if '--serious' in sys.argv:
+        run(50000,compact=True)
+        sys.exit(0)
     for n in (2000,10000,20000):run(n)
     q=ScanJobs();start=time.monotonic();ids=[]
     for i in range(3):ids.append((f'benchmark-{i}',q.submit(f'benchmark-{i}',lambda:run(2000))['id']))
