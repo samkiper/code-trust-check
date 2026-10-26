@@ -11,3 +11,9 @@ Privacy: OpenAI standard retention can include 30-day abuse logs; store=false is
 Saved-report backend auth/database calls now run off the async event loop; no scanner rules removed. Regression tests validate budget/ownership/isolation and malformed, missing, duplicate, or fabricated evidence. Model fixtures in unit tests are mocks; live provider results must be reported separately.
 
 Budget warnings (80%, 90%, exhausted) and next UTC reset are returned to the administrator through the usage API. No email alert, auto-recharge, automatic budget increase, or customer AI activation is configured. Testing still aims to remain below $2 total; a $25 cap is not permission to spend it unnecessarily.
+
+## Scanner timeout recovery
+
+Semgrep runs in its own process group; a deadline kills and reaps the scanner before the capacity permit is released. Exhausted engine timeouts do not consume monthly scan allowance, even when the behavior engine returns useful partial coverage. A successful fallback after an earlier attempt timeout still counts as a completed scan.
+
+A disabled-by-default diagnostic accepts only an exact synthetic source SHA-256 configured by the service operator (`SCAN_TIMEOUT_VALIDATION_SHA256`) and an absolute UTC expiry (`SCAN_TIMEOUT_VALIDATION_EXPIRES`) within 15 minutes. It shortens the real Semgrep subprocess deadline to 50 ms for that exact source only, with one attempt. It does not execute submitted source, bypass authentication or quotas, call AI, or expose a new route. Clear both settings after validation. This is controlled fault injection, not evidence of natural workload latency or whole-job deadline enforcement.

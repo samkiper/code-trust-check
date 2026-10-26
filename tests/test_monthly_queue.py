@@ -63,13 +63,13 @@ class MeteringTests(unittest.TestCase):
         self.access={'authenticated':True,'user_id':'00000000-0000-0000-0000-000000000001','plan':'free','limits':main.get_plan_limits('free')}
         self.request=Request({'type':'http','headers':[],'method':'POST','path':'/scan'})
         self.payload=main.ScanRequest(intent='Review',code='print(1)',language='Python')
-    def run_case(self,status,http=200,raises=False):
+    def run_case(self,status,http=200,raises=False,engines=None):
         calls=[]
         def usage(access,action='status',receipt=None,kind='code',charge=False):calls.append((action,receipt,kind,charge));return {'allowed':True}
         @main.metered_scan('code')
         def fn(req,request):
             if raises:raise RuntimeError('failed worker')
-            return main.private_json({'scan_status':status,'coverage_validated':True,'coverage':{'meaningful_coverage':True}},http)
+            return main.private_json({'analysis_engines':engines or [],'scan_status':status,'coverage_validated':True,'coverage':{'meaningful_coverage':True}},http)
         with patch.object(main,'get_request_access_context',return_value=self.access),patch.object(main,'monthly_usage',side_effect=usage):
             if raises:
                 with self.assertRaises(RuntimeError):fn(self.payload,self.request)
@@ -80,6 +80,9 @@ class MeteringTests(unittest.TestCase):
         self.assertTrue(self.run_case('complete'));self.assertTrue(self.run_case('partial'))
         for status in ['failed','not-rated',None]:self.assertFalse(self.run_case(status))
         self.assertFalse(self.run_case('complete',502));self.assertFalse(self.run_case('complete',raises=True))
+    def test_exhausted_engine_timeout_never_charges_useful_partial(self):
+        self.assertFalse(self.run_case('partial',engines=[{'name':'semgrep','status':'timeout'}]))
+        self.assertTrue(self.run_case('complete',engines=[{'name':'semgrep','status':'complete','attempts':[{'status':'timeout'},{'status':'complete'}]}]))
     def test_empty_oversized_and_signed_out_reject_before_reservation(self):
         @main.metered_scan('code')
         def fn(req,request):self.fail('must not analyze')

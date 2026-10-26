@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from scan_contract import select_filename, inspect_source, finalize_snippet
 from scan_capacity import limit_scan_capacity
 from scan_jobs import ScanJobs
+from scanner_process import run_scanner
 from functools import wraps
 import uuid
 from flow_review import supplemental_flows, literal_eval_locations
@@ -583,7 +584,8 @@ def metered_scan(kind):
                 response=function(req,request)
                 data=json.loads(response.body)
                 coverage=data.get("coverage") or {}
-                charged=response.status_code==200 and data.get("coverage_validated") is True and data.get("scan_status") in {"complete","partial"} and (coverage.get("meaningful_coverage") is True or isinstance(coverage.get("files_analyzed"),int) and coverage["files_analyzed"]>0)
+                timed_out=any(engine.get("status")=="timeout" for engine in data.get("analysis_engines",[]) if isinstance(engine,dict))
+                charged=not timed_out and response.status_code==200 and data.get("coverage_validated") is True and data.get("scan_status") in {"complete","partial"} and (coverage.get("meaningful_coverage") is True or isinstance(coverage.get("files_analyzed"),int) and coverage["files_analyzed"]>0)
                 return response
             finally:
                 # Idempotent settlement; a failed database call cannot double charge.
@@ -4695,6 +4697,21 @@ def valid_semgrep_payload(payload: object) -> bool:
                for r in payload["results"])
 
 
+def validation_timeout_enabled(code: str) -> bool:
+    """Opt-in, short-lived fault test for one exact synthetic source digest.
+
+    No request flag, authentication bypass, new endpoint or source execution.
+    Normal budgets resume automatically after the configured UTC expiry.
+    """
+    digest = os.getenv("SCAN_TIMEOUT_VALIDATION_SHA256", "")
+    try:
+        remaining = float(os.getenv("SCAN_TIMEOUT_VALIDATION_EXPIRES", "0")) - time.time()
+    except ValueError:
+        return False
+    return (0 < remaining <= 900 and len(digest) == 64
+            and hmac.compare_digest(digest, hashlib.sha256(code.encode()).hexdigest()))
+
+
 def run_semgrep_scan(code: str, filename: str | None = None) -> dict:
     """Run the local, pinned Semgrep rules without sending code over the network."""
     started = time.monotonic()
@@ -4719,6 +4736,9 @@ def run_semgrep_scan(code: str, filename: str | None = None) -> dict:
             completed = None
             deadline = started + SEMGREP_BUDGET_SECONDS
             variants = [("native", command + ["--experimental"]), ("default", command)] if SEMGREP_NATIVE_CLI else [("default", command)]
+            validation_timeout = validation_timeout_enabled(code)
+            if validation_timeout:
+                variants = [("default", command)]
             for attempt_number, (cli_mode, attempt_command) in enumerate(variants, 1):
                 remaining = max(0, deadline - time.monotonic())
                 if remaining < 2:
@@ -4727,9 +4747,11 @@ def run_semgrep_scan(code: str, filename: str | None = None) -> dict:
                     SEMGREP_FIRST_ATTEMPT_SECONDS if cli_mode == "native" else remaining,
                     remaining,
                 )
+                if validation_timeout:
+                    timeout_seconds = 0.05
                 attempt_started = time.monotonic()
                 try:
-                    candidate = subprocess.run(
+                    candidate = run_scanner(
                         attempt_command,
                         capture_output=True,
                         text=True,

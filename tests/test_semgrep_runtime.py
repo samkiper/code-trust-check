@@ -7,7 +7,7 @@ def response(payload,code=0):return SimpleNamespace(returncode=code,stdout=json.
 GOOD={'results':[],'paths':{'scanned':['snippet.py']}}
 class NativeCliTests(unittest.TestCase):
  def scan(self,outputs):
-  with patch('main.shutil.which',return_value='/bin/semgrep'),patch.object(main,'SEMGREP_NATIVE_CLI',True),patch('main.subprocess.run',side_effect=outputs) as run:
+  with patch('main.shutil.which',return_value='/bin/semgrep'),patch.object(main,'SEMGREP_NATIVE_CLI',True),patch('main.run_scanner',side_effect=outputs) as run:
    result=main.run_semgrep_scan('eval(input())','snippet.py')
   return result,run
  def test_native_failure_falls_back_with_identical_rules_and_no_skipped_checks(self):
@@ -26,7 +26,7 @@ class NativeCliTests(unittest.TestCase):
   self.assertLessEqual(run.call_args_list[0].kwargs['timeout'],10)
   self.assertLessEqual(run.call_args_list[1].kwargs['timeout'],40)
  def test_exhausted_deadline_does_not_start_another_process(self):
-  with patch('main.shutil.which',return_value='/bin/semgrep'),patch('main.time.monotonic',side_effect=[0,0,0,41,41,41]),patch('main.subprocess.run',side_effect=subprocess.TimeoutExpired('semgrep',10)) as run:
+  with patch('main.shutil.which',return_value='/bin/semgrep'),patch('main.time.monotonic',side_effect=[0,0,0,41,41,41]),patch('main.run_scanner',side_effect=subprocess.TimeoutExpired('semgrep',10)) as run:
    result=main.run_semgrep_scan('eval(input())','snippet.py')
   self.assertEqual(run.call_count,1);self.assertEqual(result['status'],'timeout')
  def test_high_findings_and_partial_errors_survive_native_path(self):
@@ -37,6 +37,6 @@ class NativeCliTests(unittest.TestCase):
    self.assertEqual(result['status'],'partial' if errors else 'complete');self.assertEqual(len(result['findings']),12)
    self.assertEqual(result['findings'][0]['severity'],18);self.assertEqual(run.call_count,1)
  def test_rollback_switch_uses_original_cli(self):
-  with patch('main.shutil.which',return_value='/bin/semgrep'),patch.object(main,'SEMGREP_NATIVE_CLI',False),patch('main.subprocess.run',return_value=response(GOOD)) as run:
+  with patch('main.shutil.which',return_value='/bin/semgrep'),patch.object(main,'SEMGREP_NATIVE_CLI',False),patch('main.run_scanner',return_value=response(GOOD)) as run:
    result=main.run_semgrep_scan('print(1)','snippet.py')
   self.assertEqual(result['status'],'complete');self.assertNotIn('--experimental',run.call_args.args[0])

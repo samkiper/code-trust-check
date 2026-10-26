@@ -32,7 +32,7 @@ class ScanContractTests(unittest.TestCase):
     def test_semgrep_parse_errors_and_zero_targets_are_not_complete(self):
         for payload in [{'results':[], 'errors':[{'type':'ParseError'}], 'paths':{'scanned':['snippet.py']}},{'results':[], 'paths':{'scanned':[]}}]:
             completed=type('Completed',(),{'returncode':0,'stdout':json.dumps(payload)})()
-            with patch('main.shutil.which',return_value='/usr/bin/semgrep'),patch('main.subprocess.run',return_value=completed):
+            with patch('main.shutil.which',return_value='/usr/bin/semgrep'),patch('main.run_scanner',return_value=completed):
                 r=main.run_semgrep_scan('broken','snippet.py')
             self.assertEqual(r['status'],'partial')
 

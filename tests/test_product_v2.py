@@ -603,7 +603,7 @@ class SemgrepAdapterTests(unittest.TestCase):
             "extra": {"severity": "ERROR", "message": "Dynamic eval", "metadata": {"confidence": "high"}},
         }]}
         completed = type("Completed", (), {"returncode": 1, "stdout": json.dumps(payload)})()
-        with patch("main.shutil.which", return_value="/usr/bin/semgrep"), patch("main.subprocess.run", return_value=completed):
+        with patch("main.shutil.which", return_value="/usr/bin/semgrep"), patch("main.run_scanner", return_value=completed):
             result = main.run_semgrep_scan("eval(user_input)", "app.py")
         self.assertEqual(result["status"], "complete")
         self.assertEqual(result["findings"][0]["line"], 3)
@@ -614,7 +614,7 @@ class SemgrepAdapterTests(unittest.TestCase):
         with patch("main.shutil.which", return_value="/usr/bin/semgrep"), \
                 patch.object(main, "SEMGREP_BUDGET_SECONDS", 40), \
                 patch.object(main, "SEMGREP_FIRST_ATTEMPT_SECONDS", 28), \
-                patch("main.subprocess.run", side_effect=[main.subprocess.TimeoutExpired("semgrep", 28), completed]) as runner:
+                patch("main.run_scanner", side_effect=[main.subprocess.TimeoutExpired("semgrep", 28), completed]) as runner:
             result = main.run_semgrep_scan("print('hello')", "app.py")
         self.assertEqual(result["status"], "complete")
         self.assertTrue(result["fallback_used"])
