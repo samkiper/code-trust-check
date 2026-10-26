@@ -119,3 +119,11 @@ Site v41 and backend 3cc8a801c675cb7165d5e6d11856c14d847ce8c0 tested through nor
 Cleanup: restored the first test account to Free; manually refunded only the three identified QA usage receipts after verifying their original charged states (8d7f52f8-6cbf-430f-bf0e-c96b5d7a4889, f7304c05-3404-47c2-af05-507911bbb8be, 839ccec4-226c-4583-b24f-d4826ef72aa3). No customer code, AI calls or payments used. Customer AI remains disabled and purchases paused.
 
 Full authenticated queue saturation needs additional independent authenticated test identities. Current connected Supabase tools expose no Auth admin account-provisioning operation, so no disposable identities were created. Induced deployed timeout and live checkout remain unverified. No new source bug was confirmed in these checks; no code change or deployment was needed.
+
+## Pending isolated $19 Checkout user test
+
+Prepared sandbox price price_1UUjHDEKmNfjd7YM96JDwcG9 on the existing Pro product, 1,900 USD cents/month. Checkout cs_test_a1RTV8M4TmMxOojXuPzodPx7nikpfh32y4G5GA7l9UJtheFbGub8WvjIId is open, livemode=false, bound to synthetic customer cus_VVjX1TmjrA3LAw and test account 41284ae1-8a90-4725-91d4-634fb7cfb026 (easystreammovies@gmail.com). Success returns to https://aicodeaudit.org/account; cancellation returns to billing with checkout=cancel. No sandbox payment completed yet.
+
+Existing sandbox destination we_1UUi4rEKmNfjd7YMlFx6u7VX re-enabled; Render sandbox receiver temporarily bound to this user/customer/new price with its existing signing secret. Normal purchases remain paused and live Pro price stays inactive. After the user completes the test: verify the paid sandbox invoice and persisted + browser Pro entitlement, cancel the test subscription, verify Free, disable the sandbox destination and clear its signing secret again. No new API key or infrastructure created.
+
+This connector-created hosted session tests Checkout payment UI, signed subscription-event delivery and account return/display. It does not exercise the app's normal create-checkout-session or checkout-session-status routes, which use the live Stripe client. Those routes remain an explicit release gap; do not call this complete live checkout integration verification.
