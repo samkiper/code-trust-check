@@ -45,3 +45,17 @@ Backend code a36a4be54819492c16c1f90054ede7b253f842f6 passed GitHub accuracy-gat
 Bounded deployed overload check: four concurrent unchanged anonymous examples sent to /scan. One completed (200, complete), three rejected with 429, X-Scan-Rejection=capacity and Retry-After=10. A subsequent single example completed 200. This verifies the synchronous production capacity guard and recovery, not a six-customer authenticated queue saturation test. No AI API requests or customer allowance debits were used.
 
 Sandbox test subscriptions were stopped after testing: success case canceled; failed initial-payment case incomplete_expired. Renewal remains blocked on Stripe dashboard sign-in: connector operation discovery did not expose clock advancement, and the dashboard opened at login. No production keys, payment settings, customer entitlements or AI budget were changed.
+
+## Completed sandbox clock lifecycle (follow-up)
+
+Google sign-in and Stripe MFA completed; browser visibly confirmed AI Code Audit sandbox acct_1TBrsJEKmNfjd7YM. Existing clock clock_1UUgwGEKmNfjd7YMK3zAzal7 advanced through the dashboard, since the connector does not expose clock advancement.
+
+Synthetic subscription sub_1UUhODEKmNfjd7YMqqKBUShs on existing customer cus_VViN3iDRNvL1Pz:
+- Monthly renewal: subscription_cycle invoice in_1UUhQ6EKmNfjd7YMiluRaZ06 generated on November 26 simulated time, then paid 1200 test cents after advancing to November 27.
+- Failed next renewal: switched synthetic customer to the official decline-after-attachment test source. December invoice in_1UUhRIEKmNfjd7YMQaPN7203 remained open, amount_paid=0, attempt_count=1; subscription became past_due.
+- Recovery: restored the original attached pm_card_visa-derived payment method and advanced to January 3. Automatic second attempt paid the same invoice (1200 test cents, attempt_count=2); subscription returned active.
+- Scheduled cancellation: cancel_at_period_end retained active status until January 26. Advancing to February 3 changed subscription to canceled; latest invoice remained the recovered December invoice.
+
+These are actual Stripe sandbox lifecycle results with synthetic customers, not production payments or end-to-end app entitlement tests. They close the provider renewal/recovery/cancellation simulation gap; they do not close webhook delivery, customer plan synchronization, Serious mapping or credit-pack launch gates. Both prior test subscriptions and this new subscription are stopped. Live Stripe configuration, paused purchases, private Site access and customer AI restrictions were not changed.
+
+Read-only sandbox integration inventory: GET /v1/webhook_endpoints returned an empty list (has_more=false). No legacy sandbox webhook endpoint is configured through that API. A separate event destination, if any, has not been verified. Thus Stripe simulation success must not be presented as verified delivery into the deployed scanner or its customer entitlement database. No new webhook, infrastructure or API key was created.
