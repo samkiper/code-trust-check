@@ -1,6 +1,6 @@
 """Narrow Python cross-file evidence prototype; never imports or executes source.
 
-This is not wired into customer reports. Only a direct absolute import of a
+Only a direct absolute import of a
 parameterless synchronous single-return credential getter passed directly into a requests/httpx payload is
 recognized. It is deliberately incomplete and must not be described as whole-app
 analysis. The caller must provide already-selected, bounded source files.
@@ -50,6 +50,12 @@ def getter_exports(tree):
     exports={}
     for node in tree.body:
         if not isinstance(node,ast.FunctionDef):continue
+        # A decorator or another binding can replace the function object. Do
+        # not infer that the imported name still calls this getter in that case.
+        if node.decorator_list:continue
+        if sum(isinstance(other,(ast.FunctionDef,ast.AsyncFunctionDef,ast.ClassDef)) and other.name==node.name for other in ast.walk(tree)) != 1:continue
+        if any(isinstance(other,ast.Name) and isinstance(other.ctx,(ast.Store,ast.Del)) and other.id==node.name for other in ast.walk(tree)):continue
+        if any(isinstance(other,(ast.Import,ast.ImportFrom)) and any((alias.asname or alias.name.split('.')[0])==node.name for alias in other.names) for other in ast.walk(tree)):continue
         if node.args.posonlyargs or node.args.args or node.args.kwonlyargs or node.args.vararg or node.args.kwarg:continue
         body=list(node.body)
         if body and isinstance(body[0],ast.Expr) and isinstance(body[0].value,ast.Constant) and isinstance(body[0].value.value,str):body=body[1:]

