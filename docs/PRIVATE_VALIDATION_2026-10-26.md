@@ -107,3 +107,15 @@ Local real-engine 49,998-line generated Python probe returned partial (Semgrep n
 Stripe live Pro price price_1UUir6EEE0WuIMoRfM4X3i3N created at 1,900 USD cents/month, inactive. No existing subscription migrated or charged. Payments remain paused.
 
 A second local real-engine Python probe within the Site byte cap (49,996 lines, 434,570 bytes) completed in 12.46 seconds with both behavior and Semgrep coverage complete and the intentional dynamic-input finding detected. This is local evidence, not deployed throughput validation.
+
+## Expanded limits: deployed browser validation
+
+Site v41 and backend 3cc8a801c675cb7165d5e6d11856c14d847ce8c0 tested through normal signed-in UI. Existing disposable customer easystreammovies@gmail.com temporarily received Serious plan metadata for capacity validation only (not administrator access, subscription fulfillment or billing evidence). Its original absence of plan metadata was restored afterward.
+
+- Synthetic Python: 49,996 source lines (49,997 in textarea including trailing newline), 434,570 bytes. Deployed queued audit completed with behavior and Semgrep both complete; intentional request-controlled eval at line 49,996 detected. 42,854 meaningful source lines excludes blanks. Usage reservation 08:12:15.870 UTC to downloaded report timestamp 08:12:36.174 UTC: about 20.3 seconds including client polling/rendering, not pure engine timing. Exactly one scan debit observed.
+- Real public django/django repository: 500 of 3,567 supported files selected at Serious cap; report marked partial and omitted score. 175 report findings are untriaged scanner observations, not confirmed Django vulnerabilities. Reservation 08:13:45.394 to report 08:14:04.598: about 19.2 seconds including polling/rendering. One total and one repository allowance consumed. Downloaded JSON parsed successfully (1,195,604 bytes). Repository checks do not trace cross-file flows and do not run the snippet Semgrep path; this result does not establish full application coverage.
+- Second ~50k scan ran while independent samuel.a.kiper@gmail.com customer submitted a small scan. Second customer visibly waited at queue position 1, cancelled while queued, and retained both remaining Free scans. Large scan subsequently completed. This is two-customer production queue/cancellation evidence, not full saturation.
+
+Cleanup: restored the first test account to Free; manually refunded only the three identified QA usage receipts after verifying their original charged states (8d7f52f8-6cbf-430f-bf0e-c96b5d7a4889, f7304c05-3404-47c2-af05-507911bbb8be, 839ccec4-226c-4583-b24f-d4826ef72aa3). No customer code, AI calls or payments used. Customer AI remains disabled and purchases paused.
+
+Full authenticated queue saturation needs additional independent authenticated test identities. Current connected Supabase tools expose no Auth admin account-provisioning operation, so no disposable identities were created. Induced deployed timeout and live checkout remain unverified. No new source bug was confirmed in these checks; no code change or deployment was needed.
