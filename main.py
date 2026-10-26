@@ -26,6 +26,7 @@ import hashlib
 import hmac
 import shutil
 import subprocess
+import sys
 import tempfile
 import difflib
 import time
@@ -34,6 +35,7 @@ import secrets
 import tomllib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from starlette.concurrency import run_in_threadpool
 from html import escape as html_escape
 from dotenv import load_dotenv
 from datetime import date, datetime, timezone, timedelta
@@ -6533,6 +6535,11 @@ def list_github_pull_request_files(full_name: str, pull_request_number: int, tok
         if len(payload) < 100:
             break
         page += 1
+    # The listing is deliberately bounded. Once the limit is reached, an
+    # omitted supported file may exist even if we did not fetch the next page.
+    # Preserve that uncertainty as a coverage gap, not a clean result.
+    if len(changed_files) >= PRO_REPO_FILE_LIMIT or page > 30:
+        changed_files.append({"filename": "", "coverage_gap": "listing_limit"})
     return changed_files
 
 
@@ -6555,12 +6562,44 @@ def scan_github_changed_files(archive: bytes, changed_files: list[dict]) -> tupl
             if not archive_path or zf.getinfo(archive_path).file_size > MAX_PASTED_CODE_BYTES_PRO:
                 files_skipped += 1
                 continue
-            code = zf.read(archive_path).decode("utf-8", errors="ignore")
+            try:
+                code = zf.read(archive_path).decode("utf-8")
+            except UnicodeDecodeError:
+                files_skipped += 1
+                continue
             result = analyze_code("Review this pull request for security risks.", code, plan="pro")
+            if result.get("risk") in {"limit", "limited"}:
+                files_skipped += 1
+                continue
             files_scanned += 1
             for finding in result.get("flags") or []:
                 findings.append((relative_path, finding))
     return findings, files_scanned, files_skipped
+
+
+@limit_scan_capacity
+def scan_github_changed_files_isolated(archive: bytes, changed_files: list[dict]) -> tuple[list[tuple[str, dict]], int, int]:
+    """Run the same static checks in the deadline-bound, secret-minimized worker."""
+    from audit_runtime import AUDIT_TIMEOUT_SECONDS, run_process
+    payload = {
+        "kind": "github_pr",
+        "payload": {"archive": base64.b64encode(archive).decode("ascii"), "changed_files": changed_files},
+        "access": {},
+        "base_url": "http://localhost/",
+    }
+    output = run_process([sys.executable, str(Path(__file__).with_name("audit_worker.py"))], payload, AUDIT_TIMEOUT_SECONDS)
+    try:
+        response = json.loads(output)
+        body = response["body"]
+        if response["status_code"] != 200 or not isinstance(body, dict):
+            raise ValueError()
+        findings = body["findings"]
+        scanned, skipped = body["files_scanned"], body["files_skipped"]
+        if not isinstance(findings, list) or not isinstance(scanned, int) or not isinstance(skipped, int):
+            raise ValueError()
+        return [(str(path), finding) for path, finding in findings], scanned, skipped
+    except (ValueError, KeyError, TypeError):
+        raise RuntimeError("GitHub scanner worker returned an invalid result") from None
 
 
 def github_check_external_id(full_name: str, pull_request_number: int, sha: str) -> str:
@@ -6618,6 +6657,20 @@ def upsert_github_check(
     )
 
 
+class GitHubArchiveRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Never forward an installation token to an arbitrary redirect target."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        parsed = urlparse(newurl)
+        try:
+            valid_port = parsed.port in (None, 443)
+        except ValueError:
+            valid_port = False
+        if (parsed.scheme != "https" or parsed.hostname not in {"api.github.com", "codeload.github.com"}
+                or parsed.username is not None or parsed.password is not None or not valid_port):
+            raise urllib.error.HTTPError(newurl, 403, "Untrusted GitHub archive redirect", headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def download_github_archive(full_name: str, sha: str, token: str) -> bytes:
     request = urllib.request.Request(
         f"https://api.github.com/repos/{quote(full_name, safe='/')}/zipball/{quote(sha, safe='')}",
@@ -6628,7 +6681,11 @@ def download_github_archive(full_name: str, sha: str, token: str) -> bytes:
             "User-Agent": "AI-Code-Audit",
         },
     )
-    with urllib.request.urlopen(request, timeout=30, context=ssl.create_default_context(cafile=certifi.where())) as response:
+    opener = urllib.request.build_opener(
+        GitHubArchiveRedirectHandler(),
+        urllib.request.HTTPSHandler(context=ssl.create_default_context(cafile=certifi.where())),
+    )
+    with opener.open(request, timeout=30) as response:
         data = response.read(MAX_REPOSITORY_ARCHIVE_BYTES + 1)
     if len(data) > MAX_REPOSITORY_ARCHIVE_BYTES:
         raise ValueError("Repository archive exceeds the 25 MB safety limit.")
@@ -6855,8 +6912,11 @@ def build_github_check_output(
         f"**{counts['High']} high · {counts['Medium']} medium · {counts['Notice']} notice**\n\n"
         + (f"Policy enforcement: findings at {policy.get('block_at', 'high')} severity or above block merging. " if enforced else "Monitor-only: this check does not block merging. ")
         + "No code was executed. "
-        f"Scanned {files_scanned} changed supported file(s); skipped {files_skipped}."
+        f"Scanned {files_scanned} changed supported file(s); skipped at least {files_skipped}."
     )
+    summary += " Changed-file behavior checks do not include dependencies, cross-file flows, or snippet Semgrep rules."
+    if files_skipped or not files_scanned:
+        summary += " Coverage is incomplete; skipped files were not analyzed."
     if suppressed_count:
         summary += f" {suppressed_count} reviewed finding(s) were suppressed and remain in the audit history."
     if len(findings) > 50:
@@ -6926,13 +6986,13 @@ def process_github_pull_request(installation_id: int, full_name: str, pull_reque
         )
         changed_files = list_github_pull_request_files(full_name, pull_request_number, token)
         archive = download_github_archive(full_name, sha, token)
-        findings, files_scanned, files_skipped = scan_github_changed_files(archive, changed_files)
+        findings, files_scanned, files_skipped = scan_github_changed_files_isolated(archive, changed_files)
         policy = get_repository_policy(history_user_id, full_name)
         suppressions = get_active_suppressions(history_user_id, full_name)
         serialized_findings = annotate_suppressions(serialize_github_findings(findings), suppressions)
         active_findings = [item for item, serialized in zip(findings, serialized_findings) if not serialized.get("suppressed")]
         suppressed_count = len(findings) - len(active_findings)
-        conclusion = "failure" if policy_blocks(policy, serialized_findings) else "neutral" if active_findings else "success"
+        conclusion = "failure" if policy_blocks(policy, serialized_findings) else "neutral" if active_findings or files_skipped or not files_scanned else "success"
         annotations = []
         for path, finding in active_findings[:50]:
             line = max(1, int(finding.get("line") or 1))
@@ -7364,13 +7424,16 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
             return private_json({"received": True, "ignored": True})
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    background_tasks.add_task(
-        process_github_pull_request,
-        installation_id,
-        full_name,
-        pull_request_number,
-        sha,
-    )
+    entitlement = await run_in_threadpool(github_installation_entitlement, installation_id)
+    user_id = str(entitlement.get("user_id") or "")
+    if not entitlement.get("allowed") or not user_id:
+        return private_json({"received": True, "queued": False, "reason": "installation_not_entitled"}, status_code=403)
+    # Share the same per-account and global queue as interactive audits. The
+    # worker rechecks entitlement when it starts, so a queued job cannot revive
+    # an installation suspended after the webhook arrived.
+    SCAN_JOBS.submit(user_id, lambda: process_github_pull_request(
+        installation_id, full_name, pull_request_number, sha,
+    ))
     return private_json({"received": True, "queued": True})
 
 

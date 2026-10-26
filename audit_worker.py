@@ -1,5 +1,6 @@
 """Trusted one-shot static scanner entrypoint. Never executes customer source."""
 import contextlib
+import base64
 import json
 import sys
 import time
@@ -20,6 +21,12 @@ def execute(message):
         request=Request({'type':'http','method':'POST','path':'/scan-repo','root_path':'',
                          'headers':[],'scheme':base.scheme,'server':(base.hostname,base.port or (443 if base.scheme=='https' else 80))})
         return main.scan_repo_work(main.RepoScanRequest(**message['payload']),access,request)
+    if message['kind']=='github_pr':
+        # Archive bytes arrive over stdin; the worker has no GitHub or billing secrets.
+        from fastapi.responses import JSONResponse
+        archive=base64.b64decode(message['payload']['archive'],validate=True)
+        findings,scanned,skipped=main.scan_github_changed_files(archive,message['payload']['changed_files'])
+        return JSONResponse({'findings':findings,'files_scanned':scanned,'files_skipped':skipped})
     raise ValueError('Invalid audit kind')
 
 

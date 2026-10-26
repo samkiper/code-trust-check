@@ -813,13 +813,13 @@ class GitHubWebhookTests(unittest.TestCase):
                 patch.object(main, "github_installation_token", return_value="token"), \
                 patch.object(main, "list_github_pull_request_files", return_value=[{"filename": "app.py"}]), \
                 patch.object(main, "download_github_archive", return_value=archive.getvalue()), \
-                patch.object(main, "analyze_code", return_value={"flags": [{
+                patch.object(main, "scan_github_changed_files_isolated", return_value=([("app.py", {
                     "line": 1,
                     "severity": 25,
                     "message": "Risk",
                     "why_risky": "This can expose a credential.",
                     "suggested_fix": "Remove the credential from the request.",
-                }]}), \
+                })], 1, 0)), \
                 patch.object(main, "upsert_github_check", return_value={}) as upsert:
             main.process_github_pull_request(1, "owner/repo", 5, "c" * 40)
         final_payload = upsert.call_args_list[-1].args[4]

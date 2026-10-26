@@ -9,11 +9,11 @@ from starlette.requests import Request
 import main
 
 
-def webhook(payload, secret="test-secret", signature=None):
+def webhook(payload, secret="test-secret", signature=None, event="installation"):
     raw=json.dumps(payload).encode()
     signature=signature or "sha256="+hmac.new(secret.encode(),raw,hashlib.sha256).hexdigest()
     async def receive(): return {"type":"http.request","body":raw,"more_body":False}
-    return Request({"type":"http","method":"POST","path":"/github/webhook","headers":[(b"x-github-event",b"installation"),(b"x-hub-signature-256",signature.encode())]},receive)
+    return Request({"type":"http","method":"POST","path":"/github/webhook","headers":[(b"x-github-event",event.encode()),(b"x-hub-signature-256",signature.encode())]},receive)
 
 
 class GitHubLifecycleTests(unittest.TestCase):
@@ -46,3 +46,25 @@ class GitHubLifecycleTests(unittest.TestCase):
             with self.assertRaises(HTTPException) as caught:
                 asyncio.run(main.github_webhook(webhook({"action":"deleted","installation":{"id":123}}),BackgroundTasks()))
             self.assertEqual(caught.exception.status_code,503)
+
+    def test_pull_request_entitlement_and_shared_queue(self):
+        payload={'action':'opened','installation':{'id':123},'repository':{'full_name':'owner/repo'},'number':7,'pull_request':{'head':{'sha':'a'*40}}}
+        with patch.object(main,'GITHUB_WEBHOOK_SECRET','test-secret'), \
+                patch.object(main,'github_installation_entitlement',return_value={'allowed':True,'user_id':'user-1'}), \
+                patch.object(main.SCAN_JOBS,'submit',return_value={'id':'job'}) as submit:
+            response=asyncio.run(main.github_webhook(webhook(payload,event='pull_request'),BackgroundTasks()))
+            self.assertTrue(json.loads(response.body)['queued'])
+            self.assertEqual(submit.call_args.args[0],'user-1')
+            self.assertTrue(callable(submit.call_args.args[1]))
+        with patch.object(main,'GITHUB_WEBHOOK_SECRET','test-secret'), \
+                patch.object(main,'github_installation_entitlement',return_value={'allowed':False}), \
+                patch.object(main.SCAN_JOBS,'submit') as submit:
+            response=asyncio.run(main.github_webhook(webhook(payload,event='pull_request'),BackgroundTasks()))
+            self.assertEqual(response.status_code,403)
+            submit.assert_not_called()
+        with patch.object(main,'GITHUB_WEBHOOK_SECRET','test-secret'), \
+                patch.object(main,'github_installation_entitlement',return_value={'allowed':True,'user_id':'user-1'}), \
+                patch.object(main.SCAN_JOBS,'submit',side_effect=HTTPException(429,'queue full')):
+            with self.assertRaises(HTTPException) as caught:
+                asyncio.run(main.github_webhook(webhook(payload,event='pull_request'),BackgroundTasks()))
+            self.assertEqual(caught.exception.status_code,429)
