@@ -27,3 +27,17 @@ Backend and Site test results, database transaction checks, and deployment ident
 Local verification completed: 221 backend tests, 117 Site tests, targeted TypeScript check and production build passed. Real-engine tests include 5 new regression methods covering multiple safe/unsafe cases. Database transactions verified quota enforcement after removal of the shared dollar cutoff; all test account/ledger changes rolled back.
 
 The pinned accuracy gate passed (65 internal, 750 OWASP and 300 neutral-intent holdout cases); committed benchmark report remains unchanged. This gate assesses behavior rules, while the new regression suite separately exercises real Semgrep. Global saved-storage cutoff removed; per-account constraints retained. Sharing recipient regex corrected to match valid email addresses; transactional sharing/revocation tests passed.
+
+### Signed-in production verification — October 26, 2026
+
+The secure credential prompt successfully authenticated the existing non-administrator customer test account after the manual cloud-browser handoff repeatedly failed. The restored browser session retained authentication. The account was Free with two scans remaining before these checks.
+
+- The inline confirmation displayed Keep editing and Start audit. Keep editing retained source and did not consume allowance.
+- A three-line JavaScript fixture combined a fixed HTTPS fetch with URL input displayed through `textContent`. The deployed scanner (version 33) returned complete behavior and Semgrep coverage, zero findings, and no intent warning.
+- The paired fixture changed only `textContent` to `innerHTML`. Both engines completed; the report identified one high-severity `javascript.url-to-html` finding on line 3 and displayed the correct source excerpt.
+- Both custom scans consumed one allowance each; the account now has zero ordinary scans remaining this period. Built-in samples remain available.
+- JSON and text downloads completed. Parsed JSON matched the visible result, included coverage and all findings, and omitted echoed source and account metadata. The unsafe JSON also contained the expected line-3 finding.
+- Editing source visibly marked the previous result as stale. The Free saving UI explained that Pro or Serious is required and left downloads available.
+- Basic comparison correctly identified the unintended total-calculation change and the requested button-label change. Free AI status returned zero allowance and explained the paid-plan requirement.
+
+These are desktop browser checks against the deployed scanner, not phone-width or production-capacity evidence. No provider AI request, subscription change or payment occurred. An attempted temporary Pro test entitlement was rejected by automatic approval review before mutation; the account remains Free. Paid AI and new-report saving tests require explicit owner approval for a temporary non-admin test grant and restoration to Free. The rejection must not be bypassed with another entitlement path.
