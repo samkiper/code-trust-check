@@ -25,3 +25,5 @@ Keep the Site owner-private and purchases paused until the launch gates below pa
 Backend and Site test results, database transaction checks, and deployment identifiers are recorded in the release completion entry. Local/mocked/provider/live tests must be distinguished. No automatic public launch or purchase activation.
 
 Local verification completed: 221 backend tests, 117 Site tests, targeted TypeScript check and production build passed. Real-engine tests include 5 new regression methods covering multiple safe/unsafe cases. Database transactions verified quota enforcement after removal of the shared dollar cutoff; all test account/ledger changes rolled back.
+
+The pinned accuracy gate passed (65 internal, 750 OWASP and 300 neutral-intent holdout cases); committed benchmark report remains unchanged. This gate assesses behavior rules, while the new regression suite separately exercises real Semgrep. Global saved-storage cutoff removed; per-account constraints retained. Sharing recipient regex corrected to match valid email addresses; transactional sharing/revocation tests passed.

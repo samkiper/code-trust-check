@@ -35,11 +35,11 @@ returns jsonb language plpgsql security invoker set search_path='' as $$
 declare ident jsonb; tier text; rid uuid; pid uuid; item public.aca_reports; mail text; days int; cap int; payload jsonb;
 begin
  ident:=audit_private.workspace_identity(p_user); tier:=ident->>'plan';
- if ident is null then return jsonb_build_object('ok',false,'error','Sign in to view saved work.'); end if;
+ if ident is null or ident->>'email' is null then return jsonb_build_object('ok',false,'error','Sign in to view saved work.'); end if;
  if jsonb_typeof(p_body)!='object' then return jsonb_build_object('ok',false,'error','Invalid workspace request.'); end if;
  days:=case when tier in ('serious','admin') then 365 when tier='pro' then 30 else 0 end;
  cap:=case when tier in ('serious','admin') then 200 else 50 end;
- -- A global transaction lock prevents concurrent saves from racing storage limits.
+ -- A transaction lock prevents concurrent saves from racing per-account limits.
  perform pg_advisory_xact_lock(60129101);
  -- Expired data is inaccessible immediately and purged on the next workspace operation.
  delete from public.aca_reports where expires_at<=now() or deleted_at<=now()-interval '7 days';
@@ -84,7 +84,6 @@ begin
   if jsonb_typeof(payload) is distinct from 'object' or octet_length(payload::text)>262144 then return jsonb_build_object('ok',false,'error','Report must be an object smaller than 256 KB. Download larger reports instead.'); end if;
   if pid is not null and not exists(select 1 from public.aca_projects where id=pid and user_id=p_user) then return jsonb_build_object('ok',false,'error','Project unavailable.'); end if;
   if (select count(*) from public.aca_reports where user_id=p_user)>=cap then return jsonb_build_object('ok',false,'error','Saved report capacity reached. Download reports or wait for expired/trash reports to be removed.'); end if;
-  if (select coalesce(sum(octet_length(stored.payload::text)),0) from public.aca_reports stored)+octet_length(payload::text)>100000000 then return jsonb_build_object('ok',false,'error','Saved history storage is temporarily full. Download this report to keep a copy.'); end if;
   insert into public.aca_reports(user_id,project_id,title,kind,payload,expires_at) values(p_user,pid,trim(p_body->>'title'),p_body->>'kind',payload,now()+make_interval(days=>days)) returning id into rid;
   return jsonb_build_object('ok',true,'id',rid);
  end if;

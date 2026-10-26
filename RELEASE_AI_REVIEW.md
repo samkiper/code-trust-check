@@ -39,3 +39,5 @@ Scanner corrections: bounded call-argument extraction; Python credential trackin
 ## Owner update — remove global spending cutoff
 
 October 26, 2026: owner explicitly requested removal of the shared $25 cap. Cost reporting and conservative per-request accounting remain; the global dollar cutoff is removed. Per-account monthly allowances, one in-flight request/account, duplicate protection, source/output bounds, no automatic provider retry, and failed-review allowance refunds remain. Existing prices/allowances are unchanged. Previous references above to the $25 cap describe historical private validation, not the current policy.
+
+The shared 100 MB saved-history cutoff was also removed under the owner’s request to remove shared preview cutoffs. Per-account report count, per-report size, expiry and sharing limits remain. A rolled-back live-database transaction verified synthetic report saving, unshared access denial, malformed-email rejection, valid sharing and revocation. No test report, grant, or plan change persisted.
