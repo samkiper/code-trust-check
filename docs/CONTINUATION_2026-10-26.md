@@ -46,3 +46,20 @@ Backend `3bff96727e6d6c1362398ebb2921ffd81af4be77`, Render `dep-dbfrm5nb9u1s739l
 - Saved AI reports expose verdict, source line numbers, evidence labels and limitations outside raw JSON. Saved static reports expose engine/coverage status, scanner version, action and limitations. UI fixes preserve the full downloaded report.
 - UI refreshes usage every five seconds while pending work exists after the user stops waiting, and offers a manual refresh. Coverage separates meaningful and submitted lines.
 - These prepared changes require private deployment and fresh changed-path browser checks. See the checklist for remaining capabilities and cleanup.
+
+## Scanner 36 / Site 51 release and entitlement checks
+
+Scanner 36: `4b69ecd172ed2426f130a60a1d221202a8bab5df`, CI check `121845626792` succeeded, Render `dep-dbfrvj49v7es73fl7uv0` live at 21:03:30 UTC. Site 51: `51bbf1a7125d3baf1b1b36d6b598f76520e43b74`, `appgdep_6adfbfbe0480819194fe37368d75a7e9`, succeeded 21:01:55 UTC. Scoped TypeScript, production build and 120 frontend tests passed.
+
+- Saved static report reopened: action, scanner 35, complete behavior/Semgrep engines, unchecked dependencies and limitations visible. Saved JSON downloaded and parsed (11,148 bytes, two findings). Saved AI view now visibly includes verdict, before/after line evidence, notice and both limitations.
+- Existing session refreshed authorized plan changes Serious → Pro → Free → Serious. Pro AI availability showed 1/25 before a stop-waiting test; Free removed AI submission and saving, with clear paid-plan explanations, while local comparison/download remained enabled. No login bypass or administrator privilege. Free AI reserve and save rejection also verified with rolled-back SQL calls. Pro oversized save rejected at 256 KB via rolled-back database test; browser boundary check remains separate.
+- Pro provider stop-waiting: receipt `ef2baad9-868d-4dad-a702-9daccd54bf85` completed despite client cancellation, 983 input / 301 output tokens, 2,092 micro-USD ($0.002092). UI accepted no AI result, retained the warning and local comparison, automatically refreshed to 2/25 and re-enabled eligible review. This is a successful accounting/cancellation check, not a reviewed provider-output assessment.
+- Serious restored with the same marker for remaining paid checks. Ordinary usage unchanged, AI usage 2/100. Final billing-aware Free cleanup still required.
+
+## Repository coverage and worker hardening prepared for scanner 37
+
+Deep review confirmed that a repository file exceeding its per-file line allowance could be counted as meaningful coverage even when behavior analysis refused it. Such files now remain listed as coverage gaps, receive no fabricated risk points, and do not count as analyzed. Mixed repositories are partial; wholly unscanned repositories are not rated. Invalid UTF-8 is no longer silently discarded to manufacture valid source. Aggregate behavior summaries no longer claim no major risks when findings exist. Tests use in-memory mocked ZIP downloads with the real behavior/parser path; no deployed repository fixture claimed yet.
+
+Worker subprocesses previously inherited all application environment variables and the customer's full account/billing metadata. The worker now receives only plan/limits, a narrow runtime/scanner environment, and no dotenv reload. Real subprocess tests verify exclusion of synthetic secrets and preservation of findings. This reduces unnecessary secret exposure; it is not an OS sandbox or a claim that parser exploitation is impossible. Submitted source remains unexecuted.
+
+238 backend tests passed, including real worker/process termination and separate-customer queue tests. Semgrep CLI parity again passed 72 fixtures / 31 findings / 61 targets, no errors. The queue, quota transaction and overall deadline algorithms remain unchanged from recorded deployed seven-customer saturation and fault recovery. Current larger scans/started cancellation and Pro AI stop-waiting supplement that history; no fresh multi-customer saturation or forced-timeout claim.

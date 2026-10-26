@@ -41,7 +41,8 @@ from urllib.parse import urlparse, quote, urlencode
 import stripe
 import jwt
 
-load_dotenv()
+if os.getenv("AUDIT_ISOLATED_WORKER") != "1":
+    load_dotenv()
 
 app = FastAPI()
 
@@ -265,7 +266,7 @@ GITHUB_LINK_STATE_SECRET = os.getenv("GITHUB_LINK_STATE_SECRET", "").strip() or 
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "").strip()
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 
-SCANNER_VERSION = 36
+SCANNER_VERSION = 37
 AUDIT_SCORE_HIGH_RISK_MAX = 65
 AUDIT_SCORE_REVIEW_MAX = 90
 
@@ -7698,14 +7699,19 @@ def scan_repo_work(req,access,request):
             try:
                 with zf.open(file_name) as file:
                     raw = file.read()
-                    code_text = raw.decode("utf-8", errors="ignore")
+                    code_text = raw.decode("utf-8")
             except Exception:
                 continue
 
             result = analyze_code(req.intent, code_text, plan=access["plan"])
             source_coverage = inspect_source(code_text, file_name)
+            if result.get("risk") in {"limit", "limited"}:
+                source_coverage.update(meaningful_coverage=False, executable_lines=0,
+                    analysis_status="limit", limitation=result["summary"])
             weight = file_weight_for_repo(file_name)
-            weighted_file_points = weighted_repository_file_points(file_name, result["risk_points"])
+            # A skipped file is a coverage gap, not a fabricated risk finding.
+            points = 0 if result.get("risk") in {"limit", "limited"} else result["risk_points"]
+            weighted_file_points = weighted_repository_file_points(file_name, points)
             repo_weighted_points.append(weighted_file_points)
 
             files_scanned.append({
@@ -7795,9 +7801,8 @@ def scan_repo_work(req,access,request):
         if dep_summary_line not in all_behavior_summary:
             all_behavior_summary.append(dep_summary_line)
 
-    if files_scanned and not dependency_findings:
-        if "No major code-behavior risks were detected in the scanned files." not in all_behavior_summary:
-            all_behavior_summary.append("No major code-behavior risks were detected in the scanned files.")
+    if files_scanned and not coverage_partial and not any(f["flags"] for f in files_scanned):
+        all_behavior_summary.append("No supported code-behavior risk signals were detected in the analyzed files.")
 
     if dependency_findings:
         line = "Dependency vulnerability findings were also detected in manifest files."
@@ -7875,7 +7880,8 @@ def scan_repo_work(req,access,request):
         "trust_score": trust_score,
         "trust_badge": {"label":repo_verdict["label"], "message":repo_verdict["action"], "color":"red" if overall_risk=="red" else "gray" if repo_status!="complete" else "green"},
         "readme_badge": generate_readme_badge(str(request.base_url), owner, repo, trust_score, overall_risk) if trust_score is not None else None,
-        "files_scanned_count": len(files_scanned),
+        "files_scanned_count": meaningful_files,
+        "files_inspected_count": len(files_scanned),
         "files_available_count": files_available_count,
         "files_scanned_limit": repo_file_limit if repo_file_limit is not None else "Unlimited",
         "coverage_partial": coverage_partial,
@@ -7889,12 +7895,12 @@ def scan_repo_work(req,access,request):
         "coverage": repo_coverage,
         "evidence": evidence,
         "analysis_engines": [
-            {"name": "behavior", "status": "complete", "findings": len(flattened_repo_flags)},
+            {"name": "behavior", "status": "partial" if coverage_partial else "complete", "findings": len(flattened_repo_flags)},
             {"name": "dependency-advisories", "status": "complete" if not dependency_scan.get("dependency_scan_error") else "partial", "findings": len(dependency_findings)},
         ],
         "dynamic_sandbox": {"status": "not_enabled", "reason": "Repository code is inspected but never executed."},
-        "behavior_summary": all_behavior_summary or ["No obvious risky behavior was detected in this repo scan."],
-        "summary": f"Weighted repo scan completed across {len(files_scanned)} files.",
+        "behavior_summary": all_behavior_summary or ["Meaningful behavior coverage was not established. Review the per-file limits and parser status."],
+        "summary": f"Repository review established meaningful behavior coverage for {meaningful_files} of {files_available_count} supported files.",
         "risk_points": round(normalized_repo_points, 2),
         "highest_file_risk": highest_file_risk,
         "files": files_scanned,
@@ -7955,7 +7961,7 @@ def github_repo_badge_svg(owner: str, repo: str):
                     try:
                         with zf.open(file_name) as file:
                             raw = file.read()
-                            code_text = raw.decode("utf-8", errors="ignore")
+                            code_text = raw.decode("utf-8")
                     except Exception:
                         continue
 

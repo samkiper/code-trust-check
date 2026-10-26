@@ -7,7 +7,7 @@ Legend: `[x]` verified this continuation; `[ ]` unfinished. Historical evidence 
 ## Current state and protected decisions
 - [x] Current handoff and mapped customer/AI/billing/chronological documentation read.
 - [x] Cloud browser recovered; private-site ChatGPT sign-in succeeded.
-- [x] Site owner-only: one owner, no visitors/groups; current Site version 50.
+- [x] Site owner-only: one owner, no visitors/groups; current Site version 51.
 - [x] Designated marked customer confirmed in UI and database, non-admin Serious, original canceled billing metadata and launch marker intact.
 - [x] Billing page confirms new purchases paused.
 - [x] Backend diagnostic fix `063f58210209261ff96ca1247fac178ffd907746` / `dep-dbfrf8bncjis738kblhg` verified live; frontend source `bb652696ad90d9c692efb67eda6f969bcbbfa7b4` opened through Sites.
@@ -15,10 +15,13 @@ Legend: `[x]` verified this continuation; `[ ]` unfinished. Historical evidence 
 
 ## Paid customer workflows
 - [x] One deployed non-admin provider AI comparison: explicit consent, grounded evidence, request scope, allowance and cost settlement.
-- [ ] AI duplicate/running/error recovery and refreshed availability (mark mocked/database/provider evidence separately).
-- [ ] Pro and Serious permissions, Free denial, live access refresh.
+- [x] Real provider error refunds, running/reentry controls and Pro stop-waiting settlement/availability recovery. Duplicate receipt protection remains database/mocked evidence.
+- [x] Pro/Serious AI allowances and Free AI/save denial refreshed in an existing customer session.
+- [ ] Pro save success and remaining paid GitHub permissions.
 - [x] AI comparison save/reopen/direct and saved JSON downloads parsed.
-- [ ] Static report reopen/download and report-size boundary errors.
+- [x] Static report reopen/download parsed; coverage/limitations visible.
+- [x] Oversize saved report rejected by deployed database in rolled-back test.
+- [ ] Browser report-size boundary error.
 - [x] Deployed comparison save/reopen and direct comparison JSON download. Saved-report download event observed; downloaded bytes not yet verified.
 - [x] Project creation/assignment/filtering, trash/restore preserves assignment.
 - [ ] Second-customer browser isolation (database authorization checks passed).
@@ -32,8 +35,8 @@ Legend: `[x]` verified this continuation; `[ ]` unfinished. Historical evidence 
 - [x] Scanner-35 deployed unsent/sent Request pair, precise line/evidence.
 - [ ] Additional current credential, HTML and branch-overwrite pairs.
 - [x] Bounded deployed 20k/50k branching fixtures and correct allowance settlement (scanner 35; no sustained capacity claim).
-- [ ] Review distinct-customer queue/overflow/isolation/cancellation against changes; historical seven-customer saturation recorded in controlled billing report.
-- [ ] Review timeout cleanup/accounting against changes; historical deployed engine and whole-worker fault injections remain recorded.
+- [x] Reviewed unchanged distinct-customer queue/overflow/isolation/cancellation logic; local tests pass, historical seven-customer saturation retained explicitly.
+- [x] Reviewed timeout cleanup/accounting; real local process tests pass. Historical deployed fault recovery retained; worker environment hardening needs deployed check.
 - [ ] Sustained-load limits and multi-instance limitations documented without unsupported capacity claims.
 - [ ] Deep source review: aliases/scopes/overwrites, source-to-sink accuracy, malformed/adversarial inputs, false positives/misses.
 - [ ] Auth/ownership/RLS, source/log privacy, atomic quotas, queue lifecycle, AI grounding and billing consistency review.

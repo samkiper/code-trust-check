@@ -29,10 +29,26 @@ def validation_stall_enabled(payload):
             and hmac.compare_digest(digest,hashlib.sha256(code.encode()).hexdigest()))
 
 
+def scanner_environment():
+    # Only runtime and scanner configuration belong in parsing workers. Payment,
+    # Auth, GitHub and AI secrets remain in the web process.
+    allowed = {
+        'PATH', 'HOME', 'TMPDIR', 'TMP', 'TEMP', 'LANG', 'LC_ALL', 'TZ',
+        'VIRTUAL_ENV', 'PYTHONPATH', 'PYTHONHOME', 'LD_LIBRARY_PATH',
+        'SSL_CERT_FILE', 'SSL_CERT_DIR', 'REQUESTS_CA_BUNDLE',
+        'SEMGREP_ENABLED', 'SEMGREP_BUDGET_SECONDS',
+        'SEMGREP_FIRST_ATTEMPT_SECONDS', 'SEMGREP_NATIVE_CLI',
+        'SCAN_TIMEOUT_VALIDATION_SHA256', 'SCAN_TIMEOUT_VALIDATION_EXPIRES',
+        'AUDIT_DEADLINE_VALIDATION_SHA256', 'AUDIT_DEADLINE_VALIDATION_EXPIRES',
+    }
+    return {**{key: value for key, value in os.environ.items() if key in allowed},
+            'AUDIT_ISOLATED_WORKER': '1', 'SEMGREP_SEND_METRICS': 'off'}
+
+
 def run_process(command, payload, timeout):
     process=subprocess.Popen(command,stdin=subprocess.PIPE,stdout=subprocess.PIPE,
                              stderr=subprocess.DEVNULL,start_new_session=True,
-                             env={**os.environ,'AUDIT_ISOLATED_WORKER':'1'})
+                             env=scanner_environment())
     try:
         output,_=process.communicate(json.dumps(payload).encode(),timeout=timeout)
         if process.returncode:
@@ -53,7 +69,7 @@ def run_process(command, payload, timeout):
 def run_audit_process(kind, payload, access, base_url='http://localhost/'):
     timeout=1 if validation_stall_enabled(payload) else AUDIT_TIMEOUT_SECONDS
     output=run_process([sys.executable,str(Path(__file__).with_name('audit_worker.py'))],
-                       {'kind':kind,'payload':payload,'access':access,'base_url':base_url},timeout)
+                       {'kind':kind,'payload':payload,'access':{key: access[key] for key in ('plan','limits') if key in access},'base_url':base_url},timeout)
     try:
         result=json.loads(output)
         status=result['status_code'];body=result['body']

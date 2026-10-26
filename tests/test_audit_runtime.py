@@ -11,11 +11,24 @@ from unittest.mock import patch
 from fastapi import HTTPException
 from starlette.requests import Request
 import main
-from audit_runtime import run_process,run_audit_process,validation_stall_enabled
+from audit_runtime import run_process,run_audit_process,validation_stall_enabled,scanner_environment
 from scan_jobs import ScanJobs
 from scan_capacity import limit_scan_capacity
 
 class AuditRuntimeTests(unittest.TestCase):
+    def test_worker_environment_excludes_secrets_and_unknown_variables(self):
+        with patch.dict(os.environ,{'PATH':'/bin','SUPABASE_SECRET_KEY':'not-a-real-key','STRIPE_SECRET_KEY':'test','GITHUB_PRIVATE_KEY':'test','OPENAI_API_KEY':'test','FUTURE_SECRET':'test','SEMGREP_BUDGET_SECONDS':'40'},clear=True):
+            env=scanner_environment()
+            self.assertEqual(set(env),{'PATH','SEMGREP_BUDGET_SECONDS','AUDIT_ISOLATED_WORKER','SEMGREP_SEND_METRICS'})
+            output=run_process([sys.executable,'-c','import os,json;print(json.dumps(sorted(os.environ)))'],{},2)
+            self.assertFalse(any('SECRET' in name or 'API_KEY' in name or 'PRIVATE_KEY' in name for name in json.loads(output)))
+
+    def test_worker_payload_omits_account_and_billing_metadata(self):
+        access={'plan':'pro','limits':main.get_plan_limits('pro'),'email':'private@example.test','user_id':'private-id','app_metadata':{'stripe_customer_id':'private-customer'}}
+        with patch('audit_runtime.run_process',return_value=b'{"status_code":200,"body":{}}') as run:
+            run_audit_process('code',{'code':'print(1)'},access)
+        self.assertEqual(set(run.call_args.args[1]['access']),{'plan','limits'})
+
     def test_actual_deadline_stops_busy_worker_and_descendant(self):
         with tempfile.TemporaryDirectory() as folder:
             marker=Path(folder)/'orphan'

@@ -85,3 +85,42 @@ class RepositoryCoverageTests(unittest.TestCase):
             with patch.object(main,'run_audit_process',side_effect=lambda kind,payload,access,*args:main.scan_repo_work(main.RepoScanRequest(**payload),access,request)),patch.object(main,'get_request_access_context',return_value=access),patch.object(main,'enrich_access_with_admin_metadata',side_effect=lambda x:x),patch.object(main,'enforce_rate_limit'),patch.object(main,'download_repo_zip',return_value=archive.getvalue()):
                 response=main.scan_repo(main.RepoScanRequest(intent='Review code',repo_url='https://github.com/example/repo'),request)
             result=json.loads(response.body);self.assertEqual(result['scan_status'],expected);self.assertIsNone(result['trust_score'])
+
+
+    def repository(self, files, plan='free'):
+        import io, zipfile
+        from starlette.requests import Request
+        archive=io.BytesIO()
+        with zipfile.ZipFile(archive,'w') as z:
+            for name,code in files.items():z.writestr('repo-main/'+name,code)
+        access={'plan':plan,'limits':main.get_plan_limits(plan)}
+        request=Request({'type':'http','method':'POST','path':'/scan-repo','headers':[],'scheme':'https','server':('test',443)})
+        with patch.object(main,'download_repo_zip',return_value=archive.getvalue()):
+            return json.loads(main.scan_repo_work(main.RepoScanRequest(intent='Review code',repo_url='https://github.com/example/repo'),access,request).body)
+
+    def test_repository_over_line_limit_is_not_rated_or_counted_as_analyzed(self):
+        large='x=1\n'*2001
+        for files,status,count in [({'large.py':large},'not-rated',0),({'large.py':large,'small.py':'print(1)'},'partial',1)]:
+            r=self.repository(files)
+            self.assertEqual(r['scan_status'],status)
+            self.assertIsNone(r['trust_score'])
+            self.assertEqual(r['files_scanned_count'],count)
+            self.assertEqual(r['coverage']['files_analyzed'],count)
+            self.assertEqual(r['analysis_engines'][0]['status'],'partial')
+            gap=next(f for f in r['files'] if f['file'].endswith('large.py'))
+            self.assertFalse(gap['coverage']['meaningful_coverage'])
+            self.assertEqual(gap['coverage']['analysis_status'],'limit')
+            self.assertEqual(gap['weighted_risk_points'],0)
+
+    def test_repository_does_not_discard_invalid_bytes_and_claim_complete(self):
+        r=self.repository({'broken.py':b'print(1)\xff','valid.py':'print(2)'})
+        self.assertEqual(r['scan_status'],'partial')
+        self.assertEqual(r['files_scanned_count'],1)
+        self.assertEqual(r['files_available_count'],2)
+        self.assertIsNone(r['trust_score'])
+
+    def test_repository_high_findings_do_not_get_no_major_risk_summary(self):
+        r=self.repository({'unsafe.py':'value=input()\neval(value)'})
+        self.assertEqual(r['verdict']['id'],'do_not_run')
+        self.assertTrue(r['files'][0]['flags'])
+        self.assertFalse(any('No major code-behavior risks' in x or 'No supported code-behavior risk' in x for x in r['behavior_summary']))
