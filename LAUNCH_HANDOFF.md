@@ -2,6 +2,10 @@
 
 Checkpoint: October 26, 2026. This document consolidates the owner's latest decisions and the recorded verification history. Read it before older release notes. Verify live state before changing it; a checkpoint is not proof that a deployment or configuration has remained unchanged.
 
+## Active continuation update
+
+Read `docs/LAUNCH_CHECKLIST.md` and `docs/CONTINUATION_2026-10-26.md` first for progress after this checkpoint. The cloud browser recovered; the original browser-blocker section below is historical. Paid customer checks found AI evidence validation failures, now under repair. The temporary customer grant remains until paid verification and billing-aware cleanup are complete.
+
 ## Goal and operating instructions
 
 Continue the existing project to customer-launch readiness, including the requested customer capabilities and future-feature work. Work independently on authorized fixes, tests and private deployments. Pause only for secure sign-in, a genuine missing business decision, or an actual tool/approval block. Keep an explicit checklist so unfinished features do not disappear from scope. Do not declare the entire project complete from a passing test suite.

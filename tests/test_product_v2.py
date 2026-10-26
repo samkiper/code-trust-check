@@ -59,9 +59,9 @@ class ProductIntegrityV20Tests(unittest.TestCase):
 
     def test_oauth_installation_listing_keeps_only_this_github_app(self):
         responses = [
-            {"login": "samkiper"},
+            {"login": "samkiper", "id": 101},
             {"installations": [
-                {"id": 10, "app_id": 123, "account": {"login": "samkiper"}},
+                {"id": 10, "app_id": 123, "account": {"login": "samkiper", "id": 101, "type": "User"}},
                 {"id": 20, "app_id": 999, "account": {"login": "someone-else"}},
             ]},
         ]
@@ -84,6 +84,41 @@ class ProductIntegrityV20Tests(unittest.TestCase):
         self.assertEqual(response.status_code, 303)
         self.assertIn("github=connected", response.headers["location"])
         self.assertIn("github_account=samkiper", response.headers["location"])
+
+    def test_installation_link_requires_oauth_even_with_valid_state(self):
+        access = {"authenticated": True, "user_id": "user-1", "plan": "serious"}
+        with patch.object(main, "GITHUB_LINK_STATE_SECRET", "state-secret"), \
+                patch.object(main, "GITHUB_CLIENT_ID", "client-id"), \
+                patch.object(main, "GITHUB_CLIENT_SECRET", "client-secret"), \
+                patch.object(main, "get_request_access_context", return_value=access), \
+                patch.object(main, "enrich_access_with_admin_metadata", side_effect=lambda a: a), \
+                patch.object(main, "enforce_rate_limit"), \
+                patch.object(main, "github_api_request") as api, \
+                patch.object(main, "save_github_installation_link") as save:
+            state = main.create_github_install_state("user-1")
+            request = Request({"type": "http", "headers": []})
+            response = main.link_github_installation(main.GitHubInstallationLinkRequest(installation_id=99999, state=state), request)
+        body = json.loads(response.body)
+        self.assertFalse(body["linked"])
+        self.assertTrue(body["authorization_required"])
+        self.assertTrue(body["url"].startswith("https://github.com/login/oauth/authorize?"))
+        api.assert_not_called()
+        save.assert_not_called()
+
+    def test_installation_access_never_expands_member_repository_permissions(self):
+        user = {"id": 101}
+        self.assertTrue(main.github_user_owns_installation(user, {"account": {"type": "User", "id": 101}}, "token"))
+        self.assertFalse(main.github_user_owns_installation(user, {"account": {"type": "User", "id": 102}}, "token"))
+        org = {"account": {"type": "Organization", "login": "example"}}
+        for role, state, allowed in [("member", "active", False), ("admin", "pending", False), ("admin", "active", True)]:
+            with patch.object(main, "github_api_request", return_value={"role": role, "state": state}):
+                self.assertEqual(main.github_user_owns_installation(user, org, "token"), allowed)
+
+    def test_serious_account_has_github_pull_request_entitlement(self):
+        with patch.object(main, "GITHUB_ENFORCE_PRO", True), \
+                patch.object(main, "supabase_rest_request", return_value=[{"user_id": "user-1"}]), \
+                patch.object(main, "get_supabase_admin_user", return_value={"app_metadata": {"plan": "serious"}}):
+            self.assertTrue(main.github_installation_entitlement(123)["allowed"])
 
     def test_oauth_callback_rejects_invalid_state_before_exchanging_code(self):
         with patch.object(main, "GITHUB_LINK_STATE_SECRET", "state-secret"), \

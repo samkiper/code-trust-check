@@ -42,15 +42,26 @@ Security impacts must be grounded in source, data flow and destination evidence.
 variable reads, comments, expected network calls and fixed commands with shell=False are not
 by themselves vulnerabilities. eval executes code expressions, not necessarily OS commands.
 Identify removed authentication/authorization checks and credential exfiltration where supported.
-Quote exact substrings from that change's before/after text as evidence (empty string only if
-that side is empty). Do not invent scores, confidence percentages, test results or safe-code
-certifications. Mention missing surrounding context and that no code was executed.'''
+Select before_evidence and after_evidence using an exact evidence ID from that change's
+provided before_evidence_options and after_evidence_options (empty string only for an empty
+side). These fields contain IDs, never retyped code. Choose the excerpt that supports your
+explanation; the server will attach its exact source text. Review ALL edits even when several
+excerpts are supplied. Include a nonempty summary and at least one limitation. Do not invent
+scores, confidence percentages, test results or safe-code certifications. Mention missing
+surrounding context and that no code was executed.'''
 
 class InvalidInput(ValueError): pass
 class InvalidResult(ValueError):
     def __init__(self, message, code='invalid_report'):
         super().__init__(message)
         self.code = code
+
+def evidence_options(text, change_id, side):
+    # Exact contiguous source slices, not model-authored quotations. Bound each
+    # displayed excerpt while retaining every character in the provider input.
+    if not text: return [{'id':'','text':''}]
+    return [{'id':f'{side}{change_id}:{i//2000+1}', 'text':text[i:i+2000]}
+            for i in range(0,len(text),2000)]
 
 def prepare(body):
     if not isinstance(body, dict): raise InvalidInput('Invalid comparison request.')
@@ -66,10 +77,20 @@ def prepare(body):
     for tag,i,j,k,l in difflib.SequenceMatcher(None,a,b,autojunk=False).get_opcodes():
         if tag!='equal': blocks.append({'change_id':len(blocks)+1,'before_line':i+1,'after_line':k+1,'before':'\n'.join(a[i:j]),'after':'\n'.join(b[k:l])})
     if len(blocks)>30: raise InvalidInput('AI review supports up to 30 changed blocks. Compare a smaller file; the basic tool still shows every change.')
+    evidence_blocks=[]
+    for block in blocks:
+        evidence_blocks.append({'change_id':block['change_id'], 'before_line':block['before_line'], 'after_line':block['after_line'],
+            'before_evidence_options':evidence_options(block['before'],block['change_id'],'b'),
+            'after_evidence_options':evidence_options(block['after'],block['change_id'],'a')})
+    schema=Review.model_json_schema()
+    if blocks:
+        fields=schema['$defs']['ChangeReview']['properties']
+        for side in ('before','after'):
+            fields[side+'_evidence']['enum']=list(dict.fromkeys(option['id'] for block in evidence_blocks for option in block[side+'_evidence_options']))
     payload={'model':MODEL,'store':False,'service_tier':'default','max_output_tokens':MAX_OUTPUT,
         'reasoning':{'effort':'low'},'instructions':INSTRUCTIONS,
-        'input':json.dumps({'intended_change':intent,'original_code':before,'revised_code':after,'changed_blocks':blocks},ensure_ascii=False),
-        'text':{'format':{'type':'json_schema','name':'change_review','strict':True,'schema':Review.model_json_schema()}}}
+        'input':json.dumps({'intended_change':intent,'original_code':before,'revised_code':after,'changed_blocks':evidence_blocks},ensure_ascii=False),
+        'text':{'format':{'type':'json_schema','name':'change_review','strict':True,'schema':schema}}}
     encoded=json.dumps(payload,ensure_ascii=False).encode()
     if len(encoded)>80000: raise InvalidInput('This comparison exceeds the AI request size limit. Try a smaller file.')
     return payload,blocks
@@ -96,9 +117,11 @@ def validate_response(response,blocks):
         block=expected[r['change_id']]
         if not r['explanation'].strip() or len(r['explanation'])>4000: raise InvalidResult('Invalid explanation.', 'explanation')
         for side in ('before','after'):
-            quote=r[side+'_evidence']
-            if (block[side] and not quote.strip()) or len(quote)>4000 or quote not in block[side]:
+            selection=r[side+'_evidence']
+            options={o['id']:o['text'] for o in evidence_options(block[side],block['change_id'],side[0])}
+            if selection not in options:
                 raise InvalidResult('AI evidence did not match the supplied code. No assessment is available.', 'evidence_mismatch')
+            r[side+'_evidence']=options[selection]
         r['before_line']=block['before_line'];r['after_line']=block['after_line']
     result['changes'].sort(key=lambda r:r['change_id'])
     result['state']='complete'

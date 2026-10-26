@@ -85,6 +85,19 @@ def credential_flows(code, intent, affirmative):
                 if isinstance(stmt, ast.If) and isinstance(stmt.test, ast.Constant):
                     aliases, values = block(stmt.body if stmt.test.value else stmt.orelse, aliases, values)
                     continue
+                if isinstance(stmt, ast.If):
+                    # Both alternatives start from the same incoming state. An
+                    # overwritten secret survives only if a possible path keeps it.
+                    paths = [block(stmt.body, aliases, values), block(stmt.orelse, aliases, values)]
+                    keys = set().union(*(set(v) for _, v in paths))
+                    values = {key: set().union(*(v.get(key, set()) for _, v in paths)) for key in keys}
+                    keys = set().union(*(set(a) for a, _ in paths))
+                    joined = {}
+                    for key in keys:
+                        choices = {a.get(key, '<unknown>') for a, _ in paths}
+                        joined[key] = next(iter(choices)) if len(choices) == 1 else next((x for x in sorted(choices) if x in SINKS), '<unknown>')
+                    aliases = joined
+                    continue
                 for branch in [getattr(stmt,k,[]) for k in ('body','orelse','finalbody')] + [h.body for h in getattr(stmt,'handlers',[])]:
                     a, v = block(branch, aliases, values)
                     for key, val in a.items():

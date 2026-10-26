@@ -265,7 +265,7 @@ GITHUB_LINK_STATE_SECRET = os.getenv("GITHUB_LINK_STATE_SECRET", "").strip() or 
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "").strip()
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 
-SCANNER_VERSION = 34
+SCANNER_VERSION = 35
 AUDIT_SCORE_HIGH_RISK_MAX = 65
 AUDIT_SCORE_REVIEW_MAX = 90
 
@@ -6318,8 +6318,8 @@ def github_installation_entitlement(installation_id: int) -> dict:
     role = str(metadata.get("role") or "user").lower()
     plan = str(metadata.get("plan") or ("admin" if role == "admin" else "free")).lower()
     return {
-        "allowed": role == "admin" or plan == "pro",
-        "reason": "active_pro" if role == "admin" or plan == "pro" else "pro_required",
+        "allowed": role == "admin" or plan in {"pro", "serious"},
+        "reason": "active_pro" if role == "admin" or plan in {"pro", "serious"} else "pro_required",
         "user_id": user_id,
     }
 
@@ -6420,6 +6420,26 @@ def github_oauth_exchange(code: str) -> str:
     return token
 
 
+def github_user_owns_installation(user: dict, installation: dict, token: str) -> bool:
+    """Installation tokens cover the whole installation, so require its owner.
+
+    A regular organization member may see an installation through /user/installations
+    while having access to only some repositories. Do not expand that access.
+    """
+    account = installation.get("account") or {}
+    if account.get("type") == "User":
+        return bool(user.get("id")) and str(account.get("id")) == str(user["id"])
+    if account.get("type") == "Organization":
+        login = str(account.get("login") or "")
+        if not re.fullmatch(r"[A-Za-z0-9-]{1,39}", login):
+            return False
+        membership = github_api_request(
+            "GET", f"https://api.github.com/user/memberships/orgs/{login}", token,
+        )
+        return isinstance(membership, dict) and membership.get("state") == "active" and membership.get("role") == "admin"
+    return False
+
+
 def list_github_user_installations(token: str) -> tuple[dict, list[dict]]:
     user = github_api_request("GET", "https://api.github.com/user", token)
     if not isinstance(user, dict) or not user.get("login"):
@@ -6437,6 +6457,7 @@ def list_github_user_installations(token: str) -> tuple[dict, list[dict]]:
         installations.extend(
             item for item in page_items
             if isinstance(item, dict) and str(item.get("app_id") or "") == str(GITHUB_APP_ID)
+            and github_user_owns_installation(user, item, token)
         )
         if len(page_items) < 100:
             break
@@ -7274,24 +7295,14 @@ def link_github_installation(req: GitHubInstallationLinkRequest, request: Reques
         return private_json({"detail": "The GitHub installation ID is invalid."}, status_code=400)
     if not verify_github_install_state(req.state, str(access["user_id"])):
         return private_json({"detail": "The GitHub installation link expired or did not match this account. Start the connection again."}, status_code=400)
-    try:
-        installation = github_api_request(
-            "GET",
-            f"https://api.github.com/app/installations/{int(req.installation_id)}",
-            github_app_jwt(),
-        )
-    except Exception:
-        return private_json({"detail": "GitHub could not verify that installation for this App."}, status_code=400)
-    if not isinstance(installation, dict) or int(installation.get("id") or 0) != req.installation_id:
-        return private_json({"detail": "GitHub returned an invalid installation record."}, status_code=400)
-    payload = save_github_installation_link(str(access["user_id"]), installation)
-    if not payload:
-        return private_json({"detail": "GitHub linking storage is not configured yet."}, status_code=503)
+    # A valid state proves who initiated the flow, not who owns installation_id.
+    # Never fetch with the App JWT and attach a caller-supplied installation ID.
+    if not GITHUB_CLIENT_ID or not GITHUB_CLIENT_SECRET:
+        return private_json({"detail": "GitHub user authorization is not configured yet."}, status_code=503)
     return private_json({
-        "linked": True,
-        "installation_id": req.installation_id,
-        "account_login": payload["account_login"],
-        "pro_enforcement": GITHUB_ENFORCE_PRO,
+        "linked": False,
+        "authorization_required": True,
+        "url": github_oauth_authorize_url(str(access["user_id"])),
     })
 
 

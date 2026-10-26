@@ -8,7 +8,7 @@ from starlette.requests import Request
 class AICompareTests(unittest.TestCase):
  def fixture(self,before='x=1',after='x=2',intent='Change x to 2'):
   p,blocks=a.prepare({'before':before,'after':after,'request':intent})
-  report={'summary':'Review changes','limitations':['Not executed'],'changes':[{'change_id':b['change_id'],'classification':'requested','explanation':'Value changed.','security_impact':'none_observed','before_evidence':b['before'],'after_evidence':b['after']} for b in blocks]}
+  report={'summary':'Review changes','limitations':['Not executed'],'changes':[{'change_id':b['change_id'],'classification':'requested','explanation':'Value changed.','security_impact':'none_observed','before_evidence':a.evidence_options(b['before'],b['change_id'],'b')[0]['id'],'after_evidence':a.evidence_options(b['after'],b['change_id'],'a')[0]['id']} for b in blocks]}
   return p,blocks,{'status':'completed','usage':{'input_tokens':100,'output_tokens':100},'output':[{'type':'message','content':[{'type':'output_text','text':json.dumps(report)}]}]},report
  def test_no_tools_or_storage_and_bounded_cost(self):
   p,b,r,_=self.fixture();self.assertFalse(p['store']);self.assertNotIn('tools',p);self.assertEqual(p['max_output_tokens'],4000);self.assertLess(80000*.75+4000*4.5,a.RESERVE_MICRO_USD);self.assertEqual(a.usage_cost(r),525)
@@ -32,6 +32,20 @@ class AICompareTests(unittest.TestCase):
  def test_unicode_source_evidence_is_preserved(self):
   _,b,r,_=self.fixture('label = "こんにちは"','label = "ようこそ"')
   self.assertEqual(a.validate_response(r,b)['changes'][0]['after_evidence'],'label = "ようこそ"')
+ def test_evidence_ids_cannot_cross_blocks_or_introduce_fabricated_source(self):
+  p,b,r,report=self.fixture('x=1\nanchor=0\ny=1','x=2\nanchor=0\ny=2')
+  options=json.loads(p['input'])['changed_blocks']
+  self.assertEqual(options[0]['before_evidence_options'],[{'id':'b1:1','text':'x=1'}])
+  report['changes'][0]['before_evidence']='b2:1'
+  r['output'][0]['content'][0]['text']=json.dumps(report)
+  with self.assertRaises(a.InvalidResult):a.validate_response(r,b)
+ def test_large_block_keeps_all_source_and_selected_exact_excerpt(self):
+  before='x="'+('a'*5000)+'"';after='x="'+('b'*5000)+'"'
+  p,b,r,report=self.fixture(before,after)
+  options=json.loads(p['input'])['changed_blocks'][0]
+  self.assertEqual(''.join(o['text'] for o in options['after_evidence_options']),after)
+  report['changes'][0]['after_evidence']='a1:3';r['output'][0]['content'][0]['text']=json.dumps(report)
+  self.assertEqual(a.validate_response(r,b)['changes'][0]['after_evidence'],after[4000:])
  def test_thirty_blocks_require_complete_report(self):
   before='\n'.join(f'value_{i} = 0\nanchor_{i} = True' for i in range(30))
   after='\n'.join(f'value_{i} = 1\nanchor_{i} = True' for i in range(30))

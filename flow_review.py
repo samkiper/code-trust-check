@@ -42,7 +42,7 @@ def supplemental_flows(code):
     findings = []
     sinks = {'requests.' + m for m in ('get','post','put','patch','delete','request')}
     sinks |= {'httpx.' + m for m in ('get','post','put','patch','delete','request')}
-    sinks |= {'urllib.request.Request', 'urllib.request.urlopen'}
+    sinks |= {'urllib.request.urlopen'}  # Request only constructs an object.
 
     def resolved(node, aliases):
         if isinstance(node, ast.Name):
@@ -69,8 +69,31 @@ def supplemental_flows(code):
                 return False  # Iterating a mapping emits keys, not credential values.
             if name in {'os.environ.copy', 'os.environ.items', 'os.environ.values'}:
                 return True
-            return any(environment(n, aliases, sources) for n in node.args) or any(environment(k.value, aliases, sources) for k in node.keywords)
+            receiver = isinstance(node.func, ast.Attribute) and environment(node.func.value, aliases, sources)
+            return receiver or any(environment(n, aliases, sources) for n in node.args) or any(environment(k.value, aliases, sources) for k in node.keywords)
         return any(environment(n, aliases, sources) for n in ast.iter_child_nodes(node))
+
+    def inspect_calls(expression, aliases, sources):
+        for call in (n for n in ast.walk(expression) if isinstance(n, ast.Call)):
+            name = resolved(call.func, aliases)
+            if name in sinks and any(environment(n, aliases, sources) for n in call.args + [k.value for k in call.keywords]):
+                url = next((k.value for k in call.keywords if k.arg == 'url'), call.args[1] if name.endswith('.request') and len(call.args)>1 else call.args[0] if call.args else None)
+                destination = url.value if isinstance(url, ast.Constant) and isinstance(url.value, str) else 'dynamic or unresolved'
+                findings.append(dict(line=call.lineno, type='secret_exfiltration', pattern='whole_environment_egress', severity=32,
+                    message='Process environment flows into an outbound request',
+                    explanation=f'Source: the process environment or its copied values. Destination: {destination}. The payload can include credentials; this is a detected transmission path, not proof of malicious intent.',
+                    what_to_check='Review which environment values reach the request and whether this destination is authorized to receive each value.',
+                    when_legitimate='Explicitly approved diagnostics can transmit selected nonsecret configuration. Sending the entire environment requires review because secrets may be present.',
+                    suggested_fix='Build an allowlisted payload of necessary nonsecret values instead of sending the environment.'))
+            if name in {'eval','exec','builtins.eval','builtins.exec'} and ast.unparse(call.func) not in {'eval','exec'}:
+                operation = name.split('.')[-1]
+                safe = operation == 'eval' and inert_literal_eval(call)
+                findings.append(dict(line=call.lineno, type='dynamic_execution', pattern=operation+'(', severity=4 if safe else 25,
+                    message='Fixed literal expression evaluated through an alias' if safe else f'Alias resolves to {operation}()',
+                    explanation='A fixed expression contains only literal data and arithmetic; no untrusted input path is present in this expression.' if safe else f'{ast.unparse(call.func)} resolves to Python {operation}(). Its argument is executable Python; the supported checks have not established an inert literal expression.',
+                    what_to_check='Trace the argument source and trust boundary. An alias does not make dynamic execution safe.',
+                    when_legitimate='Trusted, deliberately authored code may use dynamic execution. Unknown or user-controlled source must not be treated as trusted.',
+                    suggested_fix='Use direct arithmetic or a non-executable data parser where possible.'))
 
     def block(statements, aliases=None, sources=None):
         aliases, sources = dict(aliases or {}), set(sources or ())
@@ -96,6 +119,11 @@ def supplemental_flows(code):
                 block(statement.body, inner, inner_sources)
                 continue
             if isinstance(statement, (ast.If, ast.For, ast.AsyncFor, ast.While, ast.Try, ast.With, ast.AsyncWith)):
+                for field in ('test', 'iter'):
+                    expression = getattr(statement, field, None)
+                    if expression is not None: inspect_calls(expression, aliases, sources)
+                for item in getattr(statement, 'items', []):
+                    inspect_calls(item.context_expr, aliases, sources)
                 if isinstance(statement, ast.If) and isinstance(statement.test, ast.Constant):
                     aliases, sources = block(statement.body if statement.test.value else statement.orelse, aliases, sources)
                     continue
@@ -109,26 +137,7 @@ def supplemental_flows(code):
                             aliases[key] = value
                     sources |= child_sources
                 continue
-            for call in (n for n in ast.walk(statement) if isinstance(n, ast.Call)):
-                name = resolved(call.func, aliases)
-                if name in sinks and any(environment(n, aliases, sources) for n in call.args + [k.value for k in call.keywords]):
-                    url = next((k.value for k in call.keywords if k.arg == 'url'), call.args[1] if name.endswith('.request') and len(call.args)>1 else call.args[0] if call.args else None)
-                    destination = url.value if isinstance(url, ast.Constant) and isinstance(url.value, str) else 'dynamic or unresolved'
-                    findings.append(dict(line=call.lineno, type='secret_exfiltration', pattern='whole_environment_egress', severity=32,
-                        message='Process environment flows into an outbound request',
-                        explanation=f'Source: the process environment or its copied values. Destination: {destination}. The payload can include credentials; this is a detected transmission path, not proof of malicious intent.',
-                        what_to_check='Review which environment values reach the request and whether this destination is authorized to receive each value.',
-                        when_legitimate='Explicitly approved diagnostics can transmit selected nonsecret configuration. Sending the entire environment requires review because secrets may be present.',
-                        suggested_fix='Build an allowlisted payload of necessary nonsecret values instead of sending the environment.'))
-                if name in {'eval','exec','builtins.eval','builtins.exec'} and ast.unparse(call.func) not in {'eval','exec'}:
-                    operation = name.split('.')[-1]
-                    safe = operation == 'eval' and inert_literal_eval(call)
-                    findings.append(dict(line=call.lineno, type='dynamic_execution', pattern=operation+'(', severity=4 if safe else 25,
-                        message='Fixed literal expression evaluated through an alias' if safe else f'Alias resolves to {operation}()',
-                        explanation='A fixed expression contains only literal data and arithmetic; no untrusted input path is present in this expression.' if safe else f'{ast.unparse(call.func)} resolves to Python {operation}(). Its argument is executable Python; the supported checks have not established an inert literal expression.',
-                        what_to_check='Trace the argument source and trust boundary. An alias does not make dynamic execution safe.',
-                        when_legitimate='Trusted, deliberately authored code may use dynamic execution. Unknown or user-controlled source must not be treated as trusted.',
-                        suggested_fix='Use direct arithmetic or a non-executable data parser where possible.'))
+            inspect_calls(statement, aliases, sources)
             if isinstance(statement, (ast.Assign, ast.AnnAssign)) and statement.value is not None:
                 targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
                 name = resolved(statement.value, aliases)

