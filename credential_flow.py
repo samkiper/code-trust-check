@@ -70,7 +70,7 @@ def credential_flows(code, intent, affirmative):
                 # A small explicit provider vocabulary; never arbitrary host substrings.
                 named = affirmative(intent,[host]) if host else False
                 if host == 'api.openai.com': named = named or affirmative(intent,['OpenAI'])
-                expected = dest.startswith('https://') and named and affirmative(intent,['authenticate','authentication','authorization']) and headers is not None and not other
+                expected = dest.startswith('https://') and named and affirmative(intent,['authenticate','authentication','authorization','api key','credential']) and headers is not None and not other
                 findings.append(dict(line=call.lineno,type='credential_use' if expected else 'secret_exfiltration',pattern='credential_authentication' if expected else 'secret_exfiltration_chain',severity=3 if expected else 32,
                     message='Environment credential used for expected API authentication' if expected else 'Environment credential flows into an outbound request',
                     explanation=f"Credential source: {', '.join(sorted(exposed))}. Destination: {dest or 'dynamic or unresolved'}. " + ('The credential is confined to headers and the HTTPS provider matches the stated authentication purpose. Verify provider ownership and redirect behavior.' if expected else 'A credential value reaches this request. Verify that the destination is authorized to receive it; this does not establish malicious intent.'),
