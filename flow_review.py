@@ -127,6 +127,19 @@ def supplemental_flows(code):
                 if isinstance(statement, ast.If) and isinstance(statement.test, ast.Constant):
                     aliases, sources = block(statement.body if statement.test.value else statement.orelse, aliases, sources)
                     continue
+                if isinstance(statement, ast.If):
+                    left_aliases, left_sources = block(statement.body, aliases, sources)
+                    right_aliases, right_sources = block(statement.orelse, aliases, sources)
+                    # Both alternatives start from the incoming state. A value
+                    # overwritten on every path must not remain a source.
+                    sources = left_sources | right_sources
+                    joined = {}
+                    for key in left_aliases.keys() | right_aliases.keys():
+                        left, right = left_aliases.get(key), right_aliases.get(key)
+                        joined[key] = left if left == right else next(
+                            (v for v in (left, right) if v in sinks | {'eval','exec','builtins.eval','builtins.exec'}), '<unknown>')
+                    aliases = joined
+                    continue
                 # Branches are analyzed separately and possible bindings are retained.
                 branches = [getattr(statement, k, []) for k in ('body', 'orelse', 'finalbody')]
                 branches += [h.body for h in getattr(statement, 'handlers', [])]

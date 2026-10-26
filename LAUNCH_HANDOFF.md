@@ -4,7 +4,7 @@ Checkpoint: October 26, 2026. This document consolidates the owner's latest deci
 
 ## Active continuation update
 
-Read `docs/LAUNCH_CHECKLIST.md` and `docs/CONTINUATION_2026-10-26.md` first for progress after this checkpoint. The cloud browser recovered; the original browser-blocker section below is historical. Paid customer checks found AI evidence validation failures, now under repair. The temporary customer grant remains until paid verification and billing-aware cleanup are complete.
+Read `docs/LAUNCH_CHECKLIST.md` and `docs/CONTINUATION_2026-10-26.md` first for progress after this checkpoint. The cloud browser recovered; the original browser-blocker section below is historical. Paid customer checks found and repaired AI evidence validation failures; scanner 35 now has real provider success, saved-AI download and 20k/50k deployed evidence. Scanner 36 and report/usage display fixes are prepared; see the continuation log for exact revisions and verification status. The temporary customer grant remains until paid verification and billing-aware cleanup are complete.
 
 ## Goal and operating instructions
 

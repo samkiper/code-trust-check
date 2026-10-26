@@ -265,7 +265,7 @@ GITHUB_LINK_STATE_SECRET = os.getenv("GITHUB_LINK_STATE_SECRET", "").strip() or 
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "").strip()
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 
-SCANNER_VERSION = 35
+SCANNER_VERSION = 36
 AUDIT_SCORE_HIGH_RISK_MAX = 65
 AUDIT_SCORE_REVIEW_MAX = 90
 
@@ -4967,10 +4967,7 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
 
     if line_limit is not None and len(original_lines) > line_limit:
         plan_name = str(plan or "free").lower()
-        if plan_name == "pro":
-            limit_message = f"Pro scans are limited to {line_limit} lines right now."
-        else:
-            limit_message = f"Free scans are limited to {line_limit} lines. Pro unlocks larger file scanning."
+        limit_message = f"{plan_name.capitalize()} scans are limited to {line_limit} lines. Submit a smaller file."
 
         return {
             "risk": "limit",
@@ -4986,8 +4983,8 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
             "scan_confidence": {
                 "label": "Limited",
                 "lines": [
-                    f"Only the first {line_limit} lines can be analyzed on this plan.",
-                    "Upgrade to scan larger code files without truncation.",
+                    f"This submission exceeds the {line_limit}-line plan limit; the behavior scan did not run.",
+                    "Use a smaller file or a plan that covers its full length.",
                 ],
             },
             "focused_code_blocks": [],
