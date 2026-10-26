@@ -251,7 +251,7 @@ GITHUB_LINK_STATE_SECRET = os.getenv("GITHUB_LINK_STATE_SECRET", "").strip() or 
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "").strip()
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 
-SCANNER_VERSION = 31
+SCANNER_VERSION = 32
 AUDIT_SCORE_HIGH_RISK_MAX = 65
 AUDIT_SCORE_REVIEW_MAX = 90
 
@@ -7873,7 +7873,7 @@ def github_repo_badge_svg(owner: str, repo: str):
 
 @app.post("/workspace")
 async def saved_workspace(request: Request):
-    access = get_request_access_context(request)
+    access = await run_in_threadpool(get_request_access_context, request)
     if not access.get("authenticated"):
         raise HTTPException(401, "Sign in to view saved work.")
     enforce_rate_limit(request, access, "feedback")
@@ -7886,7 +7886,70 @@ async def saved_workspace(request: Request):
         raise HTTPException(400, "Invalid workspace request.")
     if not isinstance(body, dict):
         raise HTTPException(400, "Invalid workspace request.")
-    result = supabase_rest_request("POST", "rpc/aca_workspace", payload={"p_user": access["user_id"], "p_action": body.get("action", "list"), "p_body": body.get("data", {})})
+    result = await run_in_threadpool(supabase_rest_request, "POST", "rpc/aca_workspace", payload={"p_user": access["user_id"], "p_action": body.get("action", "list"), "p_body": body.get("data", {})})
     if not isinstance(result, dict) or "ok" not in result:
         raise HTTPException(503, "Saved work is temporarily unavailable.")
     return private_json(result, status_code=200 if result.get("ok") else 400)
+
+# AI interpretation is isolated from static security scanning and audit allowances.
+from starlette.concurrency import run_in_threadpool
+import ai_compare
+
+
+def ai_usage(user_id, action, receipt=None, cost=None, success=False, usage=None):
+    usage = usage or {}
+    result = supabase_rest_request('POST', 'rpc/aca_ai_usage_control', payload={
+        'p_user':user_id,'p_action':action,'p_receipt':receipt,'p_cost':cost,'p_success':success,
+        'p_input':usage.get('input_tokens'),'p_output':usage.get('output_tokens')})
+    if not isinstance(result,dict) or 'ok' not in result:
+        raise HTTPException(503,'AI usage protection is unavailable. No new AI request was started.')
+    return result
+
+@app.get('/compare-ai/status')
+def ai_compare_status(request: Request):
+    access=get_request_access_context(request)
+    if not access.get('authenticated'): raise HTTPException(401,'Sign in to use AI review.')
+    result=ai_usage(access['user_id'],'status')
+    result['configured']=bool(os.environ.get('OPENAI_API_KEY','').strip())
+    result['available']=result.get('available',False) and result['configured']
+    return private_json(result)
+
+
+def perform_ai_review(access,receipt,payload,blocks):
+    reservation=ai_usage(access['user_id'],'reserve',receipt)
+    if not reservation.get('ok'): return private_json(reservation,429)
+    response=None;result=None;cost=None;success=False
+    try:
+        response=ai_compare.call_provider(os.environ['OPENAI_API_KEY'].strip(),payload)
+        cost=ai_compare.usage_cost(response)
+        if cost is None or cost>ai_compare.RESERVE_MICRO_USD:
+            raise ai_compare.InvalidResult('AI usage could not be verified. The report is unavailable.')
+        result=ai_compare.validate_response(response,blocks);success=True
+    except ai_compare.InvalidResult as exc:
+        result={'ok':False,'state':'failed','error':str(exc)}
+    except Exception:
+        # Do not log the provider exception: it can contain request data or secrets.
+        result={'ok':False,'state':'failed','error':'AI review could not complete. Basic comparison is still available. Your AI allowance is not charged; an uncertain provider cost remains reserved.'}
+    finally:
+        usage=response.get('usage',{}) if isinstance(response,dict) and cost is not None and cost<=ai_compare.RESERVE_MICRO_USD else {}
+        try: settled=ai_usage(access['user_id'],'settle',receipt,cost if cost is not None and cost<=ai_compare.RESERVE_MICRO_USD else None,success,usage)
+        except HTTPException: settled=None
+    if success:
+        return private_json({'ok':True,'review':result,'usage':settled,'cost_upper_bound_usd':cost/1000000,'accounting_pending':settled is None})
+    return private_json(result,502)
+
+@app.post('/compare-ai')
+async def ai_compare_review(request: Request):
+    access=await run_in_threadpool(get_request_access_context,request)
+    if not access.get('authenticated'): raise HTTPException(401,'Sign in to use AI review.')
+    if not os.environ.get('OPENAI_API_KEY','').strip(): raise HTTPException(503,'AI review is not configured. Basic comparison is available.')
+    raw=await request.body()
+    if len(raw)>100000: raise HTTPException(413,'AI comparison request is too large.')
+    try:
+        body=json.loads(raw);receipt=str(uuid.UUID(body.get('request_id','')))
+        payload,blocks=ai_compare.prepare(body)
+    except (ValueError,TypeError,AttributeError) as exc:
+        raise HTTPException(400,str(exc) if isinstance(exc,ai_compare.InvalidInput) else 'Invalid comparison request.') from None
+    if not blocks: return private_json({'ok':True,'review':{'state':'not_rated','verdict':'unchanged','summary':'No source changes detected. No AI request or allowance was used.','changes':[],'limitations':[]}})
+    if await request.is_disconnected(): raise HTTPException(499,'Comparison cancelled before submission.')
+    return await run_in_threadpool(perform_ai_review,access,receipt,payload,blocks)
