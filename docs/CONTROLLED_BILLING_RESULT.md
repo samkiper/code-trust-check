@@ -75,4 +75,12 @@ Using a non-administrator test account and real signed sandbox webhooks against 
 
 Scope: these are sandbox financial transactions plus deployed authorization/scanner observations. They do not verify live USD 69 settlement, refund, customer-portal cancellation for Serious, or arbitrary complete-application coverage. The earlier live Pro payment and refund are separate evidence. Customer AI and credit-pack sales remain disabled and are outside the static-audit launch scope.
 
-The real Serious checkout remains pending: automatic approval review blocked activating its live monthly price. Do not enable general purchases or public access based on sandbox results alone. Obtain explicit authorization for the restricted live test, complete checkout with the owner, verify Serious access, refund and cancel, then remove the checkout exception. The site remains owner-private and general purchases paused.
+At this stage the real Serious checkout was pending explicit authorization. It was subsequently authorized and exercised as recorded below. The site remains owner-private and general purchases paused.
+
+## Serious monthly — controlled live payment completed
+
+On October 26, 2026, the owner completed the normal USD 69/month Serious checkout in their own browser using the specifically allowlisted non-administrator account. Stripe confirmed a paid USD 69 live invoice for the approved Serious monthly price. Independent application metadata inspection confirmed Serious access with an active subscription.
+
+After access verification, the subscription was immediately canceled through the Stripe API without proration or a new invoice. The signed webhook restored Free/canceled, independently verified in the database. Stripe subsequently reported the full USD 69 refund succeeded after the owner approved its confirmation request. Card-statement posting was not independently verified. Serious customer-portal cancellation UI and annual live settlement were not exercised; annual billing has sandbox evidence only.
+
+Cleanup verified: the live monthly price is inactive, the account-specific checkout exception and expiry were cleared, and the cleanup deployment reached live. General purchases remain paused, Site access owner-private, and customer AI disabled. The backend suite passes 216 tests, including isolation from deployment billing settings and rejection of Pro/annual selections during a Serious-monthly-only checkout window. This records completion of the controlled monthly payment/access/refund/cancellation check, not authorization to launch or enable general payments.
