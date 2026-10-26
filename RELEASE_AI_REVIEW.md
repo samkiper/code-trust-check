@@ -41,3 +41,11 @@ Scanner corrections: bounded call-argument extraction; Python credential trackin
 October 26, 2026: owner explicitly requested removal of the shared $25 cap. Cost reporting and conservative per-request accounting remain; the global dollar cutoff is removed. Per-account monthly allowances, one in-flight request/account, duplicate protection, source/output bounds, no automatic provider retry, and failed-review allowance refunds remain. Existing prices/allowances are unchanged. Previous references above to the $25 cap describe historical private validation, not the current policy.
 
 The shared 100 MB saved-history cutoff was also removed under the owner’s request to remove shared preview cutoffs. Per-account report count, per-report size, expiry and sharing limits remain. A rolled-back live-database transaction verified synthetic report saving, unshared access denial, malformed-email rejection, valid sharing and revocation. No test report, grant, or plan change persisted.
+
+## Launch follow-up — scanner 34
+
+Credential flow now distinguishes an unsent urllib Request object from a urlopen transmission, checks calls in conditional/loop/context expressions, and requires credential words in environment variable names. This removes false flags for MONKEY_COUNT, KEYBOARD_LAYOUT and TOKENIZER_MODE while retaining APIKEY, accessToken, OPENAI_API_KEY and PASSWORD1 detection. Malformed literal URL parsing no longer raises out of the credential pass. These remain bounded single-file static checks.
+
+Local verification: 224 backend tests pass, including eight real-engine launch regression methods. The pinned 65 internal / 750 OWASP / 300 neutral-intent behavior accuracy gate passes and produces the unchanged committed benchmark report. These new cases have not yet been exercised with a customer identity against deployment 34.
+
+The Site follow-up interrupts in-flight status polls and retry delays when requesting cancellation, while retaining the submission response until a job ID is known. Three new cancellation regressions pass. Basic comparisons gain a JSON download; saving guidance distinguishes signed-out and Free accounts, and AI availability refreshes after completion/cancellation with stale-response protection. No prices, allowances, payment activation, or Site audience changes.
