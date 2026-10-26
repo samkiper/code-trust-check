@@ -24,6 +24,19 @@ class AICompareTests(unittest.TestCase):
   for bad in [{},[],{'status':'incomplete'},dict(r,output=[{'type':'message','content':[{'type':'refusal','refusal':'No'}]}])]:
    with self.assertRaises(a.InvalidResult):a.validate_response(bad,b)
   for u in [None,{}, {'input_tokens':True,'output_tokens':10},{'input_tokens':1,'output_tokens':4001}]: self.assertIsNone(a.usage_cost({'usage':u}))
+ def test_empty_summary_and_missing_limitations_rejected(self):
+  _,b,r,report=self.fixture()
+  for updates in [{'summary':'  '},{'limitations':[]},{'limitations':['']}]:
+   bad={**report,**updates};r['output'][0]['content'][0]['text']=json.dumps(bad)
+   with self.assertRaises(a.InvalidResult):a.validate_response(r,b)
+ def test_unicode_source_evidence_is_preserved(self):
+  _,b,r,_=self.fixture('label = "こんにちは"','label = "ようこそ"')
+  self.assertEqual(a.validate_response(r,b)['changes'][0]['after_evidence'],'label = "ようこそ"')
+ def test_thirty_blocks_require_complete_report(self):
+  before='\n'.join(f'value_{i} = 0\nanchor_{i} = True' for i in range(30))
+  after='\n'.join(f'value_{i} = 1\nanchor_{i} = True' for i in range(30))
+  _,b,r,_=self.fixture(before,after);self.assertEqual(len(a.validate_response(r,b)['changes']),30)
+  with self.assertRaises(a.InvalidInput):a.prepare({'before':before+'\nx=0','after':after+'\nx=1','request':'Update values'})
  def test_input_limits_and_unchanged(self):
   for data in [{}, {'before':'x','after':'y','request':''},{'before':'x'*32001,'after':'y','request':'fix'},{'before':'x','after':'y','request':'a'*2001}]:
    with self.assertRaises(a.InvalidInput):a.prepare(data)
