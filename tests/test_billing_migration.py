@@ -1,4 +1,4 @@
-import unittest
+import os, unittest
 from unittest.mock import patch
 from fastapi.testclient import TestClient
 from starlette.requests import Request
@@ -122,6 +122,7 @@ class NormalBillingRouteTests(unittest.TestCase):
 class ControlledCheckoutTests(NormalBillingRouteTests):
  def setUp(self):
   super().setUp()
+  self.stack.enter_context(patch.dict(os.environ,{'CONTROLLED_CHECKOUT_PLAN':'pro'}))
   self.stack.enter_context(patch.object(main,'PURCHASES_ENABLED',False))
   self.stack.enter_context(patch.object(main,'CONTROLLED_CHECKOUT_USER_ID','customer_user'))
   self.stack.enter_context(patch.object(main,'CONTROLLED_CHECKOUT_EXPIRES_AT','9999999999'))
@@ -140,3 +141,14 @@ class ControlledCheckoutTests(NormalBillingRouteTests):
   with patch.object(main.stripe.checkout.Session,'create',return_value=SimpleNamespace(url='https://checkout.stripe.com/test',id='cs_test_example')) as create:
    for _ in range(2):self.assertEqual(self.client.post('/stripe/create-checkout-session',headers=self.headers).status_code,200)
    self.assertEqual(create.call_args_list[0].kwargs['idempotency_key'],create.call_args_list[1].kwargs['idempotency_key'])
+ def test_controlled_serious_accepts_only_approved_monthly_price(self):
+  from types import SimpleNamespace
+  price={'active':True,'livemode':True,'unit_amount':6900,'currency':'usd','recurring':{'interval':'month','interval_count':1}}
+  with patch.dict(os.environ,{'CONTROLLED_CHECKOUT_PLAN':'serious','STRIPE_SERIOUS_PRICE_ID':'price_serious','STRIPE_SERIOUS_ANNUAL_PRICE_ID':'price_annual'}),patch.object(main.stripe.Price,'retrieve',return_value=price),patch.object(main.stripe.checkout.Session,'create',return_value=SimpleNamespace(url='https://checkout.stripe.com/test',id='cs_test_serious')) as create:
+   response=self.client.post('/stripe/create-checkout-session',json={'plan':'serious','interval':'month'},headers=self.headers)
+   self.assertEqual(response.status_code,200)
+   self.assertEqual(create.call_args.kwargs['line_items'],[{'price':'price_serious','quantity':1}])
+   create.reset_mock()
+   for selection in [{'plan':'pro'},{'plan':'serious','interval':'year'}]:
+    self.assertEqual(self.client.post('/stripe/create-checkout-session',json=selection,headers=self.headers).status_code,503)
+   create.assert_not_called()
