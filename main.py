@@ -5989,6 +5989,32 @@ async def reconcile_stripe_subscription(request: Request):
     )
 
 
+@app.post("/stripe/sandbox-webhook")
+async def stripe_sandbox_webhook(request: Request):
+    # Separate signing secret and explicit identity binding; never uses live keys.
+    from sandbox_billing import subscription_update
+    secret = os.getenv("STRIPE_SANDBOX_WEBHOOK_SECRET", "").strip()
+    user_id = os.getenv("STRIPE_SANDBOX_TEST_USER_ID", "").strip()
+    customer_id = os.getenv("STRIPE_SANDBOX_CUSTOMER_ID", "").strip()
+    price_id = os.getenv("STRIPE_SANDBOX_PRICE_ID", "").strip()
+    if not all((secret, user_id, customer_id, price_id)):
+        raise HTTPException(503, "Sandbox billing validation is disabled.")
+    payload = await request.body()
+    try:
+        event = stripe.Webhook.construct_event(payload, request.headers.get("stripe-signature", ""), secret)
+    except Exception:
+        raise HTTPException(400, "Invalid sandbox webhook signature or payload.")
+    user = get_supabase_admin_user(user_id)
+    if not user:
+        raise HTTPException(503, "Test account unavailable; retry.")
+    updates = subscription_update(event.to_dict(), user, customer_id, price_id, plan_from_subscription_status)
+    if updates is None:
+        return {"received": True, "ignored": True}
+    if not update_supabase_user_app_metadata(user_id, updates):
+        raise HTTPException(503, "Test account update unavailable; retry.")
+    return {"received": True}
+
+
 @app.post("/stripe/webhook")
 async def stripe_webhook(request: Request):
     if not STRIPE_SECRET_KEY or not STRIPE_WEBHOOK_SECRET:
