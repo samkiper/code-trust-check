@@ -251,7 +251,7 @@ GITHUB_LINK_STATE_SECRET = os.getenv("GITHUB_LINK_STATE_SECRET", "").strip() or 
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "").strip()
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 
-SCANNER_VERSION = 30
+SCANNER_VERSION = 31
 AUDIT_SCORE_HIGH_RISK_MAX = 65
 AUDIT_SCORE_REVIEW_MAX = 90
 
@@ -506,34 +506,14 @@ def build_badge_svg(label: str, value: str, value_color: str) -> str:
 </svg>"""
 
 
+PLAN_CATALOG = json.loads(Path(__file__).with_name("plan_catalog.json").read_text())
+
 def get_plan_limits(plan: str) -> dict:
     normalized = str(plan or "free").lower()
-
     if normalized == "admin":
-        return {
-            "line_limit": None,
-            "repo_file_limit": None,
-            "repo_size_limit_bytes": None,
-            "daily_scan_limit": None,
-            "monthly_scan_limit": None, "monthly_repo_limit": None,
-        }
-
-    if normalized == "pro":
-        return {
-            "line_limit": PRO_LINE_LIMIT,
-            "repo_file_limit": PRO_REPO_FILE_LIMIT,
-            "repo_size_limit_bytes": PRO_REPO_SIZE_LIMIT_BYTES,
-            "daily_scan_limit": PRO_DAILY_SCAN_LIMIT,
-            "monthly_scan_limit": 300, "monthly_repo_limit": 20,
-        }
-
-    return {
-        "line_limit": FREE_LINE_LIMIT,
-        "repo_file_limit": FREE_REPO_FILE_LIMIT,
-        "repo_size_limit_bytes": FREE_REPO_SIZE_LIMIT_BYTES,
-        "daily_scan_limit": FREE_DAILY_SCAN_LIMIT,
-        "monthly_scan_limit": 20, "monthly_repo_limit": 2,
-    }
+        return {key: None for key in ("line_limit", "repo_file_limit", "repo_size_limit_bytes", "daily_scan_limit", "monthly_scan_limit", "monthly_repo_limit")}
+    item = PLAN_CATALOG.get(normalized, PLAN_CATALOG["free"])
+    return {**{k:item[k] for k in ("line_limit","repo_file_limit","repo_size_limit_bytes","monthly_scan_limit","monthly_repo_limit")}, "daily_scan_limit": PRO_DAILY_SCAN_LIMIT if normalized in {"pro","serious"} else FREE_DAILY_SCAN_LIMIT}
 
 
 def monthly_usage(access, action="status", receipt=None, kind="code", charge=False):
@@ -556,7 +536,7 @@ def validate_scan_request(req,access):
         if not req.code.strip():raise HTTPException(400,"Paste some code to audit.")
         limit=access["limits"].get("line_limit")
         if limit and len(req.code.splitlines())>limit:raise HTTPException(413,f"Your plan allows {limit:,} lines per snippet. No allowance was used.")
-        max_bytes=MAX_PASTED_CODE_BYTES_PRO if access.get("plan") in {"pro","admin"} else MAX_PASTED_CODE_BYTES_FREE
+        max_bytes=MAX_PASTED_CODE_BYTES_PRO if access.get("plan") in {"pro","serious","admin"} else MAX_PASTED_CODE_BYTES_FREE
         if len(req.code.encode())>max_bytes:raise HTTPException(413,"Pasted code exceeds this plan's size limit. No allowance was used.")
     else:
         if len(req.repo_url)>500:raise HTTPException(400,"Repository URL is too long.")
@@ -5721,7 +5701,7 @@ async def create_stripe_checkout_session(request: Request):
     current_role = str(access.get("role") or "user").lower()
     if current_role == "admin":
         raise HTTPException(status_code=400, detail="Admin accounts already have elevated access.")
-    if current_plan == "pro":
+    if current_plan in {"pro", "serious"}:
         raise HTTPException(status_code=400, detail="Your account is already on Pro.")
 
     if not stripe_is_configured():
@@ -6913,7 +6893,7 @@ def github_connect_url(request: Request):
     enforce_rate_limit(request, access, "github")
     if not access.get("authenticated") or not access.get("user_id"):
         return private_json({"detail": "Sign in before connecting GitHub."}, status_code=401)
-    if access.get("plan") not in {"pro", "admin"} and access.get("role") != "admin":
+    if access.get("plan") not in {"pro", "serious", "admin"} and access.get("role") != "admin":
         return private_json({"detail": "An active Pro account is required for automatic pull-request checks."}, status_code=403)
     if not GITHUB_CLIENT_ID or not GITHUB_CLIENT_SECRET or not GITHUB_LINK_STATE_SECRET:
         return private_json({"detail": "Connecting an existing GitHub installation is not configured yet."}, status_code=503)
@@ -6929,7 +6909,7 @@ def github_install_url(request: Request):
     enforce_rate_limit(request, access, "github")
     if not access.get("authenticated") or not access.get("user_id"):
         return private_json({"detail": "Sign in before installing the GitHub App."}, status_code=401)
-    if access.get("plan") not in {"pro", "admin"} and access.get("role") != "admin":
+    if access.get("plan") not in {"pro", "serious", "admin"} and access.get("role") != "admin":
         return private_json({"detail": "An active Pro account is required for automatic pull-request checks."}, status_code=403)
     valid_slug = GITHUB_APP_SLUG if GITHUB_APP_SLUG_PATTERN.fullmatch(GITHUB_APP_SLUG) else ""
     if not valid_slug or not GITHUB_LINK_STATE_SECRET:
@@ -7133,7 +7113,7 @@ def save_repository_policy(owner: str, repo: str, req: RepositoryPolicyRequest, 
     block_at = str(req.block_at or "high").lower()
     if mode not in {"monitor", "block"} or block_at not in {"high", "medium", "notice"}:
         raise HTTPException(status_code=400, detail="Choose monitor or block, with a valid severity threshold.")
-    if mode == "block" and access.get("plan") not in {"pro", "admin"} and access.get("role") != "admin":
+    if mode == "block" and access.get("plan") not in {"pro", "serious", "admin"} and access.get("role") != "admin":
         raise HTTPException(status_code=403, detail="An active Pro account is required to enforce blocking policies.")
     payload = {
         "user_id": user_id, "repository": repository, "enforcement_mode": mode,
@@ -7181,7 +7161,7 @@ def link_github_installation(req: GitHubInstallationLinkRequest, request: Reques
     enforce_rate_limit(request, access, "github")
     if not access.get("authenticated") or not access.get("user_id"):
         return private_json({"detail": "Sign in before connecting a GitHub installation."}, status_code=401)
-    if access.get("plan") not in {"pro", "admin"} and access.get("role") != "admin":
+    if access.get("plan") not in {"pro", "serious", "admin"} and access.get("role") != "admin":
         return private_json({"detail": "An active Pro account is required for automatic pull-request checks."}, status_code=403)
     if req.installation_id <= 0:
         return private_json({"detail": "The GitHub installation ID is invalid."}, status_code=400)
@@ -7352,7 +7332,7 @@ def scan(req: ScanRequest, request: Request):
     enforce_rate_limit(request, access, "scan")
 
     plan = str(access.get("plan") or "free").lower()
-    max_code_bytes = MAX_PASTED_CODE_BYTES_PRO if plan in {"pro", "admin"} else MAX_PASTED_CODE_BYTES_FREE
+    max_code_bytes = MAX_PASTED_CODE_BYTES_PRO if plan in {"pro", "serious", "admin"} else MAX_PASTED_CODE_BYTES_FREE
     code_size_bytes = len(req.code.encode("utf-8", errors="ignore"))
     if code_size_bytes > max_code_bytes:
         return private_json(
@@ -7889,3 +7869,24 @@ def github_repo_badge_svg(owner: str, repo: str):
         media_type="image/svg+xml",
         headers={"Cache-Control": f"public, max-age={BADGE_CACHE_TTL_SECONDS}"},
     )
+
+
+@app.post("/workspace")
+async def saved_workspace(request: Request):
+    access = get_request_access_context(request)
+    if not access.get("authenticated"):
+        raise HTTPException(401, "Sign in to view saved work.")
+    enforce_rate_limit(request, access, "feedback")
+    raw = await request.body()
+    if len(raw) > 300000:
+        raise HTTPException(413, "Saved reports must be smaller than 256 KB.")
+    try:
+        body = json.loads(raw)
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid workspace request.")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "Invalid workspace request.")
+    result = supabase_rest_request("POST", "rpc/aca_workspace", payload={"p_user": access["user_id"], "p_action": body.get("action", "list"), "p_body": body.get("data", {})})
+    if not isinstance(result, dict) or "ok" not in result:
+        raise HTTPException(503, "Saved work is temporarily unavailable.")
+    return private_json(result, status_code=200 if result.get("ok") else 400)
