@@ -186,10 +186,10 @@ class BillingLifecycleTests(unittest.TestCase):
             with self.subTest(status=status):
                 self.assertEqual(main.plan_from_subscription_status(status), "free")
 
-    def test_future_cancel_at_period_end_keeps_access(self):
+    def test_scheduled_cancel_keeps_active_access(self):
         self.assertEqual(
             main.plan_from_subscription_status(
-                "canceled",
+                "active",
                 cancel_at_period_end=True,
                 current_period_end=int(time.time()) + 3600,
             ),

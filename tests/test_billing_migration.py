@@ -5,6 +5,18 @@ from starlette.requests import Request
 import main
 
 class BillingMigrationTests(unittest.TestCase):
+ def test_paused_checkout_cannot_contact_stripe_or_create_customer(self):
+  with patch.object(main,'PURCHASES_ENABLED',False),patch.object(main.stripe.checkout.Session,'create') as checkout,patch.object(main.stripe.Customer,'create') as customer:
+   for headers in ({},{'Authorization':'Bearer arbitrary'}):
+    response=TestClient(main.app).post('/stripe/create-checkout-session',headers=headers)
+    self.assertEqual(response.status_code,503)
+    self.assertIn('paused',response.json()['detail'])
+   checkout.assert_not_called();customer.assert_not_called()
+ def test_terminal_status_cannot_be_revived_by_stale_cancellation_date(self):
+  for status in ['canceled','unpaid','incomplete','incomplete_expired','paused','unknown']:
+   self.assertEqual(main.plan_from_subscription_status(status,cancel_at_period_end=True,current_period_end=9999999999),'free')
+ def test_scheduled_cancellation_keeps_active_access(self):
+  self.assertEqual(main.plan_from_subscription_status('active',cancel_at_period_end=True,current_period_end=9999999999),'pro')
  def test_return_origin_allowlist(self):
   def req(origin): return Request({'type':'http','headers':[(b'x-audit-return-origin',origin.encode())]})
   with patch.object(main,'APP_BASE_URL','https://code-trust-check.onrender.com'):

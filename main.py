@@ -233,6 +233,7 @@ PERSISTENT_RATE_LIMITS_ENABLED = os.getenv("PERSISTENT_RATE_LIMITS_ENABLED", "tr
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_SECRET_KEY = os.getenv("SUPABASE_SECRET_KEY", "")
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "").strip()
+PURCHASES_ENABLED = os.getenv("PURCHASES_ENABLED", "false").strip().lower() == "true"
 STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY", "").strip()
 STRIPE_PRICE_ID = os.getenv("STRIPE_PRICE_ID", "price_1TBryAEKmNfjd7YM13LoKYvs").strip()
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "").strip()
@@ -5513,12 +5514,8 @@ def should_keep_pro_access(
     if normalized in {"active", "trialing", "past_due"}:
         return True
 
-    if cancel_at_period_end and current_period_end not in (None, "", 0, "0"):
-        try:
-            return int(current_period_end) > int(time.time())
-        except Exception:
-            return False
-
+    # Scheduled cancellation remains active until Stripe changes the status.
+    # A stale period end must never revive a canceled/unpaid subscription.
     return False
 
 
@@ -5689,6 +5686,8 @@ async def create_billing_portal_session(request: Request):
 
 @app.post("/stripe/create-checkout-session")
 async def create_stripe_checkout_session(request: Request):
+    if not PURCHASES_ENABLED:
+        raise HTTPException(status_code=503, detail="Purchases are paused during private validation.")
     access_token = await extract_request_access_token(request)
     access = get_request_access_context(request, access_token=access_token)
     access = enrich_access_with_admin_metadata(access)
