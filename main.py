@@ -234,6 +234,16 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_SECRET_KEY = os.getenv("SUPABASE_SECRET_KEY", "")
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "").strip()
 PURCHASES_ENABLED = os.getenv("PURCHASES_ENABLED", "false").strip().lower() == "true"
+CONTROLLED_CHECKOUT_USER_ID = os.getenv("CONTROLLED_CHECKOUT_USER_ID", "").strip()
+CONTROLLED_CHECKOUT_EXPIRES_AT = os.getenv("CONTROLLED_CHECKOUT_EXPIRES_AT", "0").strip()
+
+def controlled_checkout_allowed(access: dict) -> bool:
+    try:
+        active = time.time() < float(CONTROLLED_CHECKOUT_EXPIRES_AT)
+    except (ValueError, TypeError):
+        active = False
+    return bool(active and CONTROLLED_CHECKOUT_USER_ID and access.get("authenticated") and access.get("user_id") == CONTROLLED_CHECKOUT_USER_ID and access.get("plan", "free") == "free" and access.get("role") != "admin")
+
 STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY", "").strip()
 STRIPE_PRICE_ID = os.getenv("STRIPE_PRICE_ID", "price_1TBryAEKmNfjd7YM13LoKYvs").strip()
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "").strip()
@@ -308,6 +318,7 @@ def build_access_payload(access: dict) -> dict:
             "current_period_end": app_metadata.get("stripe_current_period_end"),
             "current_period_end_iso": app_metadata.get("stripe_current_period_end_iso"),
             "can_manage_billing": bool(app_metadata.get("stripe_customer_id")),
+            "can_start_checkout": controlled_checkout_allowed(access),
         },
         "debug": access.get("debug") or {},
     }
@@ -5686,11 +5697,13 @@ async def create_billing_portal_session(request: Request):
 
 @app.post("/stripe/create-checkout-session")
 async def create_stripe_checkout_session(request: Request):
-    if not PURCHASES_ENABLED:
+    if not PURCHASES_ENABLED and not CONTROLLED_CHECKOUT_USER_ID:
         raise HTTPException(status_code=503, detail="Purchases are paused during private validation.")
     access_token = await extract_request_access_token(request)
     access = get_request_access_context(request, access_token=access_token)
     access = enrich_access_with_admin_metadata(access)
+    if not PURCHASES_ENABLED and not controlled_checkout_allowed(access):
+        raise HTTPException(status_code=503, detail="Purchases are paused during private validation.")
     enforce_rate_limit(request, access, "billing")
 
     if not access.get("authenticated") or not access.get("user_id") or not access.get("email"):
@@ -5733,6 +5746,16 @@ async def create_stripe_checkout_session(request: Request):
         checkout_kwargs["customer"] = existing_customer_id
     else:
         checkout_kwargs["customer_email"] = str(access["email"])
+
+    if not PURCHASES_ENABLED:
+        try:
+            price = stripe.Price.retrieve(STRIPE_PRICE_ID)
+        except Exception as exc:
+            raise HTTPException(503, "Could not verify the controlled checkout price.") from exc
+        recurring = stripe_object_value(price, "recurring", {}) or {}
+        if not (stripe_object_value(price, "active") and stripe_object_value(price, "livemode") and stripe_object_value(price, "unit_amount") == 1900 and stripe_object_value(price, "currency") == "usd" and stripe_object_value(recurring, "interval") == "month" and stripe_object_value(recurring, "interval_count") == 1):
+            raise HTTPException(503, "Controlled checkout requires the approved $19 monthly live price.")
+        checkout_kwargs["idempotency_key"] = f"controlled-{access['user_id']}-{CONTROLLED_CHECKOUT_EXPIRES_AT}"
 
     try:
         session = stripe.checkout.Session.create(**checkout_kwargs)

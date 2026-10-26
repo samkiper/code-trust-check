@@ -118,3 +118,25 @@ class NormalBillingRouteTests(unittest.TestCase):
    response=self.client.post('/stripe/reconcile-subscription',headers=self.headers)
    self.assertEqual(response.status_code,503)
    sync.assert_not_called()
+
+class ControlledCheckoutTests(NormalBillingRouteTests):
+ def setUp(self):
+  super().setUp()
+  self.stack.enter_context(patch.object(main,'PURCHASES_ENABLED',False))
+  self.stack.enter_context(patch.object(main,'CONTROLLED_CHECKOUT_USER_ID','customer_user'))
+  self.stack.enter_context(patch.object(main,'CONTROLLED_CHECKOUT_EXPIRES_AT','9999999999'))
+  self.stack.enter_context(patch.object(main.stripe.Price,'retrieve',return_value={'active':True,'livemode':True,'unit_amount':1900,'currency':'usd','recurring':{'interval':'month','interval_count':1}}))
+ def test_unlisted_and_expired_users_cannot_create_session(self):
+  for name,value in [('CONTROLLED_CHECKOUT_USER_ID','other_user'),('CONTROLLED_CHECKOUT_EXPIRES_AT','0'),('CONTROLLED_CHECKOUT_EXPIRES_AT','invalid')]:
+   with patch.object(main,name,value),patch.object(main.stripe.checkout.Session,'create') as create:
+    self.assertEqual(self.client.post('/stripe/create-checkout-session',headers=self.headers).status_code,503)
+    create.assert_not_called()
+ def test_wrong_price_never_creates_checkout(self):
+  with patch.object(main.stripe.Price,'retrieve',return_value={'unit_amount':6900}),patch.object(main.stripe.checkout.Session,'create') as create:
+   self.assertEqual(self.client.post('/stripe/create-checkout-session',headers=self.headers).status_code,503)
+   create.assert_not_called()
+ def test_retries_use_same_idempotency_key(self):
+  from types import SimpleNamespace
+  with patch.object(main.stripe.checkout.Session,'create',return_value=SimpleNamespace(url='https://checkout.stripe.com/test',id='cs_test_example')) as create:
+   for _ in range(2):self.assertEqual(self.client.post('/stripe/create-checkout-session',headers=self.headers).status_code,200)
+   self.assertEqual(create.call_args_list[0].kwargs['idempotency_key'],create.call_args_list[1].kwargs['idempotency_key'])
