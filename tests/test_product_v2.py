@@ -1,4 +1,5 @@
 import hashlib
+import base64
 import hmac
 import json
 import io
@@ -51,9 +52,11 @@ class ProductIntegrityV20Tests(unittest.TestCase):
                 patch.object(main, "GITHUB_CLIENT_SECRET", "client-secret"), \
                 patch.object(main, "GITHUB_LINK_STATE_SECRET", "state-secret"), \
                 patch.object(main, "APP_BASE_URL", "https://audit.example"):
-            url = main.github_oauth_authorize_url("user-1")
+            url = main.github_oauth_authorize_url("user-1", "a" * 43)
             query = parse_qs(urlparse(url).query)
             self.assertEqual(query["client_id"], ["client-id"])
+            self.assertEqual(query["code_challenge"], ["a" * 43])
+            self.assertEqual(query["code_challenge_method"], ["S256"])
             self.assertEqual(query["redirect_uri"], ["https://audit.example/github/oauth/callback"])
             self.assertEqual(main.read_github_install_state(query["state"][0], "oauth")["user_id"], "user-1")
 
@@ -71,19 +74,24 @@ class ProductIntegrityV20Tests(unittest.TestCase):
         self.assertEqual(user["login"], "samkiper")
         self.assertEqual([item["id"] for item in installations], [10])
 
-    def test_oauth_callback_links_an_existing_verified_installation(self):
+    def test_authenticated_oauth_completion_links_verified_installation(self):
+        verifier = "v" * 43
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+        access = {"authenticated": True, "user_id": "user-1", "plan": "serious"}
         with patch.object(main, "GITHUB_LINK_STATE_SECRET", "state-secret"):
-            state = main.create_github_install_state("user-1", purpose="oauth")
+            state = main.create_github_install_state("user-1", purpose="oauth", code_challenge=challenge)
         installation = {"id": 10, "app_id": 123, "account": {"login": "samkiper"}}
         with patch.object(main, "GITHUB_LINK_STATE_SECRET", "state-secret"), \
-                patch.object(main, "github_user_has_pro", return_value=True), \
-                patch.object(main, "github_oauth_exchange", return_value="user-token"), \
+                patch.object(main, "get_request_access_context", return_value=access), \
+                patch.object(main, "enrich_access_with_admin_metadata", side_effect=lambda a: a), \
+                patch.object(main, "enforce_rate_limit"), \
+                patch.object(main, "github_oauth_exchange", return_value="user-token") as exchange, \
                 patch.object(main, "list_github_user_installations", return_value=({"login": "samkiper"}, [installation])), \
                 patch.object(main, "save_github_installation_link", return_value={"installation_id": 10}):
-            response = main.github_oauth_callback(code="code", state=state)
-        self.assertEqual(response.status_code, 303)
-        self.assertIn("github=connected", response.headers["location"])
-        self.assertIn("github_account=samkiper", response.headers["location"])
+            response = main.complete_github_oauth(main.GitHubOAuthCompleteRequest(code="code",state=state,code_verifier=verifier), Request({"type":"http","headers":[]}))
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(json.loads(response.body)["linked"])
+        exchange.assert_called_once_with("code", verifier)
 
     def test_installation_link_requires_oauth_even_with_valid_state(self):
         access = {"authenticated": True, "user_id": "user-1", "plan": "serious"}
@@ -97,7 +105,7 @@ class ProductIntegrityV20Tests(unittest.TestCase):
                 patch.object(main, "save_github_installation_link") as save:
             state = main.create_github_install_state("user-1")
             request = Request({"type": "http", "headers": []})
-            response = main.link_github_installation(main.GitHubInstallationLinkRequest(installation_id=99999, state=state), request)
+            response = main.link_github_installation(main.GitHubInstallationLinkRequest(installation_id=99999, state=state, code_challenge="a" * 43), request)
         body = json.loads(response.body)
         self.assertFalse(body["linked"])
         self.assertTrue(body["authorization_required"])
@@ -125,7 +133,7 @@ class ProductIntegrityV20Tests(unittest.TestCase):
                 patch.object(main, "github_oauth_exchange") as exchange:
             response = main.github_oauth_callback(code="code", state="invalid")
         self.assertEqual(response.status_code, 303)
-        self.assertIn("github=error", response.headers["location"])
+        self.assertIn("github=authorization_incomplete", response.headers["location"])
         exchange.assert_not_called()
 
     def test_safe_result_uses_supported_signal_language_and_action(self):

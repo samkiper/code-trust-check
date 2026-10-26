@@ -123,4 +123,4 @@ class RepositoryCoverageTests(unittest.TestCase):
         r=self.repository({'unsafe.py':'value=input()\neval(value)'})
         self.assertEqual(r['verdict']['id'],'do_not_run')
         self.assertTrue(r['files'][0]['flags'])
-        self.assertFalse(any('No major code-behavior risks' in x or 'No supported code-behavior risk' in x for x in r['behavior_summary']))
+        self.assertFalse(any('No major code-behavior risks' in x or 'No supported code-behavior risk' in x or 'No obvious risky behavior' in x for x in r['behavior_summary']))

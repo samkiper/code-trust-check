@@ -103,6 +103,13 @@ class RepoScanRequest(BaseModel):
 class GitHubInstallationLinkRequest(BaseModel):
     installation_id: int
     state: str
+    code_challenge: str = ""
+
+
+class GitHubOAuthCompleteRequest(BaseModel):
+    code: str
+    state: str
+    code_verifier: str
 
 
 class FixPreviewRequest(BaseModel):
@@ -266,7 +273,7 @@ GITHUB_LINK_STATE_SECRET = os.getenv("GITHUB_LINK_STATE_SECRET", "").strip() or 
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "").strip()
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 
-SCANNER_VERSION = 37
+SCANNER_VERSION = 38
 AUDIT_SCORE_HIGH_RISK_MAX = 65
 AUDIT_SCORE_REVIEW_MAX = 90
 
@@ -5215,7 +5222,7 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
     if meaningful_intent and "network" in touches and not intent_mentions_any(
         intent_lower, ["api", "fetch", "request", "http", "network", "online", "web", "repo", "github", "download"]
     ):
-        mismatch_flags.append("Network behavior conflicts with a stated restriction in the intent." if re.search(r"\b(no|not|never|without|avoid)\b[^.;]*\b(network|transmit|send|online|request|download)\b", intent_lower) else "Code uses network behavior not clearly mentioned in the intent.")
+        mismatch_flags.append("Network activity is present. Check whether the request and its payload violate the stated restriction; keyword matching alone does not establish a prohibited transmission." if re.search(r"\b(no|not|never|without|avoid)\b[^.;]*\b(network|transmit|send|online|request|download)\b", intent_lower) else "Code uses network behavior not clearly mentioned in the intent.")
         risk_points += 3.0
 
     if meaningful_intent and "files" in touches and not intent_mentions_any(
@@ -6326,6 +6333,7 @@ def create_github_install_state(
     user_id: str,
     ttl_seconds: int = 900,
     purpose: str = "installation",
+    code_challenge: str = "",
 ) -> str:
     if not GITHUB_LINK_STATE_SECRET:
         raise RuntimeError("GitHub installation linking is not configured")
@@ -6335,6 +6343,10 @@ def create_github_install_state(
         "nonce": secrets.token_urlsafe(10),
         "purpose": str(purpose),
     }
+    if code_challenge:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{43}", code_challenge):
+            raise ValueError("A valid S256 browser challenge is required.")
+        payload["code_challenge"] = code_challenge
     encoded = base64.urlsafe_b64encode(
         json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
     ).decode("ascii").rstrip("=")
@@ -6376,24 +6388,29 @@ def github_oauth_callback_url() -> str:
     return f"{APP_BASE_URL}/github/oauth/callback"
 
 
-def github_oauth_authorize_url(user_id: str) -> str:
+def github_oauth_authorize_url(user_id: str, code_challenge: str) -> str:
     if not GITHUB_CLIENT_ID or not GITHUB_CLIENT_SECRET or not GITHUB_LINK_STATE_SECRET:
         raise RuntimeError("GitHub user authorization is not configured")
-    state = create_github_install_state(user_id, purpose="oauth")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{43}", code_challenge):
+        raise ValueError("Start GitHub authorization from the current signed-in browser.")
+    state = create_github_install_state(user_id, purpose="oauth", code_challenge=code_challenge)
     return "https://github.com/login/oauth/authorize?" + urlencode({
         "client_id": GITHUB_CLIENT_ID,
         "redirect_uri": github_oauth_callback_url(),
         "state": state,
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
     })
 
 
-def github_oauth_exchange(code: str) -> str:
+def github_oauth_exchange(code: str, code_verifier: str) -> str:
     if not code or len(code) > 500:
         raise ValueError("GitHub returned an invalid authorization code")
     data = json.dumps({
         "client_id": GITHUB_CLIENT_ID,
         "client_secret": GITHUB_CLIENT_SECRET,
         "code": code,
+        "code_verifier": code_verifier,
         "redirect_uri": github_oauth_callback_url(),
     }).encode("utf-8")
     request = urllib.request.Request(
@@ -7008,13 +7025,13 @@ def github_status():
         "pro_enforcement": GITHUB_ENFORCE_PRO,
         "secure_linking": bool(GITHUB_LINK_STATE_SECRET),
         "existing_install_linking": bool(GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET and GITHUB_LINK_STATE_SECRET),
-        "connection_revision": 2,
+        "connection_revision": 3,
         "scanner_version": SCANNER_VERSION,
     })
 
 
 @app.get("/github/connect-url")
-def github_connect_url(request: Request):
+def github_connect_url(request: Request, code_challenge: str = ""):
     access = enrich_access_with_admin_metadata(get_request_access_context(request))
     enforce_rate_limit(request, access, "github")
     if not access.get("authenticated") or not access.get("user_id"):
@@ -7023,8 +7040,10 @@ def github_connect_url(request: Request):
         return private_json({"detail": "An active Pro account is required for automatic pull-request checks."}, status_code=403)
     if not GITHUB_CLIENT_ID or not GITHUB_CLIENT_SECRET or not GITHUB_LINK_STATE_SECRET:
         return private_json({"detail": "Connecting an existing GitHub installation is not configured yet."}, status_code=503)
+    if not re.fullmatch(r"[A-Za-z0-9_-]{43}", code_challenge):
+        return private_json({"detail": "Start GitHub authorization from the current signed-in browser."}, status_code=400)
     return private_json({
-        "url": github_oauth_authorize_url(str(access["user_id"])),
+        "url": github_oauth_authorize_url(str(access["user_id"]), code_challenge),
         "expires_in": 900,
     })
 
@@ -7049,47 +7068,48 @@ def github_install_url(request: Request):
 
 @app.get("/github/oauth/callback")
 def github_oauth_callback(code: str = "", state: str = "", error: str = ""):
-    def home_redirect(result: str, **extra: str | int) -> RedirectResponse:
-        query = {"github": result, **extra}
-        return RedirectResponse(
-            f"{APP_BASE_URL}/?{urlencode(query)}",
-            status_code=303,
-            headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
-        )
+    # A provider redirect has no app bearer session. It must never link accounts.
+    # Completion belongs to the authenticated frontend POST with its PKCE verifier.
+    return RedirectResponse(
+        f"{APP_BASE_URL}/?{urlencode({'github': 'cancelled' if error else 'authorization_incomplete'})}",
+        status_code=303,
+        headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache", "Referrer-Policy": "no-referrer"},
+    )
 
-    if error:
-        return home_redirect("cancelled")
-    payload = read_github_install_state(state, "oauth")
-    user_id = str(payload.get("user_id") or "")
-    if not user_id or not github_user_has_pro(user_id):
-        return home_redirect("error")
+
+@app.post("/github/oauth/complete")
+def complete_github_oauth(req: GitHubOAuthCompleteRequest, request: Request):
+    access = enrich_access_with_admin_metadata(get_request_access_context(request))
+    enforce_rate_limit(request, access, "github")
+    if not access.get("authenticated") or not access.get("user_id"):
+        return private_json({"detail": "Sign in before completing GitHub authorization."}, status_code=401)
+    if access.get("plan") not in {"pro", "serious", "admin"} and access.get("role") != "admin":
+        return private_json({"detail": "Pro or Serious is required to connect GitHub."}, status_code=403)
+    payload = read_github_install_state(req.state, "oauth")
+    user_id = str(access["user_id"])
+    verifier = req.code_verifier
+    if not re.fullmatch(r"[A-Za-z0-9._~-]{43,128}", verifier):
+        return private_json({"detail": "The GitHub authorization did not match this browser. Start again."}, status_code=400)
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest()).decode("ascii").rstrip("=")
+    if str(payload.get("user_id") or "") != user_id or not hmac.compare_digest(str(payload.get("code_challenge") or ""), challenge):
+        return private_json({"detail": "The GitHub authorization expired or did not match this account and browser. Start again."}, status_code=400)
     try:
-        token = github_oauth_exchange(code)
+        token = github_oauth_exchange(req.code, verifier)
         github_user, installations = list_github_user_installations(token)
         if not installations:
             valid_slug = GITHUB_APP_SLUG if GITHUB_APP_SLUG_PATTERN.fullmatch(GITHUB_APP_SLUG) else ""
             if not valid_slug:
-                return home_redirect("error")
+                return private_json({"detail": "The GitHub App installation is not configured."}, status_code=503)
             install_state = create_github_install_state(user_id, purpose="installation")
-            install_url = f"https://github.com/apps/{valid_slug}/installations/new?" + urlencode({
-                "state": install_state,
-            })
-            return RedirectResponse(
-                install_url,
-                status_code=303,
-                headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
-            )
+            return private_json({"linked": False, "installation_required": True, "url":
+                f"https://github.com/apps/{valid_slug}/installations/new?" + urlencode({"state": install_state})})
         saved = [save_github_installation_link(user_id, item) for item in installations]
         if not all(saved):
             raise RuntimeError("One or more GitHub installation links could not be saved")
-        return home_redirect(
-            "connected",
-            github_account=str(github_user.get("login") or "")[:255],
-            github_installations=len(saved),
-        )
+        return private_json({"linked": True, "github_account": str(github_user.get("login") or "")[:255], "github_installations": len(saved)})
     except Exception as exc:
         log_server_issue("GitHub user authorization failed", exc)
-        return home_redirect("error")
+        return private_json({"detail": "GitHub authorization could not be completed. Start the connection again."}, status_code=502)
 
 
 @app.get("/github/account-status")
@@ -7297,10 +7317,12 @@ def link_github_installation(req: GitHubInstallationLinkRequest, request: Reques
     # Never fetch with the App JWT and attach a caller-supplied installation ID.
     if not GITHUB_CLIENT_ID or not GITHUB_CLIENT_SECRET:
         return private_json({"detail": "GitHub user authorization is not configured yet."}, status_code=503)
+    if not re.fullmatch(r"[A-Za-z0-9_-]{43}", req.code_challenge):
+        return private_json({"detail": "Start GitHub authorization from the current signed-in browser."}, status_code=400)
     return private_json({
         "linked": False,
         "authorization_required": True,
-        "url": github_oauth_authorize_url(str(access["user_id"])),
+        "url": github_oauth_authorize_url(str(access["user_id"]), req.code_challenge),
     })
 
 
@@ -7733,6 +7755,8 @@ def scan_repo_work(req,access,request):
             all_touches.update(result["touches"])
 
             for item in result["behavior_summary"]:
+                if item == "No obvious risky behavior was detected in this scan.":
+                    continue  # A file-level empty result is not a repository-wide finding.
                 if item not in all_behavior_summary:
                     all_behavior_summary.append(item)
 

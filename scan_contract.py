@@ -66,6 +66,15 @@ def finalize_snippet(result, code, filename, semgrep):
     if not source["meaningful_coverage"] or result.get("risk") in {"limit", "limited"}: status = "not-rated"
     result.update(scan_status=status, coverage_validated=True)
     all_flags = (result.get("flags") or []) + (result.get("engine_findings") or [])
+    # The displayed summary covers the combined report, not only behavior rules.
+    # An empty behavior result must not contradict a Semgrep finding.
+    if all_flags:
+        result["behavior_summary"] = [
+            item for item in result.get("behavior_summary", [])
+            if item != "No obvious risky behavior was detected in this scan."
+        ]
+        if result.get("engine_findings"):
+            result["behavior_summary"].append("Static-analysis findings were reported. Review their cited operations and evidence below.")
     high = any(float(f.get("severity") or 0) >= 18 for f in all_flags)
     medium = any(float(f.get("severity") or 0) >= 8 for f in all_flags)
     if status == "not-rated":
