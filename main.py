@@ -899,6 +899,17 @@ def require_admin_access(request: Request, scope: str = "feedback") -> dict:
     return access
 
 
+@app.get("/admin/monitoring")
+def owner_monitoring(request: Request):
+    require_admin_access(request)
+    summary = supabase_rest_request("POST", "rpc/aca_owner_monitoring_summary", payload={})
+    if not isinstance(summary, dict) or not isinstance(summary.get("ai"), dict) or not isinstance(summary.get("scans_last_24_hours"), dict):
+        return private_json({"detail": "Monitoring data is temporarily unavailable."}, status_code=503)
+    with SCAN_JOBS.lock:
+        queue = {"waiting": len(SCAN_JOBS.waiting), "running": int(SCAN_JOBS.active is not None)}
+    return private_json({"summary": summary, "local_queue": queue})
+
+
 def sanitize_feedback_text(value: str, limit: int = 500) -> str:
     text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", " ", str(value or ""))
     text = re.sub(r"\s+", " ", text).strip()
