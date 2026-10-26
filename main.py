@@ -7,6 +7,7 @@ from scan_capacity import limit_scan_capacity
 from scan_jobs import ScanJobs
 from scanner_process import run_scanner
 from audit_runtime import run_audit_process
+from billing_plans import subscription_plan, subscription_period_end
 from functools import wraps
 import uuid
 from flow_review import supplemental_flows, literal_eval_locations
@@ -320,7 +321,8 @@ def build_access_payload(access: dict) -> dict:
             "current_period_end": app_metadata.get("stripe_current_period_end"),
             "current_period_end_iso": app_metadata.get("stripe_current_period_end_iso"),
             "can_manage_billing": bool(app_metadata.get("stripe_customer_id")),
-            "can_start_checkout": controlled_checkout_allowed(access),
+            "can_start_checkout": bool(checkout_offers(access)),
+            "checkout_offers": checkout_offers(access),
         },
         "debug": access.get("debug") or {},
     }
@@ -5568,6 +5570,24 @@ def plan_from_subscription_status(
     return "free"
 
 
+def plan_for_stripe_subscription(subscription):
+    prices={STRIPE_PRICE_ID:'pro'}
+    for key in ('STRIPE_SERIOUS_PRICE_ID','STRIPE_SERIOUS_ANNUAL_PRICE_ID'):
+        price_id=os.getenv(key,'').strip()
+        if price_id and price_id not in prices:prices[price_id]='serious'
+    return subscription_plan(subscription,prices)
+
+
+def checkout_offers(access):
+    if not access.get('authenticated') or access.get('plan','free') != 'free' or access.get('role') == 'admin':return []
+    controlled=controlled_checkout_allowed(access)
+    if not PURCHASES_ENABLED and not controlled:return []
+    choices=[('pro','month',1900,STRIPE_PRICE_ID),('serious','month',6900,os.getenv('STRIPE_SERIOUS_PRICE_ID','')),('serious','year',69000,os.getenv('STRIPE_SERIOUS_ANNUAL_PRICE_ID',''))]
+    allowed_plan=os.getenv('CONTROLLED_CHECKOUT_PLAN','pro')
+    return [{'plan':plan,'interval':interval,'amount':amount,'controlled':not PURCHASES_ENABLED}
+            for plan,interval,amount,price in choices if price and (PURCHASES_ENABLED or plan==allowed_plan and interval=='month')]
+
+
 def get_supabase_admin_user_by_metadata_field(field_name: str, field_value: str) -> dict | None:
     if not field_name or not field_value:
         return None
@@ -5730,25 +5750,38 @@ async def create_stripe_checkout_session(request: Request):
     enforce_rate_limit(request, access, "billing")
 
     if not access.get("authenticated") or not access.get("user_id") or not access.get("email"):
-        raise HTTPException(status_code=401, detail="Log in before upgrading to Pro. Your session may need to be refreshed.")
+        raise HTTPException(status_code=401, detail="Log in before upgrading. Your session may need to be refreshed.")
 
     current_plan = str(access.get("plan") or "free").lower()
     current_role = str(access.get("role") or "user").lower()
     if current_role == "admin":
         raise HTTPException(status_code=400, detail="Admin accounts already have elevated access.")
     if current_plan in {"pro", "serious"}:
-        raise HTTPException(status_code=400, detail="Your account is already on Pro.")
+        raise HTTPException(status_code=400, detail="Your account already has a paid plan. Manage it through billing.")
 
     if not stripe_is_configured():
         raise HTTPException(status_code=503, detail="Stripe is not fully configured on the server yet.")
 
+    try:
+        selection=await request.json() if await request.body() else {}
+    except ValueError:
+        raise HTTPException(400,'Choose a valid subscription plan.')
+    if not isinstance(selection,dict):raise HTTPException(400,'Choose a valid subscription plan.')
+    selected_plan=selection.get('plan','pro');interval=selection.get('interval','month')
+    if selected_plan not in {'pro','serious'} or interval not in {'month','year'} or selected_plan=='pro' and interval!='month':
+        raise HTTPException(400,'Choose an available subscription plan.')
+    selected_price=STRIPE_PRICE_ID if selected_plan=='pro' else os.getenv('STRIPE_SERIOUS_ANNUAL_PRICE_ID' if interval=='year' else 'STRIPE_SERIOUS_PRICE_ID','').strip()
+    if not selected_price:raise HTTPException(503,'This subscription plan is not available yet.')
+    if not PURCHASES_ENABLED and (selected_plan!=os.getenv('CONTROLLED_CHECKOUT_PLAN','pro') or interval!='month'):
+        raise HTTPException(503,'This plan is not enabled for the controlled checkout.')
+    expected_amount=1900 if selected_plan=='pro' else 69000 if interval=='year' else 6900
     current_user = get_supabase_admin_user(str(access["user_id"])) or {}
     existing_app_metadata = current_user.get("app_metadata") or {}
     existing_customer_id = str(existing_app_metadata.get("stripe_customer_id") or "").strip() or None
 
     checkout_kwargs = {
         "mode": "subscription",
-        "line_items": [{"price": STRIPE_PRICE_ID, "quantity": 1}],
+        "line_items": [{"price": selected_price, "quantity": 1}],
         "success_url": f"{get_billing_return_url(request)}/account/billing?checkout=success&session_id={{CHECKOUT_SESSION_ID}}",
         "cancel_url": f"{get_billing_return_url(request)}/account/billing?checkout=cancel",
         "client_reference_id": str(access["user_id"]),
@@ -5772,13 +5805,13 @@ async def create_stripe_checkout_session(request: Request):
 
     if not PURCHASES_ENABLED:
         try:
-            price = stripe.Price.retrieve(STRIPE_PRICE_ID)
+            price = stripe.Price.retrieve(selected_price)
         except Exception as exc:
             raise HTTPException(503, "Could not verify the controlled checkout price.") from exc
         recurring = stripe_object_value(price, "recurring", {}) or {}
-        if not (stripe_object_value(price, "active") and stripe_object_value(price, "livemode") and stripe_object_value(price, "unit_amount") == 1900 and stripe_object_value(price, "currency") == "usd" and stripe_object_value(recurring, "interval") == "month" and stripe_object_value(recurring, "interval_count") == 1):
-            raise HTTPException(503, "Controlled checkout requires the approved $19 monthly live price.")
-        checkout_kwargs["idempotency_key"] = f"controlled-{access['user_id']}-{CONTROLLED_CHECKOUT_EXPIRES_AT}"
+        if not (stripe_object_value(price, "active") and stripe_object_value(price, "livemode") and stripe_object_value(price, "unit_amount") == expected_amount and stripe_object_value(price, "currency") == "usd" and stripe_object_value(recurring, "interval") == "month" and stripe_object_value(recurring, "interval_count") == 1):
+            raise HTTPException(503, "Controlled checkout requires the approved monthly live price.")
+        checkout_kwargs["idempotency_key"] = f"controlled-{access['user_id']}-{selected_plan}-{CONTROLLED_CHECKOUT_EXPIRES_AT}"
 
     try:
         session = stripe.checkout.Session.create(**checkout_kwargs)
@@ -5855,12 +5888,8 @@ async def stripe_checkout_session_status(request: Request, session_id: str):
             subscription = stripe.Subscription.retrieve(subscription_id)
             subscription_status = str(stripe_object_value(subscription, "status") or "")
             cancel_at_period_end = bool(stripe_object_value(subscription, "cancel_at_period_end", False) or False)
-            current_period_end = stripe_object_value(subscription, "current_period_end")
-            plan = plan_from_subscription_status(
-                subscription_status,
-                cancel_at_period_end=cancel_at_period_end,
-                current_period_end=current_period_end,
-            )
+            current_period_end = subscription_period_end(subscription)
+            plan = plan_for_stripe_subscription(subscription)
         except Exception as exc:
             log_server_issue("Could not retrieve subscription during checkout verification", exc)
             raise HTTPException(status_code=503, detail="Subscription verification is temporarily unavailable. Retry shortly.") from exc
@@ -5879,12 +5908,8 @@ async def stripe_checkout_session_status(request: Request, session_id: str):
             subscription = stripe.Subscription.retrieve(subscription_id)
             subscription_status = str(stripe_object_value(subscription, "status") or "")
             cancel_at_period_end = bool(stripe_object_value(subscription, "cancel_at_period_end", False) or False)
-            current_period_end = stripe_object_value(subscription, "current_period_end")
-            plan = plan_from_subscription_status(
-                subscription_status,
-                cancel_at_period_end=cancel_at_period_end,
-                current_period_end=current_period_end,
-            )
+            current_period_end = subscription_period_end(subscription)
+            plan = plan_for_stripe_subscription(subscription)
         except Exception as exc:
             log_server_issue("Could not retrieve subscription while reporting checkout status", exc)
 
@@ -5991,23 +6016,19 @@ async def reconcile_stripe_subscription(request: Request):
         cancel_at_period_end = bool(
             stripe_object_value(subscription, "cancel_at_period_end", False) or False
         )
-        current_period_end = stripe_object_value(subscription, "current_period_end")
+        current_period_end = subscription_period_end(subscription)
     except Exception as exc:
         log_server_issue("Could not verify subscription during paid Checkout Session recovery", exc)
         raise HTTPException(status_code=503, detail="Subscription verification is temporarily unavailable. Retry shortly.") from exc
 
-    restored_plan = plan_from_subscription_status(
-        status,
-        cancel_at_period_end=cancel_at_period_end,
-        current_period_end=current_period_end,
-    )
-    if restored_plan != "pro":
+    restored_plan = plan_for_stripe_subscription(subscription)
+    if restored_plan not in {"pro", "serious"}:
         raise HTTPException(
             status_code=409,
             detail="The checkout was paid, but the associated subscription is no longer active.",
         )
 
-    request.state.operation_stage = "updating the Supabase account to Pro"
+    request.state.operation_stage = "updating the Supabase subscription access"
     synced = sync_user_plan_from_subscription(
         str(access["user_id"]),
         plan=restored_plan,
@@ -6054,7 +6075,7 @@ async def stripe_sandbox_webhook(request: Request):
     user = get_supabase_admin_user(user_id)
     if not user:
         raise HTTPException(503, "Test account unavailable; retry.")
-    updates = subscription_update(event.to_dict(), user, customer_id, price_id, plan_from_subscription_status)
+    updates = subscription_update(event.to_dict(), user, customer_id, price_id, plan_from_subscription_status, paid_plan=os.getenv("STRIPE_SANDBOX_PLAN", "pro"))
     if updates is None:
         return {"received": True, "ignored": True}
     if not update_supabase_user_app_metadata(user_id, updates):
@@ -6096,6 +6117,7 @@ async def stripe_webhook(request: Request):
             stripe_subscription_id=str(subscription_id) if subscription_id else None,
         )
         if user_id:
+            subscription = None
             subscription_status = ""
             cancel_at_period_end = False
             current_period_end = None
@@ -6104,18 +6126,14 @@ async def stripe_webhook(request: Request):
                     subscription = stripe.Subscription.retrieve(subscription_id)
                     subscription_status = str(stripe_object_value(subscription, "status") or "")
                     cancel_at_period_end = bool(stripe_object_value(subscription, "cancel_at_period_end", False) or False)
-                    current_period_end = stripe_object_value(subscription, "current_period_end")
+                    current_period_end = subscription_period_end(subscription)
             except Exception as exc:
                 log_server_issue("Failed to retrieve subscription after checkout completion", exc)
                 return JSONResponse({"received": False, "error": "Subscription lookup unavailable; retry."}, status_code=503)
 
             synced = sync_user_plan_from_subscription(
                 user_id,
-                plan=plan_from_subscription_status(
-                    subscription_status,
-                    cancel_at_period_end=cancel_at_period_end,
-                    current_period_end=current_period_end,
-                ),
+                plan=plan_for_stripe_subscription(subscription),
                 stripe_customer_id=str(customer_id) if customer_id else None,
                 stripe_subscription_id=str(subscription_id) if subscription_id else None,
                 subscription_status=subscription_status,
@@ -6137,14 +6155,10 @@ async def stripe_webhook(request: Request):
         if user_id:
             status = str(stripe_object_value(event_object, "status") or "")
             cancel_at_period_end = bool(stripe_object_value(event_object, "cancel_at_period_end", False) or False)
-            current_period_end = stripe_object_value(event_object, "current_period_end")
+            current_period_end = subscription_period_end(event_object)
             synced = sync_user_plan_from_subscription(
                 user_id,
-                plan=plan_from_subscription_status(
-                    status,
-                    cancel_at_period_end=cancel_at_period_end,
-                    current_period_end=current_period_end,
-                ),
+                plan=plan_for_stripe_subscription(event_object),
                 stripe_customer_id=customer_id,
                 stripe_subscription_id=subscription_id,
                 subscription_status=status,
@@ -6166,14 +6180,10 @@ async def stripe_webhook(request: Request):
                 subscription = stripe.Subscription.retrieve(subscription_id)
                 status = str(stripe_object_value(subscription, "status") or "")
                 cancel_at_period_end = bool(stripe_object_value(subscription, "cancel_at_period_end", False) or False)
-                current_period_end = stripe_object_value(subscription, "current_period_end")
+                current_period_end = subscription_period_end(subscription)
                 synced = sync_user_plan_from_subscription(
                     user_id,
-                    plan=plan_from_subscription_status(
-                        status,
-                        cancel_at_period_end=cancel_at_period_end,
-                        current_period_end=current_period_end,
-                    ),
+                    plan=plan_for_stripe_subscription(subscription),
                     stripe_customer_id=customer_id,
                     stripe_subscription_id=subscription_id,
                     subscription_status=status,

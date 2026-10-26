@@ -4,10 +4,13 @@ No Stripe API credentials or live billing identifiers are used by this adapter.
 Disable by removing STRIPE_SANDBOX_WEBHOOK_SECRET after validation.
 """
 from fastapi import HTTPException
+from billing_plans import subscription_plan
 
 EVENTS = {'customer.subscription.created', 'customer.subscription.updated', 'customer.subscription.deleted'}
 
-def subscription_update(event, user, customer_id, price_id, plan_for_status):
+def subscription_update(event, user, customer_id, price_id, plan_for_status, paid_plan="pro"):
+    if paid_plan not in {'pro','serious'}:
+        raise HTTPException(503, 'Invalid sandbox plan configuration.')
     if event.get('livemode') is not False:
         raise HTTPException(400, 'Sandbox events only.')
     if event.get('type') not in EVENTS:
@@ -34,7 +37,7 @@ def subscription_update(event, user, customer_id, price_id, plan_for_status):
     status = 'canceled' if event['type'] == 'customer.subscription.deleted' else obj.get('status', '')
     period = obj.get('current_period_end') or items[0].get('current_period_end')
     cancel = bool(obj.get('cancel_at_period_end'))
-    return {'plan': plan_for_status(status, cancel_at_period_end=cancel, current_period_end=period),
+    return {'plan': subscription_plan({**obj,'status':status},{price_id:paid_plan}),
             'sandbox_subscription_id': obj['id'], 'sandbox_subscription_status': status,
             'sandbox_cancel_at_period_end': cancel, 'sandbox_current_period_end': period,
             'sandbox_event_id': event['id'], 'sandbox_event_created': created}
