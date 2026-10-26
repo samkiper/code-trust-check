@@ -52,3 +52,27 @@ Validation used the normal signed-in Free customer form and queued backend route
 Scope: this was controlled fault injection against the deployed engine, not a naturally occurring timeout or a throughput benchmark. It does not establish a whole-job deadline for every behavior-analysis or repository-processing path; the queue still relies on its synchronous work returning. Serious billing and AI credit-pack fulfillment remain separate unverified launch gates.
 
 Cleanup: the validation digest was cleared and its expiry set to zero. The cleanup deployment reached live on the tested code revision. Normal scan budgets are restored. Site access remains owner-private, customer AI remains disabled, and payments remain paused.
+
+## Whole-audit deployed deadline and recovery — October 26, 2026
+
+Replaced in-process analysis with an isolated trusted worker and a 120-second overall analysis deadline. Authentication, allowance reservation/settlement and queue waiting retain their separate bounds. The supervisor kills and reaps the worker process group before releasing capacity; submitted source is never executed.
+
+A temporary exact-source diagnostic injected a ten-second worker stall with a one-second supervisor deadline through the normal signed-in customer queue. The browser returned the maximum-runtime error, and the database receipt was automatically refunded. A different normal snippet then completed with both engines complete, on the same account and deployment without restarting the server. That follow-up was correctly charged and subsequently refunded as QA cleanup. Both receipt states were independently verified. Diagnostic digest and expiry were cleared, and the cleanup deployment reached live.
+
+This verifies controlled deployed whole-analysis timeout and recovery, not sustained production throughput. Local checks also cover termination of real busy parent/child processes, cleanup after success, accounting and queued follow-up. The full backend suite now passes 215 tests; the scanner changes passed 72 CLI parity cases and accuracy gates on 65 internal, 750 OWASP and 300 holdout cases.
+
+## Serious monthly and annual — sandbox billing with deployed access
+
+Fixed production entitlement resolution to use approved Stripe price IDs, not a generic paid status or client metadata. Checkout accepts only configured Pro monthly, Serious monthly or Serious annual selections; client price and amount fields cannot select the charge. The private Site includes matching checkout choices, with annual upfront billing and monthly allowance disclosure. Site build and all 116 tests passed. A separate full standalone TypeScript check remains limited by the retained starter's missing Cloudflare worker declarations; it is not counted as a passing check.
+
+Using a non-administrator test account and real signed sandbox webhooks against the deployed backend:
+
+- Serious monthly sandbox invoice paid USD 69 and granted Serious access.
+- Scheduled cancellation retained Serious while the subscription was active; immediate cancellation restored Free.
+- Serious annual sandbox invoice paid USD 690 and granted the same Serious access, with an account-anniversary monthly allowance reset rather than an annual scan pool. Cancellation restored Free.
+- A synthetic 50,000-line Python submission (901,389 characters; 47,500 nonblank source lines) completed through the deployed Site queue with both behavior and Semgrep engines complete. Exactly one allowance was charged, then refunded as QA cleanup.
+- Sandbox subscriptions were canceled, temporary webhook disabled, sandbox prices and product returned to inactive. No real money was charged in these Serious checks.
+
+Scope: these are sandbox financial transactions plus deployed authorization/scanner observations. They do not verify live USD 69 settlement, refund, customer-portal cancellation for Serious, or arbitrary complete-application coverage. The earlier live Pro payment and refund are separate evidence. Customer AI and credit-pack sales remain disabled and are outside the static-audit launch scope.
+
+The real Serious checkout remains pending: automatic approval review blocked activating its live monthly price. Do not enable general purchases or public access based on sandbox results alone. Obtain explicit authorization for the restricted live test, complete checkout with the owner, verify Serious access, refund and cancel, then remove the checkout exception. The site remains owner-private and general purchases paused.
