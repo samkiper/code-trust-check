@@ -60,3 +60,27 @@ class CredentialSourceRegressionTests(unittest.TestCase):
   code='import os, requests\nrequests.get("https://api.example.com/data",headers={"Authorization":os.getenv("API_KEY")})'
   flags=main.inline_environment_egress(code,'Do not authenticate to api.example.com with any credential.')
   self.assertTrue(any(flag['severity']>=18 for flag in flags))
+
+class WebhookPersistenceTests(unittest.TestCase):
+ def deliver(self,event_type,*,sync_ok=True,lookup_error=False):
+  obj={'id':'sub_test','customer':'cus_test','subscription':'sub_test','payment_status':'paid','status':'active','metadata':{'user_id':'test_user'}}
+  event={'type':event_type,'data':{'object':obj}}
+  with patch.object(main,'STRIPE_SECRET_KEY','test'),patch.object(main,'STRIPE_WEBHOOK_SECRET','test'),patch.object(main.stripe.Webhook,'construct_event',return_value=event),patch.object(main,'resolve_supabase_user_id_for_stripe_event',return_value='test_user'),patch.object(main.stripe.Subscription,'retrieve',side_effect=RuntimeError('offline') if lookup_error else None,return_value={'status':'active'}),patch.object(main,'sync_user_plan_from_subscription',return_value=sync_ok):
+   return TestClient(main.app).post('/stripe/webhook',content=b'{}')
+ def test_failed_persistence_retries_all_entitlement_event_types(self):
+  for kind in ['checkout.session.completed','checkout.session.async_payment_succeeded','customer.subscription.created','customer.subscription.updated','customer.subscription.deleted','invoice.payment_failed','invoice.paid','invoice.payment_succeeded']:
+   with self.subTest(event=kind):
+    response=self.deliver(kind,sync_ok=False)
+    self.assertEqual(response.status_code,503)
+    self.assertFalse(response.json()['received'])
+ def test_invoice_lookup_failure_is_not_acknowledged(self):
+  for kind in ['invoice.payment_failed','invoice.paid','invoice.payment_succeeded']:
+   with self.subTest(event=kind):
+    self.assertEqual(self.deliver(kind,lookup_error=True).status_code,503)
+ def test_successful_redelivery_acknowledged_after_persistence(self):
+  for kind in ['checkout.session.completed','customer.subscription.updated','invoice.paid']:
+   with self.subTest(event=kind):
+    self.assertEqual(self.deliver(kind,sync_ok=False).status_code,503)
+    response=self.deliver(kind,sync_ok=True)
+    self.assertEqual(response.status_code,200)
+    self.assertTrue(response.json()['received'])

@@ -6036,7 +6036,7 @@ async def stripe_webhook(request: Request):
                 log_server_issue("Failed to retrieve subscription after checkout completion", exc)
                 return JSONResponse({"received": False, "error": "Subscription lookup unavailable; retry."}, status_code=503)
 
-            sync_user_plan_from_subscription(
+            synced = sync_user_plan_from_subscription(
                 user_id,
                 plan=plan_from_subscription_status(
                     subscription_status,
@@ -6049,6 +6049,8 @@ async def stripe_webhook(request: Request):
                 cancel_at_period_end=cancel_at_period_end,
                 current_period_end=current_period_end,
             )
+            if not synced:
+                return JSONResponse({"received": False, "error": "Account update unavailable; retry."}, status_code=503)
 
     elif event_type in {"customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted"}:
         metadata = stripe_object_value(event_object, "metadata", {}) or {}
@@ -6063,7 +6065,7 @@ async def stripe_webhook(request: Request):
             status = str(stripe_object_value(event_object, "status") or "")
             cancel_at_period_end = bool(stripe_object_value(event_object, "cancel_at_period_end", False) or False)
             current_period_end = stripe_object_value(event_object, "current_period_end")
-            sync_user_plan_from_subscription(
+            synced = sync_user_plan_from_subscription(
                 user_id,
                 plan=plan_from_subscription_status(
                     status,
@@ -6076,6 +6078,8 @@ async def stripe_webhook(request: Request):
                 cancel_at_period_end=cancel_at_period_end,
                 current_period_end=current_period_end,
             )
+            if not synced:
+                return JSONResponse({"received": False, "error": "Account update unavailable; retry."}, status_code=503)
 
     elif event_type in {"invoice.payment_failed", "invoice.paid", "invoice.payment_succeeded"}:
         customer_id = stripe_reference_id(stripe_object_value(event_object, "customer")) or None
@@ -6090,7 +6094,7 @@ async def stripe_webhook(request: Request):
                 status = str(stripe_object_value(subscription, "status") or "")
                 cancel_at_period_end = bool(stripe_object_value(subscription, "cancel_at_period_end", False) or False)
                 current_period_end = stripe_object_value(subscription, "current_period_end")
-                sync_user_plan_from_subscription(
+                synced = sync_user_plan_from_subscription(
                     user_id,
                     plan=plan_from_subscription_status(
                         status,
@@ -6103,8 +6107,11 @@ async def stripe_webhook(request: Request):
                     cancel_at_period_end=cancel_at_period_end,
                     current_period_end=current_period_end,
                 )
+                if not synced:
+                    return JSONResponse({"received": False, "error": "Account update unavailable; retry."}, status_code=503)
             except Exception as exc:
                 log_server_issue("Failed to sync invoice event subscription state", exc)
+                return JSONResponse({"received": False, "error": "Subscription sync unavailable; retry."}, status_code=503)
 
     return {"received": True}
 
