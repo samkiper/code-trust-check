@@ -27,3 +27,15 @@ An operator-only diagnostic matches one exact synthetic source digest (`AUDIT_DE
 ## Paid plan mapping
 
 Checkout selects only server-configured Pro monthly, Serious monthly, or Serious annual prices. Subscription verification, restoration and signed webhook handlers resolve access from an exact approved price ID plus subscription status; client-supplied prices, amounts and plan metadata cannot grant access. Unknown or ambiguous price sets grant Free. Both Serious billing intervals retain the same account-anniversary monthly allowances. The scoped sandbox adapter uses the same entitlement resolver, remains bound to one non-administrator test identity and cannot touch live billing accounts. Live checkout remains paused; controlled checkout defaults to Pro unless the operator explicitly selects Serious.
+
+## Customer preparation — 2026-10-26
+
+Supabase migration `enable_metered_customer_ai_reviews` permits verified Pro and Serious accounts using the existing service-only ledger: Free 0, Pro 25, Serious 100, Admin 400 per anniversary month. The $25 shared UTC-calendar-month ceiling and $0.10 reservation remain unchanged. Status now distinguishes plan, allowance, running request and shared budget blocks; availability is recalculated after reservation. No credit packs are sold. Site remains owner-private and payments paused.
+
+Database verification: transaction-isolated, rolled-back checks of Free denial, Pro/Serious eligibility, duplicate request rejection, one active request, failure refund, quota exhaustion and shared budget exhaustion. No provider call or persistent plan change occurred in these checks. `anon` and `authenticated` cannot directly execute the ledger function. A signed-in non-admin end-to-end provider review still requires customer session verification before launch.
+
+Scanner corrections: bounded call-argument extraction; Python credential tracking through import aliases with overwrite handling and destination-aware authentication exceptions; JavaScript URL-to-HTML taint rule. Full-engine regression pairs cover safe textContent/fixed markup, HTML sinks, fixed fetch formatting, alias egress, overwritten variables, unauthorized destinations and credential payloads. These tests are local evidence, not a production accuracy guarantee.
+
+## Owner update — remove global spending cutoff
+
+October 26, 2026: owner explicitly requested removal of the shared $25 cap. Cost reporting and conservative per-request accounting remain; the global dollar cutoff is removed. Per-account monthly allowances, one in-flight request/account, duplicate protection, source/output bounds, no automatic provider retry, and failed-review allowance refunds remain. Existing prices/allowances are unchanged. Previous references above to the $25 cap describe historical private validation, not the current policy.

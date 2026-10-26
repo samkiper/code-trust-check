@@ -265,7 +265,7 @@ GITHUB_LINK_STATE_SECRET = os.getenv("GITHUB_LINK_STATE_SECRET", "").strip() or 
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "").strip()
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 
-SCANNER_VERSION = 32
+SCANNER_VERSION = 33
 AUDIT_SCORE_HIGH_RISK_MAX = 65
 AUDIT_SCORE_REVIEW_MAX = 90
 
@@ -1190,7 +1190,7 @@ def build_action_verdict(risk: str, trust_score: int, insufficient: bool = False
         }
     return {
         "id": "continue_with_review",
-        "label": "No major supported risks found",
+        "label": "No supported security findings detected",
         "action": "You can continue testing, but still review business logic, permissions, and runtime behavior.",
         "tone": "clear",
     }
@@ -2049,7 +2049,21 @@ def get_call_arguments(line: str, display_key: str) -> str:
     if not match:
         return ""
 
-    return match.group(1).strip()
+    # Stop at the matching close, not the final parenthesis on a minified line.
+    opening = line.find("(", match.start())
+    depth, quote, escaped = 0, "", False
+    for index in range(opening, len(line)):
+        char = line[index]
+        if quote:
+            if escaped: escaped = False
+            elif char == "\\": escaped = True
+            elif char == quote: quote = ""
+        elif char in {"'", '"', "`"}: quote = char
+        elif char == "(": depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0: return line[opening + 1:index].strip()
+    return line[opening + 1:].strip()
 
 
 def is_literal_argument_text(args: str) -> bool:
@@ -5112,9 +5126,13 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
     except Exception:
         secret_flow_flags = []
 
+    if python_source_parses:
+        from credential_flow import credential_flows
+        secret_flow_flags = credential_flows(analysis_code, intent, intent_mentions_any)
+
     flags = [
         flag
-        for flag in dedupe_flags(regex_flags + ast_flags + heuristic_flags + secret_source_flags + secret_flow_flags + inline_environment_egress(analysis_code, intent) + supplemental_flows(analysis_code))
+        for flag in dedupe_flags(regex_flags + ast_flags + heuristic_flags + secret_source_flags + secret_flow_flags + supplemental_flows(analysis_code))
         if float(flag.get("severity", 0) or 0) > 0
     ]
 
@@ -5199,7 +5217,7 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
     if meaningful_intent and "network" in touches and not intent_mentions_any(
         intent_lower, ["api", "fetch", "request", "http", "network", "online", "web", "repo", "github", "download"]
     ):
-        mismatch_flags.append("Code uses network behavior not clearly mentioned in the intent.")
+        mismatch_flags.append("Network behavior conflicts with a stated restriction in the intent." if re.search(r"\b(no|not|never|without|avoid)\b[^.;]*\b(network|transmit|send|online|request|download)\b", intent_lower) else "Code uses network behavior not clearly mentioned in the intent.")
         risk_points += 3.0
 
     if meaningful_intent and "files" in touches and not intent_mentions_any(
@@ -5248,7 +5266,7 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
         flag.get("type") in {"secret", "secret_exfiltration"} for flag in flags
     )
     if "secrets" in touches and (has_literal_or_exfiltrated_secret or not secret_access_expected):
-        mismatch_flags.append("Code appears to contain secrets or credentials, which may be unsafe.")
+        mismatch_flags.append("Credential values reach an outbound request; verify the destination and permitted purpose." if has_secret_exfiltration else "A possible embedded credential was detected." if any(f.get("type")=="secret" for f in flags) else "Code reads an environment credential; access alone is not a demonstrated leak.")
         if not has_secret_exfiltration:
             risk_points += 8
 
@@ -5282,7 +5300,7 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
         behavior_summary.append("May configure the code to persist or run again later.")
 
     if "secrets" in touches:
-        behavior_summary.append("Contains possible credentials or secret values.")
+        behavior_summary.append("Accesses or handles credentials; review the source and any transmission evidence.")
 
     if any(flag["pattern"] == "download_execute_chain" for flag in flags):
         behavior_summary.append("May download remote content and then execute it.")
@@ -6430,7 +6448,7 @@ def github_user_has_pro(user_id: str) -> bool:
     metadata = user.get("app_metadata") or {}
     role = str(metadata.get("role") or "user").lower()
     plan = str(metadata.get("plan") or ("admin" if role == "admin" else "free")).lower()
-    return role == "admin" or plan == "pro"
+    return role == "admin" or plan in {"pro", "serious"}
 
 
 def save_github_installation_link(user_id: str, installation: dict) -> dict:

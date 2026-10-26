@@ -78,3 +78,26 @@ rules:
       confidence: high
       explanation: Download, verify, inspect, and only then execute a pinned artifact.
     pattern-regex: '(?i)\b(curl|wget)\b[^\n|]*\|\s*(ba)?sh\b'
+
+  - id: javascript.url-to-html
+    languages: [javascript, typescript]
+    mode: taint
+    severity: ERROR
+    message: URL-controlled content reaches an HTML injection sink.
+    metadata:
+      confidence: high
+      explanation: A URL parameter can contain attacker-controlled markup. Use textContent for plain text or a reviewed HTML sanitizer.
+    pattern-sources:
+      - pattern: location.search
+      - pattern: window.location.search
+      - pattern: document.location.search
+      - pattern: location.hash
+      - pattern: window.location.hash
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $EL.innerHTML = $VALUE
+              - pattern: $EL.outerHTML = $VALUE
+              - pattern: $EL.insertAdjacentHTML($POSITION, $VALUE)
+              - pattern: document.write($VALUE)
+          - focus-metavariable: $VALUE
