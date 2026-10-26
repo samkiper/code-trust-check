@@ -51,8 +51,17 @@ class AICompareTests(unittest.TestCase):
  def test_failure_preserves_uncertain_cost_and_refunds_allowance(self):
   p,b,_,_=self.fixture()
   with patch.dict(os.environ,{'OPENAI_API_KEY':'fixture-not-a-real-key'}),patch.object(main,'ai_usage',return_value={'ok':True}) as usage,patch.object(a,'call_provider',side_effect=TimeoutError):
-   r=main.perform_ai_review({'user_id':'u'},'r',p,b);self.assertEqual(r.status_code,502)
+   r=main.perform_ai_review({'user_id':'u'},'r',p,b);self.assertEqual(r.status_code,422)
    self.assertEqual(usage.call_args.args[1:5],('settle','r',None,False))
+ def test_invalid_evidence_returns_explanation_refund_and_safe_category(self):
+  p,b,r,report=self.fixture();report['changes'][0]['before_evidence']='not in source'
+  r['output'][0]['content'][0]['text']=json.dumps(report)
+  with patch.dict(os.environ,{'OPENAI_API_KEY':'fixture'}),patch.object(main,'ai_usage',return_value={'ok':True}) as usage,patch.object(a,'call_provider',return_value=r),patch.object(main,'log_server_issue') as log:
+   result=main.perform_ai_review({'user_id':'u'},'r',p,b)
+   self.assertEqual(result.status_code,422)
+   body=json.loads(result.body);self.assertFalse(body['ok']);self.assertEqual(body['error_code'],'evidence_mismatch');self.assertIn('not charged',body['error'])
+   self.assertEqual(usage.call_args.args[1:5],('settle','r',525,False))
+   log.assert_called_once_with('AI review rejected: evidence_mismatch')
  def test_success_settles_measured_usage(self):
   p,b,r,_=self.fixture()
   with patch.dict(os.environ,{'OPENAI_API_KEY':'fixture-not-a-real-key'}),patch.object(main,'ai_usage',return_value={'ok':True}) as usage,patch.object(a,'call_provider',return_value=r):

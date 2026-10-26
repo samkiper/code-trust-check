@@ -8040,7 +8040,10 @@ def perform_ai_review(access,receipt,payload,blocks):
             raise ai_compare.InvalidResult('AI usage could not be verified. The report is unavailable.')
         result=ai_compare.validate_response(response,blocks);success=True
     except ai_compare.InvalidResult as exc:
-        result={'ok':False,'state':'failed','error':str(exc)}
+        # Fixed categories only: never log provider text, code, prompts or exceptions.
+        category=exc.code if exc.code in {'incomplete','schema','display_limits','change_coverage','explanation','evidence_mismatch'} else 'invalid_report'
+        log_server_issue('AI review rejected: '+category)
+        result={'ok':False,'state':'failed','error':str(exc)+' Your AI allowance is not charged.','error_code':category}
     except Exception:
         # Do not log the provider exception: it can contain request data or secrets.
         result={'ok':False,'state':'failed','error':'AI review could not complete. Basic comparison is still available. Your AI allowance is not charged; an uncertain provider cost remains reserved.'}
@@ -8050,7 +8053,9 @@ def perform_ai_review(access,receipt,payload,blocks):
         except HTTPException: settled=None
     if success:
         return private_json({'ok':True,'review':result,'usage':settled,'cost_upper_bound_usd':cost/1000000,'accounting_pending':settled is None})
-    return private_json(result,502)
+    # A handled failed assessment is an application result. Some upstream proxies
+    # replace 502 bodies, hiding the grounded validation error and refund notice.
+    return private_json(result,422)
 
 @app.post('/compare-ai')
 async def ai_compare_review(request: Request):

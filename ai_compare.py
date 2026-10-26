@@ -47,7 +47,10 @@ that side is empty). Do not invent scores, confidence percentages, test results 
 certifications. Mention missing surrounding context and that no code was executed.'''
 
 class InvalidInput(ValueError): pass
-class InvalidResult(ValueError): pass
+class InvalidResult(ValueError):
+    def __init__(self, message, code='invalid_report'):
+        super().__init__(message)
+        self.code = code
 
 def prepare(body):
     if not isinstance(body, dict): raise InvalidInput('Invalid comparison request.')
@@ -80,22 +83,22 @@ def usage_cost(response):
     return (i*3+o*18+3)//4
 
 def validate_response(response,blocks):
-    if not isinstance(response,dict) or response.get('status')!='completed': raise InvalidResult('AI review did not finish. No complete assessment is available.')
+    if not isinstance(response,dict) or response.get('status')!='completed': raise InvalidResult('AI review did not finish. No complete assessment is available.', 'incomplete')
     try:
         parts=[c['text'] for item in response['output'] if item.get('type')=='message' for c in item.get('content',[]) if c.get('type')=='output_text']
         result=Review.model_validate_json(''.join(parts)).model_dump()
-    except (ValueError,KeyError,TypeError,ValidationError): raise InvalidResult('AI returned an invalid report. No assessment is available.') from None
-    if not result['summary'].strip() or len(result['summary'])>4000 or not result['limitations'] or len(result['limitations'])>12 or any(not s.strip() or len(s)>1500 for s in result['limitations']): raise InvalidResult('AI report exceeded safe display limits.')
+    except (ValueError,KeyError,TypeError,ValidationError): raise InvalidResult('AI returned an invalid report. No assessment is available.', 'schema') from None
+    if not result['summary'].strip() or len(result['summary'])>4000 or not result['limitations'] or len(result['limitations'])>12 or any(not s.strip() or len(s)>1500 for s in result['limitations']): raise InvalidResult('AI report did not include the required summary and limitations within display limits.', 'display_limits')
     expected={b['change_id']:b for b in blocks}
     ids=[r['change_id'] for r in result['changes']]
-    if len(ids)!=len(set(ids)) or set(ids)!=set(expected): raise InvalidResult('AI did not review every changed block. No complete assessment is available.')
+    if len(ids)!=len(set(ids)) or set(ids)!=set(expected): raise InvalidResult('AI did not review every changed block. No complete assessment is available.', 'change_coverage')
     for r in result['changes']:
         block=expected[r['change_id']]
-        if not r['explanation'].strip() or len(r['explanation'])>4000: raise InvalidResult('Invalid explanation.')
+        if not r['explanation'].strip() or len(r['explanation'])>4000: raise InvalidResult('Invalid explanation.', 'explanation')
         for side in ('before','after'):
             quote=r[side+'_evidence']
             if (block[side] and not quote.strip()) or len(quote)>4000 or quote not in block[side]:
-                raise InvalidResult('AI evidence did not match the supplied code. No assessment is available.')
+                raise InvalidResult('AI evidence did not match the supplied code. No assessment is available.', 'evidence_mismatch')
         r['before_line']=block['before_line'];r['after_line']=block['after_line']
     result['changes'].sort(key=lambda r:r['change_id'])
     result['state']='complete'
