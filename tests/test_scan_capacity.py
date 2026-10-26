@@ -18,7 +18,7 @@ class ScanCapacityTests(unittest.TestCase):
             return dict(expected)
         access={'plan':'admin','authenticated':True,'user_id':'test-admin','limits':main.get_plan_limits('free')}
         payload={'intent':'Review','code':'eval(input())','language':'Python'}
-        with patch.object(main,'get_request_access_context',return_value=access), patch.object(main,'enrich_access_with_admin_metadata',side_effect=lambda x:x), patch.object(main,'enforce_rate_limit'), patch.object(main,'analyze_code_product',side_effect=analyze) as engine, TestClient(main.app) as client, ThreadPoolExecutor(max_workers=1) as pool:
+        with patch.object(main,'run_audit_process',side_effect=lambda kind,payload,access,*args:main.scan_code_work(main.ScanRequest(**payload),access)), patch.object(main,'get_request_access_context',return_value=access), patch.object(main,'enrich_access_with_admin_metadata',side_effect=lambda x:x), patch.object(main,'enforce_rate_limit'), patch.object(main,'analyze_code_product',side_effect=analyze) as engine, TestClient(main.app) as client, ThreadPoolExecutor(max_workers=1) as pool:
             active=pool.submit(client.post,'/scan',json=payload)
             try:
                 self.assertTrue(started.wait(3))

@@ -21,14 +21,14 @@ class FreeDemoTests(unittest.TestCase):
         calls=[]
         @main.metered_scan('code')
         def fn(req,request):calls.append(req.code);return main.private_json({'scan_status':'complete'})
-        with patch.object(main,'get_request_access_context',return_value=self.access),patch.object(main,'monthly_usage') as usage:
+        with patch.object(main,'run_audit_process',side_effect=lambda kind,payload,access,*args:main.scan_code_work(main.ScanRequest(**payload),access)), patch.object(main,'get_request_access_context',return_value=self.access),patch.object(main,'monthly_usage') as usage:
             for sample in main.DEMO_EXAMPLES.values():fn(main.ScanRequest(**sample,language='Python'),self.request)
             usage.assert_not_called();self.assertEqual(len(calls),2)
             self.access['authenticated']=False
             fn(main.ScanRequest(**main.DEMO_EXAMPLES['safe'],language='Python'),self.request)
             usage.assert_not_called()
     def test_queue_demos_work_with_exhausted_allowance_but_keep_rate_limit(self):
-        with patch.object(main,'get_request_access_context',return_value=self.access),patch.object(main,'enforce_rate_limit') as rate,patch.object(main,'monthly_usage',return_value={'total_remaining':0,'repo_remaining':0}) as usage,patch.object(main.SCAN_JOBS,'submit',return_value={'id':'demo','status':'queued'}),TestClient(main.app) as client:
+        with patch.object(main,'run_audit_process',side_effect=lambda kind,payload,access,*args:main.scan_code_work(main.ScanRequest(**payload),access)), patch.object(main,'get_request_access_context',return_value=self.access),patch.object(main,'enforce_rate_limit') as rate,patch.object(main,'monthly_usage',return_value={'total_remaining':0,'repo_remaining':0}) as usage,patch.object(main.SCAN_JOBS,'submit',return_value={'id':'demo','status':'queued'}),TestClient(main.app) as client:
             payload={'kind':'code',**main.DEMO_EXAMPLES['safe'],'language':'Python'}
             self.assertEqual(client.post('/scan-jobs',json=payload).status_code,202)
             usage.assert_not_called();rate.assert_called_once()
@@ -38,7 +38,7 @@ class FreeDemoTests(unittest.TestCase):
         anonymous={'authenticated':False,'user_id':None,'plan':'free','limits':main.get_plan_limits('free')}
         @main.metered_scan('code')
         def fn(req,request):self.fail('edited anonymous input must not run')
-        with patch.object(main,'get_request_access_context',return_value=anonymous),patch.object(main,'monthly_usage') as usage:
+        with patch.object(main,'run_audit_process',side_effect=lambda kind,payload,access,*args:main.scan_code_work(main.ScanRequest(**payload),access)), patch.object(main,'get_request_access_context',return_value=anonymous),patch.object(main,'monthly_usage') as usage:
             sample=main.DEMO_EXAMPLES['safe']
             for edit in [{'code':sample['code']+'\n'}, {'intent':sample['intent']+' '}, {'language':'JavaScript'}, {'code':'eval(input())','is_example':True}, {'filename':'changed.py'}]:
                 req=main.ScanRequest(**{**sample,'language':'Python',**edit})
@@ -48,7 +48,7 @@ class FreeDemoTests(unittest.TestCase):
 
     def test_anonymous_http_examples_keep_rate_and_capacity_checks(self):
         anonymous={'authenticated':False,'user_id':None,'plan':'free','limits':main.get_plan_limits('free')}
-        with patch.object(main,'get_request_access_context',return_value=anonymous),patch.object(main,'enforce_rate_limit') as rate,patch.object(main,'monthly_usage') as usage,patch.object(main,'analyze_code_product',return_value={'scan_status':'complete'}),TestClient(main.app) as client:
+        with patch.object(main,'run_audit_process',side_effect=lambda kind,payload,access,*args:main.scan_code_work(main.ScanRequest(**payload),access)), patch.object(main,'get_request_access_context',return_value=anonymous),patch.object(main,'enforce_rate_limit') as rate,patch.object(main,'monthly_usage') as usage,patch.object(main,'analyze_code_product',return_value={'scan_status':'complete'}),TestClient(main.app) as client:
             payload={**main.DEMO_EXAMPLES['safe'],'language':'Python'}
             self.assertEqual(client.post('/scan',json=payload).status_code,200)
             rate.assert_called_once();usage.assert_not_called()

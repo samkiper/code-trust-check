@@ -82,6 +82,6 @@ class RepositoryCoverageTests(unittest.TestCase):
                 for name,code in files.items(): z.writestr('repo-main/'+name,code)
             access={'plan':'admin','authenticated':True,'user_id':'test-admin','limits':main.get_plan_limits('admin')}
             request=Request({'type':'http','method':'POST','path':'/scan-repo','headers':[],'scheme':'https','server':('test',443),'client':('127.0.0.1',123)})
-            with patch.object(main,'get_request_access_context',return_value=access),patch.object(main,'enrich_access_with_admin_metadata',side_effect=lambda x:x),patch.object(main,'enforce_rate_limit'),patch.object(main,'download_repo_zip',return_value=archive.getvalue()):
+            with patch.object(main,'run_audit_process',side_effect=lambda kind,payload,access,*args:main.scan_repo_work(main.RepoScanRequest(**payload),access,request)),patch.object(main,'get_request_access_context',return_value=access),patch.object(main,'enrich_access_with_admin_metadata',side_effect=lambda x:x),patch.object(main,'enforce_rate_limit'),patch.object(main,'download_repo_zip',return_value=archive.getvalue()):
                 response=main.scan_repo(main.RepoScanRequest(intent='Review code',repo_url='https://github.com/example/repo'),request)
             result=json.loads(response.body);self.assertEqual(result['scan_status'],expected);self.assertIsNone(result['trust_score'])

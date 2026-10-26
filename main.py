@@ -6,6 +6,7 @@ from scan_contract import select_filename, inspect_source, finalize_snippet
 from scan_capacity import limit_scan_capacity
 from scan_jobs import ScanJobs
 from scanner_process import run_scanner
+from audit_runtime import run_audit_process
 from functools import wraps
 import uuid
 from flow_review import supplemental_flows, literal_eval_locations
@@ -7409,6 +7410,10 @@ def scan(req: ScanRequest, request: Request):
     access = enrich_access_with_admin_metadata(access)
     enforce_rate_limit(request, access, "scan")
 
+    return run_audit_process("code",req.model_dump(),access)
+
+
+def scan_code_work(req,access):
     plan = str(access.get("plan") or "free").lower()
     max_code_bytes = MAX_PASTED_CODE_BYTES_PRO if plan in {"pro", "serious", "admin"} else MAX_PASTED_CODE_BYTES_FREE
     code_size_bytes = len(req.code.encode("utf-8", errors="ignore"))
@@ -7598,7 +7603,10 @@ def scan_repo(req: RepoScanRequest, request: Request):
     access = get_request_access_context(request)
     access = enrich_access_with_admin_metadata(access)
     enforce_rate_limit(request, access, "repo")
+    return run_audit_process("repo",req.model_dump(),access,str(request.base_url))
 
+
+def scan_repo_work(req,access,request):
     if len(req.intent) > 2000 or len(req.repo_url) > 500:
         return private_json({"error": "The repository request is too long."}, status_code=413)
 
