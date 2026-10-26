@@ -17,7 +17,7 @@ begin
  ident:=audit_private.workspace_identity(p_user);tier:=ident->>'plan';
  if ident is null or ident->>'email' is null then return jsonb_build_object('ok',false,'error','Sign in with a verified email.'); end if;
  select starts_at,ends_at into starts,ends from audit_private.monthly_window(audit_private.account_created_at(p_user),now());
- cap:=case when tier in ('admin','serious') then 400 when tier='pro' then 100 else 5 end;
+ cap:=case when tier='admin' then 400 when tier='serious' then 100 when tier='pro' then 25 else 0 end;
  -- Single transaction lock protects both global dollars and per-account allowances.
  perform pg_advisory_xact_lock(60129102);
  -- Interrupted calls free the customer allowance, but retain full reserved dollars.

@@ -44,7 +44,7 @@ begin
  -- Expired data is inaccessible immediately and purged on the next workspace operation.
  delete from public.aca_reports where expires_at<=now() or deleted_at<=now()-interval '7 days';
  if p_action='list' then
-  return jsonb_build_object('ok',true,'plan',tier,'history_days',days,'report_limit',cap,'project_limit',case when tier='pro' then 3 when days=0 then 0 else null end,
+  return jsonb_build_object('ok',true,'plan',tier,'history_days',days,'report_limit',cap,'project_limit',case when tier='pro' then 10 when tier='serious' then 50 when days=0 then 0 else null end,
     'projects',coalesce((select jsonb_agg(to_jsonb(p) order by p.name) from public.aca_projects p where user_id=p_user),'[]'::jsonb),
     'reports',coalesce((select jsonb_agg(to_jsonb(r) order by r.created_at desc) from (select id,project_id,title,kind,created_at,expires_at,deleted_at from public.aca_reports where user_id=p_user) r),'[]'::jsonb));
  end if;
@@ -69,7 +69,8 @@ begin
  end if;
  if days=0 then return jsonb_build_object('ok',false,'error','Saving new work requires Pro or Serious. Existing saved reports remain accessible until their expiry.'); end if;
  if p_action='project_create' then
-  if tier='pro' and (select count(*) from public.aca_projects where user_id=p_user)>=3 then return jsonb_build_object('ok',false,'error','Pro includes 3 projects.'); end if;
+  if tier='pro' and (select count(*) from public.aca_projects where user_id=p_user)>=10 then return jsonb_build_object('ok',false,'error','Pro includes 10 projects.'); end if;
+  if tier='serious' and (select count(*) from public.aca_projects where user_id=p_user)>=50 then return jsonb_build_object('ok',false,'error','Serious includes 50 projects.'); end if;
   if length(trim(coalesce(p_body->>'name',''))) not between 1 and 100 then return jsonb_build_object('ok',false,'error','Use a project name from 1 to 100 characters.'); end if;
   insert into public.aca_projects(user_id,name) values(p_user,trim(p_body->>'name')) returning id into pid;
   return jsonb_build_object('ok',true,'id',pid);

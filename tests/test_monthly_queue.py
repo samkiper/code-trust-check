@@ -99,7 +99,7 @@ class MeteringTests(unittest.TestCase):
             with self.assertRaises(HTTPException) as cm:fn(main.RepoScanRequest(intent='Review',repo_url='https://github.com/example/repo'),self.request)
             self.assertEqual(cm.exception.headers['X-Scan-Rejection'],'quota')
     def test_limits_and_admin_exemption(self):
-        for plan,total,repos,lines,files in [('free',20,2,2000,20),('pro',300,20,10000,50)]:
+        for plan,total,repos,lines,files in [('free',5,1,2000,20),('pro',75,10,20000,100)]:
             limits=main.get_plan_limits(plan)
             self.assertEqual([limits[k] for k in ['monthly_scan_limit','monthly_repo_limit','line_limit','repo_file_limit']],[total,repos,lines,files])
         with patch.object(main,'supabase_rest_request') as db:

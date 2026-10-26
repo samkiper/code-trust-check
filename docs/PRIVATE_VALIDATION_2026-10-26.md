@@ -95,3 +95,15 @@ Advancing the existing clock to March 3 generated monthly subscription_cycle inv
 Scheduled cancellation retained active status until April 3. Advancing the clock to April 4 ended the subscription at April 3, and real event evt_1UUiJTEKmNfjd7YM4oFC5XbK persisted canceled/Free in Supabase. No direct plan edits, real funds, new accounts or AI requests were used. This closes calendar renewal and period-end cancellation through the deployed isolated receiver, not live checkout/payment-return verification.
 
 Sandbox destination we_1UUi4rEKmNfjd7YMlFx6u7VX disabled again and signing secret cleared. Live billing settings remain unchanged. The available aicodeaudit.org browser session belongs to easystreammovies@gmail.com (Free); it is not the calendar-test identity. Refreshed browser entitlement display for that identity, larger authenticated queue saturation, induced production timeout, live checkout and the existing Serious/credit-pack mappings remain unverified launch gates. Two-customer and anonymous capacity results above must not be described as full queue-capacity verification.
+
+## Approved plan revision
+
+Free: 5 audits/month including 1 repository; no AI allowance. Pro: $19/month, 75 audits including 10 repositories, 25 planned AI reviews, 20,000 pasted lines, 100 repository files / 10 MB, 10 projects. Serious: $69/month, 300 audits including 40 repositories, 100 planned AI reviews, 50,000 pasted lines, 500 repository files / 25 MB, 50 projects. Existing $690 annual Serious option retained. Basic comparison stays local and unlimited; no customer AI activation or budget change.
+
+Supabase migration approved_plan_ai_and_project_limits applied. Transactional database tests passed with all synthetic fixtures rolled back, checking Pro 10 / Serious 50 project boundaries, ownership, sharing, expiry, Free AI 0, admin-only access, duplicate protection and $25 budget. Backend 192 tests passed. Site build, 114 tests and audit TypeScript check passed. Security advisors retain existing service-only RLS/no-policy information plus profiles GraphQL visibility and disabled leaked-password protection warnings; no new public grants were made.
+
+Local real-engine 49,998-line generated Python probe returned partial (Semgrep no analyzed targets/parser warning), not full coverage. This is a useful limitation result, not a successful capacity benchmark. Pasted input remains bounded to 1 MB in the Site; expanded limits still require production load validation.
+
+Stripe live Pro price price_1UUir6EEE0WuIMoRfM4X3i3N created at 1,900 USD cents/month, inactive. No existing subscription migrated or charged. Payments remain paused.
+
+A second local real-engine Python probe within the Site byte cap (49,996 lines, 434,570 bytes) completed in 12.46 seconds with both behavior and Semgrep coverage complete and the intentional dynamic-input finding detected. This is local evidence, not deployed throughput validation.

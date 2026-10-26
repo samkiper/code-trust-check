@@ -6,7 +6,7 @@ set local role service_role;
 do $$ declare u uuid:='00000000-0000-4000-8000-000000000201'; other_id uuid:='00000000-0000-4000-8000-000000000202'; rid uuid:=gen_random_uuid();r jsonb; i int;
 begin
  r:=public.aca_ai_usage_control(u,'status');assert (r->>'available')::boolean;assert (r->>'limit')::int=400;
- r:=public.aca_ai_usage_control(other_id,'status');assert not (r->>'available')::boolean;assert (r->>'limit')::int=5;
+ r:=public.aca_ai_usage_control(other_id,'status');assert not (r->>'available')::boolean;assert (r->>'limit')::int=0;
  assert not (public.aca_ai_usage_control(other_id,'reserve',gen_random_uuid())->>'ok')::boolean;
  assert (public.aca_ai_usage_control(u,'reserve',rid)->>'ok')::boolean;
  assert not (public.aca_ai_usage_control(u,'reserve',rid)->>'ok')::boolean;
