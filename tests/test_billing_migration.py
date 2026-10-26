@@ -84,3 +84,37 @@ class WebhookPersistenceTests(unittest.TestCase):
     response=self.deliver(kind,sync_ok=True)
     self.assertEqual(response.status_code,200)
     self.assertTrue(response.json()['received'])
+
+class NormalBillingRouteTests(unittest.TestCase):
+ def setUp(self):
+  from contextlib import ExitStack
+  self.stack=ExitStack();self.addCleanup(self.stack.close)
+  access={'authenticated':True,'user_id':'customer_user','email':'customer@example.com','plan':'free','role':'user','debug':{'user_fetch_succeeded':True}}
+  for name,value in [('get_request_access_context',access),('enrich_access_with_admin_metadata',access),('enforce_rate_limit',None),('get_supabase_admin_user',{'app_metadata':{'stripe_customer_id':'cus_existing'}})]:
+   self.stack.enter_context(patch.object(main,name,return_value=value))
+  self.stack.enter_context(patch.object(main,'STRIPE_SECRET_KEY','test'))
+  self.stack.enter_context(patch.object(main,'STRIPE_PRICE_ID','price_test'))
+  self.stack.enter_context(patch.object(main,'PURCHASES_ENABLED',True))
+  self.client=TestClient(main.app)
+  self.headers={'X-Audit-Return-Origin':'https://aicodeaudit.org'}
+ def test_checkout_returns_to_billing_verification_page(self):
+  from types import SimpleNamespace
+  with patch.object(main.stripe.checkout.Session,'create',return_value=SimpleNamespace(url='https://checkout.stripe.com/test',id='cs_test_example')) as create:
+   response=self.client.post('/stripe/create-checkout-session',headers=self.headers)
+   self.assertEqual(response.status_code,200)
+   args=create.call_args.kwargs
+   self.assertEqual(args['success_url'],'https://aicodeaudit.org/account/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}')
+   self.assertEqual(args['cancel_url'],'https://aicodeaudit.org/account/billing?checkout=cancel')
+   self.assertEqual(args['client_reference_id'],'customer_user')
+ def test_portal_returns_to_billing_page(self):
+  from types import SimpleNamespace
+  with patch.object(main.stripe.billing_portal.Session,'create',return_value=SimpleNamespace(url='https://billing.stripe.com/test')) as create:
+   response=self.client.post('/stripe/create-billing-portal-session',headers=self.headers)
+   self.assertEqual(response.status_code,200)
+   self.assertEqual(create.call_args.kwargs['return_url'],'https://aicodeaudit.org/account/billing')
+ def test_recovery_lookup_failure_never_grants_paid_access(self):
+  session={'status':'complete','payment_status':'paid','subscription':'sub_old','customer':'cus_existing','metadata':{'user_id':'customer_user'}}
+  with patch.object(main.stripe.checkout.Session,'list',return_value={'data':[session]}),patch.object(main.stripe.Subscription,'retrieve',side_effect=RuntimeError('unavailable')),patch.object(main,'sync_user_plan_from_subscription') as sync:
+   response=self.client.post('/stripe/reconcile-subscription',headers=self.headers)
+   self.assertEqual(response.status_code,503)
+   sync.assert_not_called()

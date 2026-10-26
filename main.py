@@ -5675,7 +5675,7 @@ async def create_billing_portal_session(request: Request):
     try:
         session = stripe.billing_portal.Session.create(
             customer=stripe_customer_id,
-            return_url=f"{get_billing_return_url(request)}/#account",
+            return_url=f"{get_billing_return_url(request)}/account/billing",
         )
     except Exception as exc:
         log_server_issue("Could not start Stripe billing portal", exc)
@@ -5713,8 +5713,8 @@ async def create_stripe_checkout_session(request: Request):
     checkout_kwargs = {
         "mode": "subscription",
         "line_items": [{"price": STRIPE_PRICE_ID, "quantity": 1}],
-        "success_url": f"{get_billing_return_url(request)}/?checkout=success&session_id={{CHECKOUT_SESSION_ID}}",
-        "cancel_url": f"{get_billing_return_url(request)}/?checkout=cancel",
+        "success_url": f"{get_billing_return_url(request)}/account/billing?checkout=success&session_id={{CHECKOUT_SESSION_ID}}",
+        "cancel_url": f"{get_billing_return_url(request)}/account/billing?checkout=cancel",
         "client_reference_id": str(access["user_id"]),
         "metadata": {
             "user_id": str(access["user_id"]),
@@ -5947,7 +5947,8 @@ async def reconcile_stripe_subscription(request: Request):
         )
         current_period_end = stripe_object_value(subscription, "current_period_end")
     except Exception as exc:
-        log_server_issue("Could not retrieve subscription during paid Checkout Session recovery; applying paid access", exc)
+        log_server_issue("Could not verify subscription during paid Checkout Session recovery", exc)
+        raise HTTPException(status_code=503, detail="Subscription verification is temporarily unavailable. Retry shortly.") from exc
 
     restored_plan = plan_from_subscription_status(
         status,
