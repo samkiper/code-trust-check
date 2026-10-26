@@ -6308,8 +6308,6 @@ def parse_github_check_rerequest_event(body: dict) -> tuple[int, str, int, str]:
 
 def github_installation_entitlement(installation_id: int) -> dict:
     """Resolve a claimed GitHub installation to a currently entitled account."""
-    if not GITHUB_ENFORCE_PRO:
-        return {"allowed": True, "reason": "enforcement_disabled"}
     rows = supabase_rest_request(
         "GET",
         "github_installations",
@@ -7022,10 +7020,10 @@ def github_status():
         "monitor_only": True,
         "scans_changed_files_only": True,
         "dynamic_sandbox": "not_enabled",
-        "pro_enforcement": GITHUB_ENFORCE_PRO,
+        "pro_enforcement": True,
         "secure_linking": bool(GITHUB_LINK_STATE_SECRET),
         "existing_install_linking": bool(GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET and GITHUB_LINK_STATE_SECRET),
-        "connection_revision": 3,
+        "connection_revision": 4,
         "scanner_version": SCANNER_VERSION,
     })
 
@@ -7341,6 +7339,22 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=400, detail="Malformed GitHub webhook payload.")
     if event == "ping":
         return private_json({"received": True, "event": "ping"})
+    if event == "installation" and body.get("action") in {"deleted", "suspend"}:
+        installation = body.get("installation")
+        installation_id = installation.get("id") if isinstance(installation, dict) else None
+        if isinstance(installation_id, bool) or not isinstance(installation_id, int) or installation_id <= 0:
+            raise HTTPException(status_code=400, detail="Invalid GitHub installation event.")
+        # Never automatically reactivate on an unsuspend event: the account's
+        # owner must authorize it again before the installation is trusted.
+        status = "deleted" if body["action"] == "deleted" else "suspended"
+        saved = supabase_rest_request(
+            "PATCH", "github_installations", payload={"status": status, "updated_at": datetime.now(timezone.utc).isoformat()},
+            query=urlencode({"installation_id": f"eq.{installation_id}", "select": "installation_id"}),
+            prefer="return=representation",
+        )
+        if not isinstance(saved, list):
+            raise HTTPException(status_code=503, detail="Installation status could not be updated.")
+        return private_json({"received": True, "installation_status": status})
     try:
         if event == "pull_request" and body.get("action") in {"opened", "reopened", "synchronize"}:
             installation_id, full_name, pull_request_number, sha = parse_github_pull_request_event(body)

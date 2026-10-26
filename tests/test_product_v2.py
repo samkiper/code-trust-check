@@ -809,6 +809,7 @@ class GitHubWebhookTests(unittest.TestCase):
         with zipfile.ZipFile(archive, "w") as output:
             output.writestr("owner-repo-sha/app.py", "eval(user_input)")
         with patch.object(main, "GITHUB_ENFORCE_PRO", False), \
+                patch.object(main, "github_installation_entitlement", return_value={"allowed": True, "user_id": "user-1"}), \
                 patch.object(main, "github_installation_token", return_value="token"), \
                 patch.object(main, "list_github_pull_request_files", return_value=[{"filename": "app.py"}]), \
                 patch.object(main, "download_github_archive", return_value=archive.getvalue()), \
@@ -836,6 +837,7 @@ class GitHubWebhookTests(unittest.TestCase):
 
     def test_scan_failure_is_reported_as_non_blocking_neutral(self):
         with patch.object(main, "GITHUB_ENFORCE_PRO", False), \
+                patch.object(main, "github_installation_entitlement", return_value={"allowed": True, "user_id": "user-1"}), \
                 patch.object(main, "github_installation_token", return_value="token"), \
                 patch.object(main, "list_github_pull_request_files", side_effect=RuntimeError("temporary")), \
                 patch.object(main, "upsert_github_check", return_value={}) as upsert:
