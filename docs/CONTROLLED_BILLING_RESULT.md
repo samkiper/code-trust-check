@@ -17,4 +17,20 @@ These observations establish the exercised live checkout, verification, refund, 
 
 Exercised the real Stripe-hosted portal with a synthetic sandbox subscription and a sandbox configuration matching live cancellation behavior: at period end, no proration, cancellation reason collected. Selected a reason, continued, and submitted Cancel subscription. The portal displayed a scheduled cancellation and service-end date. Stripe independently returned a scheduled cancellation timestamp and the submitted reason. The sandbox webhook remained disabled: this check did not change application access or produce another real charge.
 
-Cleanup immediately canceled the synthetic subscription. Stripe made the new sandbox portal configuration its default and does not permit deactivating that default; it remains sandbox-only, with no active subscription created by this test. Full authenticated deployed queue saturation still needs seven independent authenticated identities; only two customer sessions are available. An induced deployed scanner timeout remains unverified. No new production-capacity claim follows from this check.
+Cleanup immediately canceled the synthetic subscription. Stripe made the new sandbox portal configuration its default and does not permit deactivating that default; it remains sandbox-only, with no active subscription created by this test. The sandbox portal check alone makes no production-capacity claim. See the subsequent deployed queue test below.
+
+
+## Seven-customer deployed queue check — October 26, 2026
+
+Seven confirmed Free customer accounts submitted synthetic Python audits of approximately 1,802 lines through the deployed Site and normal backend job route. No administrator privileges, AI calls or payments were used.
+
+- Six submissions were accepted (202), filling one running slot and five waiting slots.
+- The overflow submission returned 429 with the queue-full explanation and consumed no allowance.
+- A duplicate submission for an occupied customer returned 409.
+- Another customer's attempt to read an accepted job returned 404.
+- All six accepted jobs completed, each reporting one behavior flag and one engine finding.
+- Independent database inspection found six charged receipts and no pending reservations. The overflow account retained its allowance.
+- The complete check took approximately 38 seconds including authentication verification and polling; this is not a raw scan-engine benchmark. Health returned 200 during the check.
+- After verifying accounting, only the six identified QA receipts were marked refunded to restore test allowances; all six refunds were independently verified.
+
+This verifies the exercised seven-customer saturation and isolation behavior on the deployed scanner. It does not establish sustained throughput, multi-worker scaling, or induced deployed timeout recovery. The forced-timeout check, Serious billing and AI credit-pack fulfillment remain unverified.
