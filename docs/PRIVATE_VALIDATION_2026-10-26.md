@@ -73,3 +73,15 @@ User confirmed fresh signup and automatic email-link sign-in after Site v39. Sit
 Added an opt-in `/stripe/sandbox-webhook` receiver with a distinct signing secret and server-side bindings to one test user, customer and Pro price. It accepts only signed non-live subscription snapshots, never calls Stripe with the live API key, refuses admin/live-billing accounts, and records sandbox-prefixed subscription provenance. Duplicate and older events are ignored; canceled subscriptions cannot be revived by delayed updates. Persistence failure returns 503. No live webhook/key configuration or purchase availability changes. Disable after validation by clearing STRIPE_SANDBOX_WEBHOOK_SECRET.
 
 Sandbox destination: we_1UUi4rEKmNfjd7YMlFx6u7VX. Synthetic customer: cus_VVjX1TmjrA3LAw. Secrets exist only in provider configuration, not this repository. This isolated adapter exercises the existing plan-status policy and Supabase metadata persistence; it is not evidence of the live checkout/invoice API lookup path.
+
+### Deployed sandbox delivery evidence
+
+Backend a5162a474b04b8a1c1d033d6ca68dd0e5ec0905d passed all 192 tests and GitHub accuracy-gate, then became live in dep-dbffrqu7bikc73c5n61g. Real Stripe-generated sandbox events reached the deployed receiver and updated the allowlisted account (no direct plan edits were used):
+
+- Subscription sub_1UUi94EKmNfjd7YM135tSMA5: initial invoice in_1UUi94EKmNfjd7YMN07owvMb paid 1,200 test cents; evt_1UUi96EKmNfjd7YMZCrFglWT set Pro/active.
+- A billing-anchor reset did not generate a new invoice. A quantity-change invoice was then used to exercise failed payment; this is not a calendar renewal. Declining test source produced open invoice in_1UUiAJEKmNfjd7YMuBhVlAzz, paid=0, attempt_count=1. evt_1UUiALEKmNfjd7YMf0O02uww set past_due and retained Pro per existing policy.
+- Replacing the source with tok_visa paid that invoice (1,200 test cents). evt_1UUiAoEKmNfjd7YMlbt857Jh restored active/Pro.
+- Scheduled cancellation: evt_1UUiBEEKmNfjd7YMMopHDfPg kept active/Pro with sandbox_cancel_at_period_end=true.
+- Immediate cancellation: evt_1UUiBZEKmNfjd7YMZ2kNSyji set canceled/Free. The account has no live Stripe customer mapping. No real funds or cards used; the test subscription is stopped.
+
+Destination disabled after validation; sandbox signing secret cleared in Render to disable the receiver. Live webhook/key configuration unchanged. This proves sandbox subscription-event delivery to persisted app entitlements, not the separate live checkout/invoice retrieval path or a refreshed customer-browser display. Earlier test-clock renewals are provider-only evidence; calendar renewal through this receiver remains unverified. Larger authenticated production queue saturation and induced production timeout remain open.
