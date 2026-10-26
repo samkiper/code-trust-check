@@ -35,3 +35,13 @@ Backend: 184 unittest tests passed with the installed Semgrep executable on PATH
 - Keep Site owner-private, customer AI disabled and the approved $25 UTC-month AI pilot ceiling unchanged.
 - No email budget alerts are configured; dashboard warning flags remain at 80% and 90%.
 - Public launch needs an explicit audience/payment decision after the above gates close.
+
+## Deployment verification addendum
+
+Site v38 (d587073dc5bc574d654280287b6a00b301e9ac2e) deployed owner-private. Signup and confirmation routes plus Account / Sign-in registration links are available. Branded confirmation template saved and reloaded in Supabase. Public auth settings verified disable_signup=false, mailer_autoconfirm=false, email=true; registration requires verified email. Existing two test accounts remain email-confirmed with no admin role or paid plan metadata. Fresh signup still requires the user's password/email-verification step; it has not been completed end-to-end by the agent.
+
+Backend code a36a4be54819492c16c1f90054ede7b253f842f6 passed GitHub accuracy-gate and is live in Render deployment dep-dbfestdg1s2s73a944mg. A direct deployed checkout request returned HTTP 503 with Purchases are paused during private validation.
+
+Bounded deployed overload check: four concurrent unchanged anonymous examples sent to /scan. One completed (200, complete), three rejected with 429, X-Scan-Rejection=capacity and Retry-After=10. A subsequent single example completed 200. This verifies the synchronous production capacity guard and recovery, not a six-customer authenticated queue saturation test. No AI API requests or customer allowance debits were used.
+
+Sandbox test subscriptions were stopped after testing: success case canceled; failed initial-payment case incomplete_expired. Renewal remains blocked on Stripe dashboard sign-in: connector operation discovery did not expose clock advancement, and the dashboard opened at login. No production keys, payment settings, customer entitlements or AI budget were changed.
