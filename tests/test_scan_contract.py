@@ -46,6 +46,18 @@ class ScanContractTests(unittest.TestCase):
             self.assertFalse(main.intent_mentions_any(intent,['network','credentials','secrets','api']))
         self.assertTrue(main.intent_mentions_any('Fetch an API response. Do not execute it.',['api']))
 
+    def test_trailing_without_does_not_negate_other_permitted_behaviors(self):
+        intent = "Read local environment configuration, fetch a public status over the network, and run a fixed version command without a shell."
+        self.assertTrue(main.intent_mentions_any(intent, ['network']))
+        self.assertTrue(main.intent_mentions_any(intent, ['command']))
+        self.assertFalse(main.intent_mentions_any(intent, ['shell']))
+        for denied in ['Network access is not allowed', 'Do not run commands without validation', 'Without network access, read local files']:
+            self.assertFalse(main.intent_mentions_any(denied, ['network','command','commands']))
+        code = 'import os\nimport requests\nimport subprocess\nmode=os.getenv("APP_MODE","development")\nrequests.get("https://example.com/status",timeout=5)\nsubprocess.run(["python","--version"],shell=False,check=True)'
+        result = self.scan(code, intent=intent)
+        self.assertEqual(result['intent_mismatches'], [])
+        self.assertFalse(any(f['severity'] >= 18 for f in result['flags']))
+
     def test_dangerous_flows_remain_high_and_eval_wording_is_precise(self):
         r=self.scan('value=input()\neval(value)',intent='Calculate a value from user input')
         self.assertEqual(r['verdict']['id'],'do_not_run')

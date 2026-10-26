@@ -251,7 +251,7 @@ GITHUB_LINK_STATE_SECRET = os.getenv("GITHUB_LINK_STATE_SECRET", "").strip() or 
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "").strip()
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 
-SCANNER_VERSION = 28
+SCANNER_VERSION = 29
 AUDIT_SCORE_HIGH_RISK_MAX = 65
 AUDIT_SCORE_REVIEW_MAX = 90
 
@@ -3763,7 +3763,10 @@ def intent_mentions_any(intent_lower: str, terms: list[str]) -> bool:
     """Match affirmative clauses, never turn prohibitions into permission."""
     clauses = re.split(r"[;!\n]|\.(?=\s|$)|\b(?:but|however)\b", intent_lower.lower())
     for clause in clauses:
-        if re.search(r"\b(?:no|not|never|without|avoid|prohibit|forbid|don't|mustn't|cannot)\b", clause):
+        # A trailing "without" qualifies what follows, not the affirmative action before it.
+        # Keep all other negations conservative (e.g. "network access is not allowed").
+        clause = re.split(r"\bwithout\b", clause, maxsplit=1)[0]
+        if re.search(r"\b(?:no|not|never|avoid|prohibit|forbid|don't|mustn't|cannot)\b", clause):
             continue
         if any(re.search(rf"(?<![a-z0-9_]){re.escape(term.lower())}(?![a-z0-9_])", clause) for term in terms):
             return True
