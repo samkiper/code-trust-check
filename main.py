@@ -7947,7 +7947,7 @@ async def ai_compare_review(request: Request):
     if len(raw)>100000: raise HTTPException(413,'AI comparison request is too large.')
     try:
         body=json.loads(raw);receipt=str(uuid.UUID(body.get('request_id','')))
-        payload,blocks=ai_compare.prepare(body)
+        payload,blocks=await run_in_threadpool(ai_compare.prepare,body)
     except (ValueError,TypeError,AttributeError) as exc:
         raise HTTPException(400,str(exc) if isinstance(exc,ai_compare.InvalidInput) else 'Invalid comparison request.') from None
     if not blocks: return private_json({'ok':True,'review':{'state':'not_rated','verdict':'unchanged','summary':'No source changes detected. No AI request or allowance was used.','changes':[],'limitations':[]}})
