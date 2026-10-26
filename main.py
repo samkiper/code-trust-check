@@ -558,10 +558,10 @@ def metered_scan(kind):
     def decorate(function):
         @wraps(function)
         def wrapped(req,request):
-            access=get_request_access_context(request)
-            validate_scan_request(req,access)
             if kind=="code" and is_free_demo(req):
                 return function(req,request)
+            access=get_request_access_context(request)
+            validate_scan_request(req,access)
             receipt=str(uuid.uuid4())
             usage=monthly_usage(access,"reserve",receipt,kind)
             if usage.get("allowed") is False:
