@@ -10,6 +10,19 @@ def response(observations,limitations=None):
 
 
 class SingleCodeReviewContractTests(unittest.TestCase):
+    def test_unicode_and_long_single_line_preserve_exact_evidence(self):
+        code='message = "' + ('雪😀' * 900) + '"\nprint(message)'
+        _,options=review.prepare({'code':code,'intent':'Print the message.'})
+        self.assertEqual(''.join(option['text'] for option in options),code)
+        self.assertTrue(all(option['first_line']==1 for option in options[:-1]))
+        result=review.validate_response(response([{'classification':'requires_context','explanation':'Check the input.','evidence_id':options[-1]['id']}]),options)
+        self.assertEqual(result['observations'][0]['evidence'],options[-1]['text'])
+
+    def test_provider_cannot_supply_its_own_evidence_or_unknown_fields(self):
+        _,options=review.prepare({'code':'print("ready")','intent':'Print a status.'})
+        observation={'classification':'supports_intent','explanation':'The source prints a value.','evidence_id':options[0]['id'],'evidence':'forged'}
+        with self.assertRaises(ai_compare.InvalidResult):review.validate_response(response([observation]),options)
+
     def test_all_source_is_preserved_and_excerpts_are_bounded(self):
         code='x="'+('a'*4000)+'"\r\nprint(x)\n'
         payload,options=review.prepare({'code':code,'intent':'Print a value.'})
