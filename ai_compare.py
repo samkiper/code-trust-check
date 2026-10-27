@@ -114,7 +114,7 @@ def validate_response(response,blocks):
     try:
         parts=[c['text'] for item in response['output'] if item.get('type')=='message' for c in item.get('content',[]) if c.get('type')=='output_text']
         result=Review.model_validate_json(''.join(parts)).model_dump()
-    except (ValueError,KeyError,TypeError,ValidationError): raise InvalidResult('AI returned an invalid report. No assessment is available.', 'schema') from None
+    except (ValueError,KeyError,TypeError,AttributeError,ValidationError): raise InvalidResult('AI returned an invalid report. No assessment is available.', 'schema') from None
     if not result['summary'].strip() or len(result['summary'])>4000 or not result['limitations'] or len(result['limitations'])>12 or any(not s.strip() or len(s)>1500 for s in result['limitations']): raise InvalidResult('AI report did not include the required summary and limitations within display limits.', 'display_limits')
     expected={b['change_id']:b for b in blocks}
     ids=[r['change_id'] for r in result['changes']]

@@ -21,7 +21,7 @@ class AICompareTests(unittest.TestCase):
    with self.assertRaises(a.InvalidResult):a.validate_response(r,b)
  def test_incomplete_refusal_malformed_and_usage(self):
   _,b,r,_=self.fixture()
-  for bad in [{},[],{'status':'incomplete'},dict(r,output=[{'type':'message','content':[{'type':'refusal','refusal':'No'}]}])]:
+  for bad in [{},[],{'status':'incomplete'},dict(r,output=['unexpected']),dict(r,output=[{'type':'message','content':['unexpected']}]),dict(r,output=[{'type':'message','content':[{'type':'refusal','refusal':'No'}]}])]:
    with self.assertRaises(a.InvalidResult):a.validate_response(bad,b)
   for u in [None,{}, {'input_tokens':True,'output_tokens':10},{'input_tokens':1,'output_tokens':4001}]: self.assertIsNone(a.usage_cost({'usage':u}))
  def test_empty_summary_and_missing_limitations_rejected(self):
@@ -81,6 +81,13 @@ class AICompareTests(unittest.TestCase):
   with patch.dict(os.environ,{'OPENAI_API_KEY':'fixture-not-a-real-key'}),patch.object(main,'ai_usage',return_value={'ok':True}) as usage,patch.object(a,'call_provider',return_value=r):
    self.assertEqual(main.perform_ai_review({'user_id':'u'},'r',p,b).status_code,200)
    self.assertEqual(usage.call_args.args[1:5],('settle','r',525,True))
+ def test_malformed_provider_message_refunds_and_records_known_cost(self):
+  p,b,r,_=self.fixture();r['output']=['unexpected']
+  with patch.dict(os.environ,{'OPENAI_API_KEY':'fixture'}),patch.object(main,'ai_usage',return_value={'ok':True}) as usage,patch.object(a,'call_provider',return_value=r):
+   result=main.perform_ai_review({'user_id':'u'},'r',p,b)
+   self.assertEqual(result.status_code,422)
+   self.assertEqual(json.loads(result.body)['error_code'],'schema')
+   self.assertEqual(usage.call_args.args[1:5],('settle','r',525,False))
  def test_http_auth_input_and_unchanged_never_spend(self):
   from fastapi.testclient import TestClient
   with TestClient(main.app) as client,patch.object(a,'call_provider') as provider:
