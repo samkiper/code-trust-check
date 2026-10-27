@@ -18,6 +18,7 @@ class NativeCliTests(unittest.TestCase):
     first,second=[c.args[0] for c in run.call_args_list]
     self.assertEqual(first[:-1],second);self.assertEqual(first[-1],'--experimental')
     self.assertIn('--metrics=off',second);self.assertNotIn('--exclude-rule',second)
+    self.assertEqual(second[second.index('--max-target-bytes')+1],str(main.MAX_PASTED_CODE_BYTES_PRO))
  def test_invalid_responses_never_become_clean(self):
   result,_=self.scan([response({}),response({})]);self.assertEqual(result['status'],'error')
  def test_timeout_has_bounded_fallback(self):

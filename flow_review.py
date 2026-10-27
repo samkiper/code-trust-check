@@ -108,8 +108,11 @@ def supplemental_flows(code):
                 continue
             if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 aliases[statement.name] = '<local>'
-                inner = dict(aliases)
-                inner_sources = set(sources)
+                # Function-local analysis cannot modify its parent's state.
+                # Preserve all identifiers referenced in the complete subtree.
+                names = {node.id for node in ast.walk(statement) if isinstance(node, ast.Name)}
+                inner = {name: aliases[name] for name in names if name in aliases}
+                inner_sources = sources.intersection(names)
                 if hasattr(statement, 'args'):
                     parameters = statement.args.posonlyargs + statement.args.args + statement.args.kwonlyargs
                     parameters += [p for p in (statement.args.vararg, statement.args.kwarg) if p]

@@ -68,7 +68,12 @@ def credential_flows(code, intent, affirmative):
                 continue
             if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 aliases[stmt.name] = '<local>'
-                inner, vals = dict(aliases), dict(values)
+                # The function's state is isolated and discarded after its body.
+                # Retain every identifier referenced anywhere in the subtree,
+                # rather than copying unrelated module bindings for each function.
+                names = {node.id for node in ast.walk(stmt) if isinstance(node, ast.Name)}
+                inner = {name: aliases[name] for name in names if name in aliases}
+                vals = {name: values[name] for name in names if name in values}
                 if hasattr(stmt, 'args'):
                     for p in stmt.args.posonlyargs + stmt.args.args + stmt.args.kwonlyargs + [p for p in (stmt.args.vararg, stmt.args.kwarg) if p]:
                         inner[p.arg] = '<parameter>'; vals.pop(p.arg, None)

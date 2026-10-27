@@ -301,7 +301,7 @@ GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 # Interactive repository audits retain the existing, separately metered limits.
 GITHUB_PR_SCANS_ENABLED = False
 
-SCANNER_VERSION = 44
+SCANNER_VERSION = 45
 AUDIT_SCORE_HIGH_RISK_MAX = 65
 AUDIT_SCORE_REVIEW_MAX = 90
 
@@ -4795,7 +4795,8 @@ def run_semgrep_scan(code: str, filename: str | None = None) -> dict:
             command = [
                 executable, "scan", "--json", "--metrics=off", "--quiet",
                 "--disable-version-check", "--oss-only",
-                "--jobs", "1", "--timeout", "5", "--max-memory", "512",
+                "--jobs", "1", "--timeout", "5", "--max-memory", "768",
+                "--max-target-bytes", str(MAX_PASTED_CODE_BYTES_PRO),
                 "--config", str(SEMGREP_CONFIG_PATH), str(target),
             ]
             completed = None

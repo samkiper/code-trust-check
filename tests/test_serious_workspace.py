@@ -5,12 +5,12 @@ import main
 class SeriousTests(unittest.TestCase):
  def test_exact_plan_limits_and_unknown_fallback(self):
   limits=main.get_plan_limits('serious')
-  self.assertEqual([limits[k] for k in ('line_limit','repo_file_limit','monthly_scan_limit','monthly_repo_limit')],[50000,500,300,40])
+  self.assertEqual([limits[k] for k in ('line_limit','repo_file_limit','monthly_scan_limit','monthly_repo_limit')],[200000,500,300,40])
   self.assertEqual(main.get_plan_limits('invented'),main.get_plan_limits('free'))
  def test_line_boundaries(self):
   access={'authenticated':True,'plan':'serious','limits':main.get_plan_limits('serious')}
-  main.validate_scan_request(main.ScanRequest(code='x=1\n'*50000,intent='Assign a value'),access)
-  with self.assertRaises(main.HTTPException):main.validate_scan_request(main.ScanRequest(code='x=1\n'*50001,intent='Assign a value'),access)
+  main.validate_scan_request(main.ScanRequest(code='x=1\n'*200000,intent='Assign a value'),access)
+  with self.assertRaises(main.HTTPException):main.validate_scan_request(main.ScanRequest(code='x=1\n'*200001,intent='Assign a value'),access)
  def test_workspace_rejects_anonymous_and_ignores_forged_identity(self):
   with TestClient(main.app) as client:
    with patch.object(main,'get_request_access_context',return_value={'authenticated':False}):
