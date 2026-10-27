@@ -6,6 +6,26 @@ from github_authorization import AuthorizationCache
 import main
 
 class AuthorizationCacheTests(unittest.TestCase):
+    def test_old_expiry_callback_cannot_remove_refreshed_authorization(self):
+        cache=AuthorizationCache(ttl=10)
+        with patch('github_authorization.time.monotonic',return_value=100):
+            cache.put('account-a',101,'old-token')
+            old_generation=cache.generation
+        with patch('github_authorization.time.monotonic',return_value=105):
+            cache.put('account-a',101,'new-token')
+            cache._expire(old_generation)
+            self.assertEqual(cache.get('account-a')['token'],'new-token')
+        cache.remove('account-a')
+
+    def test_revocation_removes_only_matching_github_identity(self):
+        cache=AuthorizationCache(ttl=10)
+        cache.put('account-a',101,'token-a')
+        cache.put('account-b',102,'token-b')
+        self.assertEqual(cache.revoke_github_user(101),1)
+        self.assertIsNone(cache.get('account-a'))
+        self.assertEqual(cache.get('account-b')['github_id'],102)
+        cache.remove('account-b')
+
     def test_expired_tokens_are_removed_without_another_request(self):
         cache=AuthorizationCache(ttl=0.05)
         cache.put('account-a',101,'example-token')
