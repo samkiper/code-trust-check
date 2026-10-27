@@ -301,7 +301,7 @@ GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 # Interactive repository audits retain the existing, separately metered limits.
 GITHUB_PR_SCANS_ENABLED = False
 
-SCANNER_VERSION = 38
+SCANNER_VERSION = 39
 AUDIT_SCORE_HIGH_RISK_MAX = 65
 AUDIT_SCORE_REVIEW_MAX = 90
 
