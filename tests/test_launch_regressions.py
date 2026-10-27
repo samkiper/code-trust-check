@@ -57,6 +57,21 @@ class LaunchRegressions(unittest.TestCase):
                 matches=[f for f in result['engine_findings'] if f.get('rule_id')=='javascript.query-redirect']
                 self.assertEqual(bool(matches),expected)
                 if expected:self.assertEqual(matches[0]['line'],1)
+    def test_query_redirect_variable_flow_and_overwrite_controls(self):
+        cases = [
+            ('const next = new URLSearchParams(location.search).get("next");\nlocation.href = next;', True),
+            ('const next = new URLSearchParams(window.location.search).get("next");\nwindow.location.assign(next);', True),
+            ('let next = new URLSearchParams(location.search).get("next");\nnext = "/dashboard";\nlocation.href = next;', False),
+            ('const next = "/dashboard";\nwindow.location.href = next;', False),
+            ('const next = new URLSearchParams(location.search).get("next");\nconsole.log(next);', False),
+        ]
+        for code, expected in cases:
+            with self.subTest(code=code):
+                result = self.scan(code, 'JavaScript', 'Navigate to an approved destination.')
+                matches = [f for f in result['engine_findings'] if f.get('rule_id') == 'javascript.query-redirect']
+                self.assertEqual(bool(matches), expected)
+                if expected: self.assertEqual(matches[0]['line'], 2)
+
     def test_regex_exec_is_not_node_child_process_exec(self):
         benign=self.scan('const pattern = /hello/;\nconst match = pattern.exec(input);','JavaScript')
         self.assertFalse(any(f.get('rule_id')=='javascript.child-process-exec' for f in benign['engine_findings']))

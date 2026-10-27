@@ -1,17 +1,23 @@
 rules:
   - id: javascript.query-redirect
     languages: [javascript, typescript]
+    mode: taint
     severity: WARNING
-    message: A query parameter directly controls a browser navigation destination.
+    message: A query parameter may control a browser navigation destination.
     metadata:
-      confidence: high
+      confidence: medium
       explanation: Validate the destination against an explicit allowlist before redirecting; the value could lead to an untrusted site.
-    patterns:
-      - pattern-either:
-          - pattern: location.href = new URLSearchParams(location.search).get(...)
-          - pattern: window.location.href = new URLSearchParams(window.location.search).get(...)
-          - pattern: location.assign(new URLSearchParams(location.search).get(...))
-          - pattern: window.location.assign(new URLSearchParams(window.location.search).get(...))
+    pattern-sources:
+      - pattern: new URLSearchParams(location.search).get(...)
+      - pattern: new URLSearchParams(window.location.search).get(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: location.href = $VALUE
+              - pattern: window.location.href = $VALUE
+              - pattern: location.assign($VALUE)
+              - pattern: window.location.assign($VALUE)
+          - focus-metavariable: $VALUE
 
   - id: python.dynamic-eval
     languages: [python]
