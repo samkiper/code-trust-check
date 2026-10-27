@@ -59,6 +59,14 @@ class GitHubOAuthBindingTests(unittest.TestCase):
         self.assertEqual(request.full_url, "https://github.com/login/oauth/access_token")
         self.assertEqual(json.loads(request.data)["code_verifier"], "v" * 43)
 
+    def test_token_exchange_logs_only_allowlisted_error_categories(self):
+        response=MagicMock();opener=MagicMock();opener.open.return_value=response
+        with patch.object(main.urllib.request,'build_opener',return_value=opener), patch.object(main,'log_server_issue') as log:
+            for error,expected in [('bad_verification_code','bad_verification_code'),('private-token-data','other')]:
+                response.__enter__.return_value.read.return_value=json.dumps({'error':error,'error_description':'private-code'}).encode()
+                with self.assertRaises(RuntimeError):main.github_oauth_exchange('test-code','v'*43)
+                log.assert_called_with('GitHub token exchange rejected: '+expected)
+
     def test_oauth_authorization_rejects_absent_or_plain_challenge(self):
         with patch.object(main, "GITHUB_CLIENT_ID", "client"), patch.object(main, "GITHUB_CLIENT_SECRET", "secret"), patch.object(main, "GITHUB_LINK_STATE_SECRET", "state"):
             for challenge in ["", "short", "a" * 44, "!" * 43]:

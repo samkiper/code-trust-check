@@ -6492,6 +6492,10 @@ def github_oauth_exchange(code: str, code_verifier: str) -> str:
         payload = json.loads(response.read().decode("utf-8") or "{}")
     token = str(payload.get("access_token") or "") if isinstance(payload, dict) else ""
     if not token:
+        # Fixed categories only: provider descriptions may echo sensitive data.
+        error = payload.get("error") if isinstance(payload, dict) else None
+        allowed_errors = {"bad_verification_code", "incorrect_client_credentials", "redirect_uri_mismatch", "unverified_user_email", "access_denied"}
+        log_server_issue("GitHub token exchange rejected: " + (error if isinstance(error, str) and error in allowed_errors else "other"))
         raise RuntimeError("GitHub did not issue a user access token")
     return token
 
@@ -7312,8 +7316,10 @@ def complete_github_oauth(req: GitHubOAuthCompleteRequest, request: Request):
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest()).decode("ascii").rstrip("=")
     if str(payload.get("user_id") or "") != user_id or not hmac.compare_digest(str(payload.get("code_challenge") or ""), challenge):
         return private_json({"detail": "The GitHub authorization expired or did not match this account and browser. Start again."}, status_code=400)
+    phase = "exchange"
     try:
         token = github_oauth_exchange(req.code, verifier)
+        phase = "installations"
         github_user, installations = list_github_user_installations(token)
         if not installations:
             valid_slug = GITHUB_APP_SLUG if GITHUB_APP_SLUG_PATTERN.fullmatch(GITHUB_APP_SLUG) else ""
@@ -7322,6 +7328,7 @@ def complete_github_oauth(req: GitHubOAuthCompleteRequest, request: Request):
             install_state = create_github_install_state(user_id, purpose="installation")
             return private_json({"linked": False, "installation_required": True, "url":
                 f"https://github.com/apps/{valid_slug}/installations/new?" + urlencode({"state": install_state})})
+        phase = "link"
         saved = [save_github_installation_link(user_id, item) for item in installations]
         if not all(saved):
             raise RuntimeError("One or more GitHub installation links could not be saved")
@@ -7329,7 +7336,7 @@ def complete_github_oauth(req: GitHubOAuthCompleteRequest, request: Request):
         GITHUB_USER_AUTHORIZATIONS.put(user_id, github_id, token)
         return private_json({"linked": True, "github_account": str(github_user.get("login") or "")[:255], "github_installations": len(saved)})
     except Exception as exc:
-        log_server_issue("GitHub user authorization failed", exc)
+        log_server_issue("GitHub user authorization failed at " + phase, exc)
         return private_json({"detail": "GitHub authorization could not be completed. Start the connection again."}, status_code=502)
 
 
