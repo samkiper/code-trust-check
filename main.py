@@ -70,7 +70,12 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
-    response = await call_next(request)
+    # The legacy bundled frontend has superseded pricing and capabilities.
+    # Keep old bookmarks from exposing it while retaining static assets.
+    if request.url.path == '/static/index.html':
+        response = RedirectResponse('https://aicodeaudit.org/', status_code=307)
+    else:
+        response = await call_next(request)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "no-referrer")
@@ -7675,7 +7680,7 @@ def apple_touch_icon_precomposed():
 
 @app.get("/")
 def home():
-    return FileResponse("static/index.html")
+    return RedirectResponse("https://aicodeaudit.org/", status_code=307)
 
 
 @app.get("/methodology")

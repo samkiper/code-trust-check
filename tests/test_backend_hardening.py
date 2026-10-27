@@ -99,10 +99,16 @@ class RateLimitAndPrivacyTests(unittest.TestCase):
         self.assertEqual(response.headers["pragma"], "no-cache")
 
     def test_homepage_has_browser_security_policy(self):
-        response = TestClient(main.app).get("/")
-        self.assertEqual(response.status_code, 200)
+        response = TestClient(main.app).get("/", follow_redirects=False)
+        self.assertEqual(response.status_code, 307)
+        self.assertEqual(response.headers['location'], 'https://aicodeaudit.org/')
         self.assertIn("frame-ancestors 'none'", response.headers["content-security-policy"])
         self.assertEqual(response.headers["cross-origin-opener-policy"], "same-origin")
+
+    def test_legacy_static_index_redirects_to_current_site(self):
+        response = TestClient(main.app).get('/static/index.html', follow_redirects=False)
+        self.assertEqual(response.status_code, 307)
+        self.assertEqual(response.headers['location'], 'https://aicodeaudit.org/')
 
 
 class RepositoryScoringTests(unittest.TestCase):
