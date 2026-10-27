@@ -301,7 +301,7 @@ GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 # Interactive repository audits retain the existing, separately metered limits.
 GITHUB_PR_SCANS_ENABLED = False
 
-SCANNER_VERSION = 43
+SCANNER_VERSION = 44
 AUDIT_SCORE_HIGH_RISK_MAX = 65
 AUDIT_SCORE_REVIEW_MAX = 90
 
@@ -8308,12 +8308,21 @@ def github_repo_badge_svg(owner: str, repo: str):
                 dependency_scan = analyze_dependency_manifests(zf)
                 dependency_risk_points = float(dependency_scan["dependency_risk_points"])
 
-                code_files = [
+                # Public badges have no customer plan context: cap source work at
+                # the existing Free repository bounds and never score a partial
+                # archive as if all supported files were checked.
+                all_code_files = [
                     name for name in zf.namelist()
                     if not name.endswith("/") and is_supported_code_file(name)
-                ][:FREE_REPO_FILE_LIMIT]
+                ]
+                code_files = all_code_files[:FREE_REPO_FILE_LIMIT]
+                selected_bytes = sum(zf.getinfo(name).file_size for name in code_files)
+                incomplete = (len(code_files) != len(all_code_files)
+                    or selected_bytes > FREE_REPO_SIZE_LIMIT_BYTES
+                    or bool(dependency_scan.get("dependency_scan_error"))
+                    or bool(dependency_scan.get("dependencies_skipped")))
 
-                if not code_files and not dependency_scan.get("dependency_findings"):
+                if not code_files or incomplete:
                     svg = build_badge_svg("AI Code Audit", "not rated", "#6b7280")
                     return Response(
                         content=svg,
@@ -8324,12 +8333,20 @@ def github_repo_badge_svg(owner: str, repo: str):
                 for file_name in code_files:
                     try:
                         with zf.open(file_name) as file:
-                            raw = file.read()
+                            raw = file.read(FREE_REPO_SIZE_LIMIT_BYTES + 1)
+                            if len(raw) > FREE_REPO_SIZE_LIMIT_BYTES:
+                                raise ValueError("Repository file exceeds badge analysis limit")
                             code_text = raw.decode("utf-8")
+                        coverage = inspect_source(code_text, file_name)
+                        if not coverage.get("meaningful_coverage"):
+                            raise ValueError("Repository file cannot be rated")
+                        result = analyze_code("Scan this public GitHub repo", code_text, plan="free")
+                        if result.get("risk") in {"limit", "limited"}:
+                            raise ValueError("Repository file exceeded analysis limits")
                     except Exception:
-                        continue
+                        svg = build_badge_svg("AI Code Audit", "not rated", "#6b7280")
+                        return Response(content=svg, media_type="image/svg+xml", headers={"Cache-Control": "public, max-age=120"})
 
-                    result = analyze_code("Scan this public GitHub repo", code_text, plan="free")
                     badge_weighted_points.append(
                         weighted_repository_file_points(file_name, result["risk_points"])
                     )
