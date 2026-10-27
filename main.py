@@ -301,7 +301,7 @@ GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 # Interactive repository audits retain the existing, separately metered limits.
 GITHUB_PR_SCANS_ENABLED = False
 
-SCANNER_VERSION = 40
+SCANNER_VERSION = 41
 AUDIT_SCORE_HIGH_RISK_MAX = 65
 AUDIT_SCORE_REVIEW_MAX = 90
 
@@ -8135,9 +8135,10 @@ def scan_repo_work(req,access,request,private_archive=None):
     for signal in cross_result['findings']:
         sink = cross_file_paths.get(signal['file'], signal['file'])
         source = cross_file_paths.get(signal['source_file'], signal['source_file'])
+        flow_evidence = (f"The getter at {source}:{signal['source_line']} supplies a value assigned at {sink}:{signal['assignment_line']} and used in the request payload at {sink}:{signal['line']}." if 'assignment_line' in signal else f"The getter at {source}:{signal['source_line']} is called in the request payload at {sink}:{signal['line']}.")
         flag = make_flag(line=signal['line'], flag_type='cross_file_credential_flow', pattern=signal['pattern'],
             message=signal['message'], severity=18,
-            explanation=f"The getter at {source}:{signal['source_line']} is called in the request payload at {sink}:{signal['line']}. Review the destination and whether the transmission is intended.")
+            explanation=flow_evidence+" Review the destination and whether the transmission is intended.")
         flag.update(file=sink, engine='cross-file-python', source_file=source, source_line=signal['source_line'])
         flag['finding_id'] = hashlib.sha256(f"cross-file\0{sink}\0{signal['line']}\0{source}\0{signal['source_line']}".encode('utf-8')).hexdigest()[:20]
         cross_file_flags.append(flag)

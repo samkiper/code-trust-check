@@ -96,6 +96,13 @@ def direct_getters(node, imported):
             yield from direct_getters(value,imported)
 
 
+def direct_payload_name(node, name):
+    if isinstance(node, ast.Name):return node.id==name and isinstance(node.ctx,ast.Load)
+    if isinstance(node, ast.Dict):return any(direct_payload_name(value,name) for value in node.values if value is not None)
+    if isinstance(node, (ast.List,ast.Tuple)):return any(direct_payload_name(value,name) for value in node.elts)
+    return False
+
+
 def analyze(files: dict[str,str]) -> dict:
     if not isinstance(files,dict) or len(files)>500 or any(not isinstance(k,str) or not isinstance(v,str) for k,v in files.items()):
         raise ValueError('Supply at most 500 selected source files.')
@@ -129,4 +136,20 @@ def analyze(files: dict[str,str]) -> dict:
                 for getter in direct_getters(payload,imported):
                     source_path,source_line=imported[getter]
                     findings.append({'pattern':'cross_file_credential_payload','file':path,'line':node.lineno,'source_file':source_path,'source_line':source_line,'message':'An imported function that reads a credential is called in a network request payload. Verify the destination and intended behavior.'})
-    return {'findings':findings,'parse_failures':failed,'ambiguous_modules':sorted(ambiguous),'limitations':['Prototype: direct absolute or resolvable relative Python imports, parameterless synchronous single-return getenv getters and direct requests/httpx JSON or data payload calls only. Other cross-file flows are not traced.','Static evidence does not prove that a call executed or that code is safe.']}
+        # Narrow local propagation: a simple getter assignment immediately
+        # followed by a standalone request using that variable in its payload.
+        # Do not infer through intervening statements or branches.
+        for parent in ast.walk(tree):
+            for _, body in ast.iter_fields(parent):
+                if not isinstance(body,list) or not all(isinstance(s,ast.stmt) for s in body):continue
+                for first, second in zip(body,body[1:]):
+                    if not isinstance(first,ast.Assign) or len(first.targets)!=1 or not isinstance(first.targets[0],ast.Name):continue
+                    getters=list(direct_getters(first.value,imported)) if isinstance(first.value,ast.Call) else []
+                    if len(getters)!=1 or not isinstance(second,ast.Expr) or not isinstance(second.value,ast.Call):continue
+                    call=second.value
+                    if not isinstance(call.func,ast.Attribute) or call.func.attr not in _METHODS or not isinstance(call.func.value,ast.Name) or call.func.value.id not in network:continue
+                    variable=first.targets[0].id
+                    if not any(direct_payload_name(kw.value,variable) for kw in call.keywords if kw.arg in {'json','data'}):continue
+                    source_path,source_line=imported[getters[0]]
+                    findings.append({'pattern':'cross_file_credential_payload','file':path,'line':call.lineno,'source_file':source_path,'source_line':source_line,'assignment_line':first.lineno,'message':'A credential-reading imported function supplies a value to the next network request payload. Verify the destination and intended behavior.'})
+    return {'findings':findings,'parse_failures':failed,'ambiguous_modules':sorted(ambiguous),'limitations':['Prototype: direct absolute or resolvable relative Python imports, parameterless synchronous single-return getenv getters, and direct or immediately assigned requests/httpx JSON or data payloads only. Other cross-file flows are not traced.','Static evidence does not prove that a call executed or that code is safe.']}
