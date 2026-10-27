@@ -7331,6 +7331,12 @@ def complete_github_oauth(req: GitHubOAuthCompleteRequest, request: Request):
         phase = "link"
         saved = [save_github_installation_link(user_id, item) for item in installations]
         if not all(saved):
+            for item, linked in zip(installations, saved):
+                if linked: continue
+                existing = supabase_rest_request("GET", "github_installations", query=urlencode({
+                    "installation_id": f"eq.{int(item.get('id') or 0)}", "select": "user_id", "limit": "1"}))
+                if isinstance(existing, list) and existing and str(existing[0].get('user_id') or '') != user_id:
+                    return private_json({"detail": "This GitHub installation is already linked to another AI Code Audit account. Connect an installation you own that is not linked to another account, or contact support."}, status_code=409)
             raise RuntimeError("One or more GitHub installation links could not be saved")
         github_id = github_user.get("id")
         GITHUB_USER_AUTHORIZATIONS.put(user_id, github_id, token)

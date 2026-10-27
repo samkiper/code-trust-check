@@ -73,6 +73,19 @@ class GitHubOAuthBindingTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     main.github_oauth_authorize_url("owner", challenge)
 
+    def test_installation_owned_by_another_customer_returns_conflict(self):
+        verifier='v'*43
+        challenge=base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip('=')
+        request=Request({'type':'http','headers':[]})
+        access={'authenticated':True,'user_id':'customer-b','plan':'pro'}
+        with patch.object(main,'GITHUB_LINK_STATE_SECRET','test-state-secret'), patch.object(main,'get_request_access_context',return_value=access), patch.object(main,'enrich_access_with_admin_metadata',side_effect=lambda a:a), patch.object(main,'enforce_rate_limit'), patch.object(main,'github_oauth_exchange',return_value='synthetic-token'), patch.object(main,'list_github_user_installations',return_value=({'id':1,'login':'owner'},[{'id':42}])), patch.object(main,'save_github_installation_link',return_value={}), patch.object(main,'supabase_rest_request',return_value=[{'user_id':'customer-a'}]), patch.object(main.GITHUB_USER_AUTHORIZATIONS,'put') as cache:
+            state=main.create_github_install_state('customer-b',purpose='oauth',code_challenge=challenge)
+            response=main.complete_github_oauth(main.GitHubOAuthCompleteRequest(code='test-code',state=state,code_verifier=verifier),request)
+            self.assertEqual(response.status_code,409)
+            self.assertIn('already linked to another',json.loads(response.body)['detail'])
+            self.assertNotIn('customer-a',response.body.decode())
+            cache.assert_not_called()
+
     def test_callback_forwards_only_to_signed_allowlisted_frontend_fragment(self):
         with patch.object(main,'GITHUB_LINK_STATE_SECRET','test-state-secret'), \
                 patch.object(main,'github_oauth_exchange') as exchange:
