@@ -40,6 +40,16 @@ class AccuracyGateSelectionTests(unittest.TestCase):
         failures = check_gate(report, thresholds)
         self.assertTrue(any("owasp_no_hint_holdout" in failure for failure in failures))
 
+    def test_missing_negative_cases_cannot_pass_false_positive_gate(self):
+        report = {"internal": {"overall": {"cases": 65, "recall": 1.0, "false_positive_rate": None}}}
+        thresholds = {"internal": {"minimum_cases": 65, "minimum_recall": 1.0, "maximum_false_positive_rate": 0.0}}
+        self.assertTrue(any("false-positive rate" in message for message in check_gate(report, thresholds)))
+
+    def test_missing_category_class_cannot_pass_category_gate(self):
+        report = {"owasp": {"by_vulnerability": {"xss": {"recall": None, "false_positive_rate": 0.0}}}}
+        failures = check_gate(report, {"owasp_categories": {"xss": {"minimum_recall": 1.0}}})
+        self.assertTrue(any("recall" in message for message in failures))
+
 
 if __name__ == "__main__":
     unittest.main()

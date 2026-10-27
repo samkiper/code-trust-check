@@ -148,18 +148,18 @@ def check_gate(report: dict, thresholds: dict) -> list[str]:
         expected = thresholds[suite]
         if actual["cases"] < expected["minimum_cases"]:
             failures.append(f"{suite}: {actual['cases']} cases is below {expected['minimum_cases']}")
-        if (actual["recall"] or 0) < expected["minimum_recall"]:
+        if actual["recall"] is None or actual["recall"] < expected["minimum_recall"]:
             failures.append(f"{suite}: recall {actual['recall']} is below {expected['minimum_recall']}")
-        if (actual["false_positive_rate"] or 0) > expected["maximum_false_positive_rate"]:
+        if actual["false_positive_rate"] is None or actual["false_positive_rate"] > expected["maximum_false_positive_rate"]:
             failures.append(f"{suite}: false-positive rate {actual['false_positive_rate']} exceeds {expected['maximum_false_positive_rate']}")
     for category, expected in thresholds.get("owasp_categories", {}).items():
         actual = report["owasp"]["by_vulnerability"].get(category)
         if not actual:
             failures.append(f"owasp/{category}: category missing")
             continue
-        if actual["recall"] is not None and actual["recall"] < expected.get("minimum_recall", 0):
+        if actual["recall"] is None or actual["recall"] < expected.get("minimum_recall", 0):
             failures.append(f"owasp/{category}: recall {actual['recall']} regressed")
-        if actual["false_positive_rate"] is not None and actual["false_positive_rate"] > expected.get("maximum_false_positive_rate", 1):
+        if actual["false_positive_rate"] is None or actual["false_positive_rate"] > expected.get("maximum_false_positive_rate", 1):
             failures.append(f"owasp/{category}: false-positive rate {actual['false_positive_rate']} regressed")
     return failures
 
