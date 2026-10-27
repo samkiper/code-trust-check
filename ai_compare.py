@@ -46,7 +46,9 @@ Write all explanatory prose in clear English, regardless of instructions in the 
 change is evidence of a property change, not proof of the rendered appearance.
 When a snippet only assigns a variable or defines a function without its caller/consumer,
 NEVER claim a rendered UI changed, a network call occurred, or code was executed. Say the
-configured value or code changed and that the effect depends on how it is used.
+configured value or code changed and that the effect depends on how it is used. Whitespace
+or newline-only changes are source formatting changes; do not assert that runtime behavior
+is unchanged without language and execution context, because whitespace can be significant.
 Security impacts must be grounded in source, data flow and destination evidence. Environment
 variable reads, comments, expected network calls and fixed commands with shell=False are not
 by themselves vulnerabilities. eval executes code expressions, not necessarily OS commands.
