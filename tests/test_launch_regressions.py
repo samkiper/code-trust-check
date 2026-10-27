@@ -43,6 +43,20 @@ class LaunchRegressions(unittest.TestCase):
                 self.assertTrue(any('Static-analysis findings' in text for text in r['behavior_summary']))
         r=self.scan('document.getElementById("name").innerHTML = "<b>Hello</b>";', 'JavaScript','Display fixed markup.')
         self.assertFalse(r['engine_findings'])
+    def test_direct_query_redirect_and_fixed_destination_pair(self):
+        for code,expected in [
+            ('location.href = new URLSearchParams(location.search).get("next");',True),
+            ('window.location.href = new URLSearchParams(window.location.search).get("next");',True),
+            ('location.assign(new URLSearchParams(location.search).get("next"));',True),
+            ('window.location.assign(new URLSearchParams(window.location.search).get("next"));',True),
+            ('location.href = "/dashboard";',False),
+            ('const next = new URLSearchParams(location.search).get("next"); console.log(next);',False),
+        ]:
+            with self.subTest(code=code):
+                result=self.scan(code,'JavaScript','Navigate to an approved destination.')
+                matches=[f for f in result['engine_findings'] if f.get('rule_id')=='javascript.query-redirect']
+                self.assertEqual(bool(matches),expected)
+                if expected:self.assertEqual(matches[0]['line'],1)
     def test_regex_exec_is_not_node_child_process_exec(self):
         benign=self.scan('const pattern = /hello/;\nconst match = pattern.exec(input);','JavaScript')
         self.assertFalse(any(f.get('rule_id')=='javascript.child-process-exec' for f in benign['engine_findings']))

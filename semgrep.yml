@@ -1,4 +1,18 @@
 rules:
+  - id: javascript.query-redirect
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: A query parameter directly controls a browser navigation destination.
+    metadata:
+      confidence: high
+      explanation: Validate the destination against an explicit allowlist before redirecting; the value could lead to an untrusted site.
+    patterns:
+      - pattern-either:
+          - pattern: location.href = new URLSearchParams(location.search).get(...)
+          - pattern: window.location.href = new URLSearchParams(window.location.search).get(...)
+          - pattern: location.assign(new URLSearchParams(location.search).get(...))
+          - pattern: window.location.assign(new URLSearchParams(window.location.search).get(...))
+
   - id: python.dynamic-eval
     languages: [python]
     severity: ERROR
