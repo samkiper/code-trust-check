@@ -78,10 +78,18 @@ def prepare(body):
     if len(intent)>2000: raise InvalidInput('Describe the intended change in 2,000 characters or fewer.')
     if len((before+after).encode('utf-8'))>MAX_CODE_BYTES:
         raise InvalidInput('AI review supports 32 KB combined code. Basic text comparison supports larger files.')
-    a,b=before.replace('\r\n','\n').splitlines(),after.replace('\r\n','\n').splitlines()
+    # Match the browser's comparison: only normalize CRLF and retain trailing
+    # newlines and other Unicode/control characters as source changes.
+    a,b=before.replace('\r\n','\n').split('\n'),after.replace('\r\n','\n').split('\n')
     blocks=[]
     for tag,i,j,k,l in difflib.SequenceMatcher(None,a,b,autojunk=False).get_opcodes():
-        if tag!='equal': blocks.append({'change_id':len(blocks)+1,'before_line':i+1,'after_line':k+1,'before':'\n'.join(a[i:j]),'after':'\n'.join(b[k:l])})
+        if tag!='equal':
+            old,new='\n'.join(a[i:j]),'\n'.join(b[k:l])
+            # A sole final empty line represents a real terminal newline. Cite
+            # the actual newline instead of presenting both sides as empty.
+            if tag=='delete' and i+1==j==len(a) and a[i]=='': old='\n'
+            if tag=='insert' and k+1==l==len(b) and b[k]=='': new='\n'
+            blocks.append({'change_id':len(blocks)+1,'before_line':i+1,'after_line':k+1,'before':old,'after':new})
     if len(blocks)>30: raise InvalidInput('AI review supports up to 30 changed blocks. Compare a smaller file; the basic tool still shows every change.')
     evidence_blocks=[]
     for block in blocks:

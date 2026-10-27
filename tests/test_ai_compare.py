@@ -6,6 +6,17 @@ from fastapi import HTTPException
 from starlette.requests import Request
 
 class AICompareTests(unittest.TestCase):
+ def test_control_character_and_trailing_newline_changes_are_not_silently_ignored(self):
+  for before,after in [('left\x0bright','left\nright'),('x=1','x=1\n'),('x=1\n','x=1')]:
+   with self.subTest(before=repr(before),after=repr(after)):
+    _,blocks=a.prepare({'before':before,'after':after,'request':'Review the change.'})
+    self.assertTrue(blocks)
+  _,blocks=a.prepare({'before':'x=1\r\ny=2','after':'x=1\ny=2','request':'Review the change.'})
+  self.assertEqual(blocks,[])
+  _,blocks=a.prepare({'before':'x=1','after':'x=1\n','request':'Review the change.'})
+  self.assertEqual((blocks[0]['before'],blocks[0]['after']),('', '\n'))
+  _,blocks=a.prepare({'before':'x=1\n','after':'x=1','request':'Review the change.'})
+  self.assertEqual((blocks[0]['before'],blocks[0]['after']),('\n', ''))
  def fixture(self,before='x=1',after='x=2',intent='Change x to 2'):
   p,blocks=a.prepare({'before':before,'after':after,'request':intent})
   report={'summary':'Review changes','limitations':['Not executed'],'changes':[{'change_id':b['change_id'],'classification':'requested','explanation':'Value changed.','security_impact':'none_observed','before_evidence':a.evidence_options(b['before'],b['change_id'],'b')[0]['id'],'after_evidence':a.evidence_options(b['after'],b['change_id'],'a')[0]['id']} for b in blocks]}
