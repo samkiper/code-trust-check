@@ -48,6 +48,17 @@ class AuditRuntimeTests(unittest.TestCase):
             self.assertEqual(run_process([sys.executable,'-c',script],{},2).strip(),b'42')
             time.sleep(.8);self.assertFalse(marker.exists())
 
+    @unittest.skipUnless(Path('/proc/self/status').exists(), 'Linux process monitoring required')
+    def test_memory_guard_stops_worker_and_descendant_without_charging(self):
+        child = "import time; x=bytearray(40_000_000); time.sleep(5)"
+        script = f"import subprocess,sys,time;subprocess.Popen([sys.executable,'-c',{child!r}]);time.sleep(5)"
+        with patch('audit_runtime.AUDIT_MEMORY_LIMIT_KIB', 25_000):
+            with self.assertRaises(HTTPException) as cm:
+                run_process([sys.executable, '-c', script], {}, 4)
+        self.assertEqual(cm.exception.status_code, 503)
+        self.assertIn('No scan allowance was used', cm.exception.detail)
+        self.assertEqual(run_process([sys.executable, '-c', 'print(42)'], {}, 2).strip(), b'42')
+
     def test_real_worker_retains_findings_and_never_executes_source(self):
         access={'plan':'free','limits':main.get_plan_limits('free'),'authenticated':False}
         with tempfile.TemporaryDirectory() as folder:
@@ -78,6 +89,30 @@ class AuditRuntimeTests(unittest.TestCase):
             limit=time.monotonic()+3
             while q.get('two',second['id'])['status']!='completed' and time.monotonic()<limit:time.sleep(.01)
             self.assertEqual(q.get('one',first['id'])['http_status'],504)
+            self.assertEqual(q.get('two',second['id'])['result'],{'recovered':True})
+        self.assertEqual(settlements,[False])
+
+    @unittest.skipUnless(Path('/proc/self/status').exists(), 'Linux process monitoring required')
+    def test_memory_guard_refunds_receipt_and_next_customer_runs(self):
+        access={'authenticated':True,'user_id':'test','plan':'free','limits':main.get_plan_limits('free')}
+        req=main.ScanRequest(intent='Review',code='print(123)',language='Python')
+        request=Request({'type':'http','method':'POST','path':'/scan','headers':[]})
+        settlements=[]
+        def usage(a,action='status',receipt=None,kind='code',charge=False):
+            if action=='settle': settlements.append(charge)
+            return {'allowed':True}
+        @limit_scan_capacity
+        @main.metered_scan('code')
+        def heavy(req,request):
+            run_process([sys.executable,'-c','import time;x=bytearray(40000000);time.sleep(5)'],{},4)
+        @limit_scan_capacity
+        def normal(): return {'recovered':True}
+        q=ScanJobs()
+        with patch('audit_runtime.AUDIT_MEMORY_LIMIT_KIB',25_000), patch.object(main,'get_request_access_context',return_value=access), patch.object(main,'monthly_usage',side_effect=usage):
+            first=q.submit('one',lambda:heavy(req,request)); second=q.submit('two',normal)
+            limit=time.monotonic()+4
+            while q.get('two',second['id'])['status']!='completed' and time.monotonic()<limit:time.sleep(.01)
+            self.assertEqual(q.get('one',first['id'])['http_status'],503)
             self.assertEqual(q.get('two',second['id'])['result'],{'recovered':True})
         self.assertEqual(settlements,[False])
 

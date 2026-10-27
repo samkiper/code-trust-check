@@ -10,11 +10,16 @@ import os
 from pathlib import Path
 import signal
 import subprocess
+import threading
 import sys
 import time
 from fastapi import HTTPException
 
 AUDIT_TIMEOUT_SECONDS = 120
+# A single customer's scanner and descendants must leave room for the web process.
+# RSS sums shared pages more than once: conservative by design.
+AUDIT_MEMORY_LIMIT_KIB = 1_450_000
+AUDIT_MEMORY_MESSAGE = 'The audit exceeded its safe memory limit and was stopped. No scan allowance was used. Try a smaller or less complex input.'
 TIMEOUT_MESSAGE = 'The audit exceeded its maximum runtime and was stopped. No scan allowance was used. Try a smaller snippet or repository.'
 
 
@@ -45,18 +50,66 @@ def scanner_environment():
             'AUDIT_ISOLATED_WORKER': '1', 'SEMGREP_SEND_METRICS': 'off'}
 
 
+def _process_tree_rss_kib(child_pid):
+    """Sum scanner descendants' resident memory, handling nested PID namespaces."""
+    parent_pid = int(os.readlink('/proc/self'))
+    entries = {}
+    for folder in Path('/proc').iterdir():
+        if not folder.name.isdigit():
+            continue
+        try:
+            fields = dict(line.split(':', 1) for line in (folder / 'status').read_text().splitlines() if ':' in line)
+            namespace_ids = fields.get('NSpid', str(folder.name)).split()
+            entries[int(folder.name)] = (int(fields['PPid']), int(fields.get('VmRSS', '0 kB').split()[0]), int(namespace_ids[-1]))
+        except (OSError, KeyError, ValueError, IndexError):
+            continue  # Processes may exit while /proc is being read.
+    roots = {pid for pid, (parent, _, local) in entries.items() if parent == parent_pid and local == child_pid}
+    if not roots:
+        return 0
+    family = roots.copy()
+    while True:
+        extra = {pid for pid, (parent, _, _) in entries.items() if parent in family} - family
+        if not extra:
+            break
+        family.update(extra)
+    return sum(entries[pid][1] for pid in family)
+
+
 def run_process(command, payload, timeout):
     process=subprocess.Popen(command,stdin=subprocess.PIPE,stdout=subprocess.PIPE,
                              stderr=subprocess.DEVNULL,start_new_session=True,
                              env=scanner_environment())
+    stop = threading.Event()
+    memory_exceeded = threading.Event()
+    def watch_memory():
+        while not stop.wait(.1):
+            if process.poll() is not None:
+                return
+            try:
+                if _process_tree_rss_kib(process.pid) <= AUDIT_MEMORY_LIMIT_KIB:
+                    continue
+            except (OSError, ValueError):
+                # On a Linux service an unreadable process tree cannot be
+                # safely treated as evidence of spare memory.
+                pass
+            memory_exceeded.set()
+            try: os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError: pass
+            return
+    watcher = threading.Thread(target=watch_memory, daemon=True)
+    watcher.start()
     try:
         output,_=process.communicate(json.dumps(payload).encode(),timeout=timeout)
+        if memory_exceeded.is_set():
+            raise HTTPException(503, AUDIT_MEMORY_MESSAGE)
         if process.returncode:
             raise HTTPException(502,'The scanner could not complete this audit. No scan allowance was used.')
         return output
     except subprocess.TimeoutExpired:
         raise HTTPException(504,TIMEOUT_MESSAGE) from None
     finally:
+        stop.set()
+        watcher.join(timeout=1)
         # All nested scanner processes inherit this group. Even successful work
         # is reaped before the caller releases the shared capacity permit.
         try:os.killpg(process.pid,signal.SIGKILL)
