@@ -18,6 +18,17 @@ class SingleCodeReviewContractTests(unittest.TestCase):
         result=review.validate_response(response([{'classification':'requires_context','explanation':'Check the input.','evidence_id':options[-1]['id']}]),options)
         self.assertEqual(result['observations'][0]['evidence'],options[-1]['text'])
 
+    def test_unicode_controls_do_not_create_fake_line_numbers(self):
+        # Force chunk boundaries after each non-LF separator so wrong line
+        # numbering is observable even when the excerpt contains one line.
+        for separator in ('\u2028', '\u2029', '\x0b', '\r'):
+            with self.subTest(separator=repr(separator)):
+                code='x'*(review.MAX_EXCERPT_CHARS-1)+separator+'y'*(review.MAX_EXCERPT_CHARS-1)+'\nend'
+                options=review.evidence_options(code)
+                self.assertEqual(''.join(x['text'] for x in options),code)
+                self.assertEqual(options[1]['first_line'],1)
+                self.assertEqual(options[-1]['last_line'],2)
+
     def test_provider_cannot_supply_its_own_evidence_or_unknown_fields(self):
         _,options=review.prepare({'code':'print("ready")','intent':'Print a status.'})
         observation={'classification':'supports_intent','explanation':'The source prints a value.','evidence_id':options[0]['id'],'evidence':'forged'}

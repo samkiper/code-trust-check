@@ -45,7 +45,12 @@ def evidence_options(code: str) -> list[dict]:
         if current:
             options.append({'id':f'e{len(options)+1}', 'text':''.join(current), 'first_line':first, 'last_line':last})
             current=[];length=0
-    for line_number,line in enumerate(code.splitlines(keepends=True),1):
+    # Only LF advances the displayed source line, matching browser/editor
+    # conventions. Keep every original character, including CR and Unicode
+    # separators, in the evidence rather than normalizing the source.
+    lines=code.split("\n")
+    for line_number,part in enumerate(lines,1):
+        line=part+("\n" if line_number<len(lines) else "")
         offset=0
         while offset<len(line):
             if length==MAX_EXCERPT_CHARS:flush()
