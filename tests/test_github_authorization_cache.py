@@ -1,10 +1,21 @@
 import unittest
 import json
+import time
 from unittest.mock import patch
 from github_authorization import AuthorizationCache
 import main
 
 class AuthorizationCacheTests(unittest.TestCase):
+    def test_expired_tokens_are_removed_without_another_request(self):
+        cache=AuthorizationCache(ttl=0.05)
+        cache.put('account-a',101,'example-token')
+        deadline=time.monotonic()+2
+        while time.monotonic()<deadline:
+            with cache.lock:
+                if not cache.entries:break
+            time.sleep(0.01)
+        with cache.lock:self.assertEqual(cache.entries,{})
+
     def test_expiry_revocation_and_no_cross_account_lookup(self):
         cache=AuthorizationCache(limit=2,ttl=10)
         with patch('github_authorization.time.monotonic',return_value=100):
