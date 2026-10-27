@@ -10,5 +10,9 @@
   {"id":"py-exec-input","language":"Python","intent":"Print the supplied value.","code":"value = input('Value: ')\nexec(value)","dangerous":true},
   {"id":"py-shell-injection","language":"Python","intent":"Show a file selected by the user.","code":"import subprocess\nname = input('File: ')\nsubprocess.run('cat ' + name, shell=True)","dangerous":true},
   {"id":"js-unsafe-dom","language":"JavaScript","intent":"Display the value from the query string as text.","code":"const q = new URLSearchParams(location.search).get('q');\ndocument.querySelector('#result').innerHTML = q;","dangerous":true},
-  {"id":"js-eval-input","language":"JavaScript","intent":"Display a submitted value.","code":"const value = window.location.hash.slice(1);\neval(value);","dangerous":true}
+  {"id":"js-eval-input","language":"JavaScript","intent":"Display a submitted value.","code":"const value = window.location.hash.slice(1);\neval(value);","dangerous":true},
+  {"id":"js-regex-exec","language":"JavaScript","intent":"Extract a matching text pattern.","code":"const pattern = /hello/;\nconst match = pattern.exec(input);","dangerous":false,"rule":"javascript.child-process-exec","expect_rule":false},
+  {"id":"js-child-exec-alias","language":"JavaScript","intent":"Show a status message.","code":"const cp = require('child_process');\ncp.exec(req.body.command);","dangerous":true,"rule":"javascript.child-process-exec","expect_rule":true},
+  {"id":"js-node-child-exec-alias","language":"JavaScript","intent":"Show a status message.","code":"const cp = require('node:child_process');\ncp.exec(req.body.command);","dangerous":true,"rule":"javascript.child-process-exec","expect_rule":true},
+  {"id":"ts-unsafe-dom","language":"TypeScript","intent":"Display query text.","code":"const name: string = location.hash.slice(1);\ndocument.querySelector('#a')!.innerHTML = name;","dangerous":true}
 ]

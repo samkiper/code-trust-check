@@ -68,7 +68,36 @@ rules:
       explanation: Prefer execFile or spawn with a fixed executable and argument list.
     pattern-either:
       - pattern: child_process.exec(...)
-      - pattern: $CP.exec(...)
+      - patterns:
+          - pattern-inside: |
+              const $CP = require("child_process");
+              ...
+          - pattern: $CP.exec(...)
+      - patterns:
+          - pattern-inside: |
+              const $CP = require("node:child_process");
+              ...
+          - pattern: $CP.exec(...)
+      - patterns:
+          - pattern-inside: |
+              import * as $CP from "child_process";
+              ...
+          - pattern: $CP.exec(...)
+      - patterns:
+          - pattern-inside: |
+              import * as $CP from "node:child_process";
+              ...
+          - pattern: $CP.exec(...)
+      - patterns:
+          - pattern-inside: |
+              import { exec as $RUN } from "child_process";
+              ...
+          - pattern: $RUN(...)
+      - patterns:
+          - pattern-inside: |
+              import { exec as $RUN } from "node:child_process";
+              ...
+          - pattern: $RUN(...)
 
   - id: shell.download-pipe-execute
     languages: [bash]

@@ -22,10 +22,13 @@ def evaluate():
         complete = bool(engines) and all(engine.get('status') == 'complete' for engine in engines)
         findings = report.get('flags', []) + report.get('engine_findings', [])
         high = [finding for finding in findings if finding.get('severity', 0) >= 18]
+        ids = [f.get('pattern') or f.get('rule_id') for f in findings]
         detected = bool(high) if complete else None
         results.append({'id': case['id'], 'expected_dangerous': case['dangerous'],
                         'detected_high': detected, 'engines_complete': complete,
-                        'finding_ids': [f.get('pattern') or f.get('rule_id') for f in high]})
+                        'finding_ids': ids,
+                        'expected_rule': case.get('rule'),
+                        'rule_matched_expectation': ((case['rule'] in ids) == case['expect_rule']) if complete and 'rule' in case else None})
     return {'description': 'Exploratory hand-authored snippets; not a general accuracy rate.',
             'cases': results}
 

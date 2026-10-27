@@ -43,6 +43,15 @@ class LaunchRegressions(unittest.TestCase):
                 self.assertTrue(any('Static-analysis findings' in text for text in r['behavior_summary']))
         r=self.scan('document.getElementById("name").innerHTML = "<b>Hello</b>";', 'JavaScript','Display fixed markup.')
         self.assertFalse(r['engine_findings'])
+    def test_regex_exec_is_not_node_child_process_exec(self):
+        benign=self.scan('const pattern = /hello/;\nconst match = pattern.exec(input);','JavaScript')
+        self.assertFalse(any(f.get('rule_id')=='javascript.child-process-exec' for f in benign['engine_findings']))
+        for imp in ['const cp = require("child_process");','const cp = require("node:child_process");','import * as cp from "child_process";','import * as cp from "node:child_process";']:
+            result=self.scan(imp+'\ncp.exec(req.body.command);','JavaScript')
+            self.assertTrue(any(f.get('rule_id')=='javascript.child-process-exec' for f in result['engine_findings']),imp)
+        for module in ['child_process', 'node:child_process']:
+            result=self.scan(f'import {{ exec as run }} from "{module}";\nrun(req.body.command);','JavaScript')
+            self.assertTrue(any(f.get('rule_id')=='javascript.child-process-exec' for f in result['engine_findings']),module)
     def test_credential_aliases_and_reassignment(self):
         for imp,call in [('import requests as r','r.post'),('from requests import post as transmit','transmit'),('import httpx as h','h.post')]:
             prefix='import os\n'+imp+'\nsecret=os.environ.get("OPENAI_API_KEY")\n'
