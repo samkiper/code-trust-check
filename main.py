@@ -301,7 +301,7 @@ GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 # Interactive repository audits retain the existing, separately metered limits.
 GITHUB_PR_SCANS_ENABLED = False
 
-SCANNER_VERSION = 56
+SCANNER_VERSION = 57
 AUDIT_SCORE_HIGH_RISK_MAX = 65
 AUDIT_SCORE_REVIEW_MAX = 90
 
@@ -3355,15 +3355,17 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
         names = tainted_names(argument, tainted, containers)
         if names and names.issubset(sanitized):
             return
+        metadata_only = call_name in {"os.path.isdir", "os.path.isfile", "os.path.exists", "os.path.lexists"}
         findings.append(make_flag(
             line=call.lineno,
-            flag_type="path_traversal",
+            flag_type="filesystem_path_review" if metadata_only else "path_traversal",
             pattern="untrusted_file_path",
-            message="Request-controlled data is used to choose a filesystem path",
-            severity=22,
+            message="Caller-supplied path reaches a filesystem metadata check" if metadata_only else "Potentially untrusted data is used to choose a filesystem path",
+            severity=10 if metadata_only else 22,
             explanation=(
-                "An attacker may use path segments such as ../ to access files outside the intended directory. "
-                "Resolve the candidate path, enforce that it remains under an allowed base directory, and reject traversal segments."
+                "This check inspects filesystem metadata. A function argument alone does not establish attacker control or a traversal vulnerability. Verify who supplies the path and whether disclosing path existence crosses a trust boundary."
+                if metadata_only else
+                "Potentially untrusted input selects a filesystem path. Function parameters are treated conservatively; attacker control is not established from a parameter alone. Trace the caller, resolve the candidate path and enforce the intended allowed directory."
             ),
         ))
 

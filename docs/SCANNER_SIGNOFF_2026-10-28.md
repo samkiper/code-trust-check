@@ -1,16 +1,17 @@
 # Scanner sign-off evidence, October 28, 2026
 
-Scope: supported static security signals, selected Python cross-file credential flows, and limited intent behavior review. This is not a safety certification or complete application/requirements verification. Site remains owner-private; purchases paused.
+Scope: supported static security signals, selected direct Python cross-file credential flows and limited behavior-versus-intent review. No safety certification, complete application analysis or complete requirements verification. Site owner-private; purchases paused.
 
-| Item | Status | Evidence and remaining check |
+| Gate | Status | Evidence / remaining work |
 | --- | --- | --- |
-| Shell API coverage | Partially verified | Scanner 51 local 337 tests and deployed explicit/implicit shell vs harmless pair passed; one allowance per scan. |
-| Nonboolean shell literals | Partially verified | Bounded AST review and local truthy/falsey/unknown/shadow tests; deployment pending. Unknown expressions and unsupported bindings are not resolved. |
-| Fixed echo severity | Open | User input as an echo argument still receives high severity; no broad safe-argv suppression is justified. |
-| Independent accuracy | Open | One external Bandit fixture inspected, not executed; exposed shell API gaps. Existing OWASP-derived tests and authored cases do not establish general accuracy. |
-| Customer isolation | Partially verified | Local mocked auth/ownership tests and historical database evidence; current deployed cross-account denial checks pending. |
-| Repository regression | Partially verified | Duplicate ZIP paths rejected locally with isolated-worker and mocked accounting evidence; normal deployed customer repository after change pending. |
-| Intent review | Partially verified | Deployed inaccurate process-intent wording corrected; selected local network/execution pairs. No comprehensive requirement inference. |
-| Final sign-off | Open | Resolve critical defects, record external false positives/misses, verify changed deployed paths and reconcile evidence. |
+| Shell and deserializer fixes | Completed for selected paths | Deployed scanner51/52/55 paired customer results, correct per-scan usage. SafeLoader false positive corrected and unsafe loader preserved. |
+| Fixed echo severity | Completed for selected paths | Scanner56 deployed fixed argv echo medium versus Python -c untrusted input high; both engines complete; one allowance each. |
+| Accuracy and intent evaluation | Partially verified | 28 authored product cases passed; five external Bandit fixtures inspected without execution, exposed and drove fixes. No representative accuracy percentage. Metadata path confidence correction pending deployment; heuristic intent limitations remain explicit. |
+| Repository ingestion regression | Completed for public path | Scanner56 actual customer psf/requests scan: useful partial36/51, unsupported/empty files disclosed, one total and one repository allowance. Private fixture reconnection/current-path evidence separate. |
+| Customer isolation | Partially verified | Live RLS/grants inspected; rolled-back live DB nonowner read/trash denial, recipient read and revoke passed. Two-customer browser/HTTP check pending. |
+| Unexpected behavior failures | Partially verified | Scanner55 fails closed; injected local component exceptions no clean report. Worker generic502 and settlement source/local tests; deployed unexpected-failure accounting pending. Historical deployed memory/timeout accounting retained. |
+| Final sign-off | Open | Resolve confirmed defects, verify affected deployed paths and close remaining isolation/accounting checks. |
 
-Temporary marked Serious accounts remain non-admin throughout active testing. Preserve usage. Recheck genuine Stripe subscription state before eventual guarded restoration to Free.
+Current confirmed runtime scanner56 commit69d6c75e1e362271b749fbbaaac4ac154ea6c9c0. Reported findings in third-party repositories are review signals, not confirmed vulnerabilities. Requests repository metadata-path report demonstrated why caller parameters must not be asserted to be attacker controlled without evidence.
+
+Temporary marked Serious accounts remain non-admin throughout active testing. Preserve usage and check Stripe before eventual guarded restoration to Free. No new charges or purchases authorized. Full launch readiness remains a separate checklist.
