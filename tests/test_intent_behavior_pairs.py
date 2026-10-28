@@ -4,6 +4,14 @@ from main import analyze_code_product
 
 
 class IntentBehaviorPairs(unittest.TestCase):
+    def test_named_command_does_not_claim_intent_omitted_it(self):
+        result=analyze_code_product('Run echo with a user supplied argument without invoking a shell.',
+            'import subprocess\nsubprocess.run(["echo", input()], shell=False)',language='Python')
+        notes=' '.join(result['intent_mismatches'])
+        self.assertNotIn('not clearly mentioned', notes)
+        self.assertIn('confirm that the executable and its inputs', notes)
+        self.assertTrue(any(f.get('pattern')=='subprocess' and f.get('severity',0)>=18 for f in result['flags']))
+
     def test_selected_network_and_dynamic_execution_pairs(self):
         cases = [
             ('x=1', 'Assign a value locally. Do not access the network.', False),

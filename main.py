@@ -301,7 +301,7 @@ GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 # Interactive repository audits retain the existing, separately metered limits.
 GITHUB_PR_SCANS_ENABLED = False
 
-SCANNER_VERSION = 49
+SCANNER_VERSION = 50
 AUDIT_SCORE_HIGH_RISK_MAX = 65
 AUDIT_SCORE_REVIEW_MAX = 90
 
@@ -5334,7 +5334,7 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
     if meaningful_intent and "system execution" in touches and not intent_mentions_any(
         intent_lower, ["terminal", "shell", "command", "system", "script", "execute", "cli"]
     ):
-        mismatch_flags.append("Code runs system-level commands not clearly mentioned in the intent.")
+        mismatch_flags.append("Code starts a system process; confirm that the executable and its inputs are allowed by the stated intent.")
         risk_points += 2.5
 
     if meaningful_intent and "dynamic execution" in touches and not intent_mentions_any(
