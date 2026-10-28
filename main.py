@@ -6584,16 +6584,19 @@ def download_private_repository(access: dict, repo_url: str) -> bytes:
     cached = GITHUB_USER_AUTHORIZATIONS.get(user_id)
     if not cached:
         raise HTTPException(403, "Reconnect GitHub before scanning a private repository.")
+    stage = "user_repository"
     try:
         # A user token can only access the intersection of the user's and App's
         # permissions. A JWT alone is not proof of this customer's access.
         user_repo = github_api_request("GET", f"https://api.github.com/repos/{quote(full_name, safe='/')}", cached["token"])
         if not isinstance(user_repo, dict) or str(user_repo.get("full_name") or "").lower() != full_name.lower():
             raise ValueError("Repository is not available to this GitHub user")
+        stage = "repository_installation"
         installation = github_api_request("GET", f"https://api.github.com/repos/{quote(full_name, safe='/')}/installation", github_app_jwt())
         installation_id = installation.get("id") if isinstance(installation, dict) else None
         if isinstance(installation_id, bool) or not isinstance(installation_id, int) or installation_id <= 0:
             raise ValueError("No valid installation")
+        stage = "installation_ownership"
         rows = supabase_rest_request("GET", "github_installations", query=urlencode({
             "user_id": f"eq.{user_id}", "installation_id": f"eq.{installation_id}", "status": "eq.active", "select": "installation_id", "limit": "1"}))
         if not isinstance(rows, list) or not rows or not github_installation_still_authorized(user_id, installation_id):
@@ -6601,6 +6604,7 @@ def download_private_repository(access: dict, repo_url: str) -> bytes:
         branch = user_repo.get("default_branch")
         if not isinstance(branch, str) or not branch or len(branch)>250:
             raise ValueError("Repository default branch is unavailable")
+        stage = "branch_commit"
         commit = github_api_request("GET", f"https://api.github.com/repos/{quote(full_name, safe='/')}/commits/{quote(branch, safe='')}", cached["token"])
         sha = commit.get("sha") if isinstance(commit, dict) else None
         if not isinstance(sha, str) or not GITHUB_SHA_PATTERN.fullmatch(sha):
@@ -6608,9 +6612,11 @@ def download_private_repository(access: dict, repo_url: str) -> bytes:
         current = GITHUB_USER_AUTHORIZATIONS.get(user_id)
         if not current or not hmac.compare_digest(current["token"], cached["token"]):
             raise ValueError("GitHub authorization changed")
+        stage = "installation_token"
         installation_token = github_installation_token(installation_id)
         if not installation_token:
             raise ValueError("Installation token is unavailable")
+        stage = "archive_download"
         return download_github_archive(full_name, sha, installation_token)
     except HTTPException:
         raise
@@ -6618,6 +6624,10 @@ def download_private_repository(access: dict, repo_url: str) -> bytes:
         if str(exc) == "Repository archive exceeds the 25 MB safety limit.":
             raise HTTPException(413, "The private repository archive exceeds the 25 MB download limit. No audit allowance was used.") from None
         log_server_issue("Private repository access failed", exc)
+        raise HTTPException(403, "This repository is unavailable to your current GitHub connection. Check its access and reconnect.") from None
+    except urllib.error.HTTPError as exc:
+        status = exc.code if isinstance(exc.code, int) and 100 <= exc.code <= 599 else 0
+        log_server_issue(f"Private repository HTTP failure stage={stage} status={status}")
         raise HTTPException(403, "This repository is unavailable to your current GitHub connection. Check its access and reconnect.") from None
     except Exception as exc:
         log_server_issue("Private repository access failed", exc)

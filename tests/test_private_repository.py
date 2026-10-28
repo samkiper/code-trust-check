@@ -2,6 +2,7 @@ import base64
 import io
 import json
 import unittest
+import urllib.error
 import zipfile
 from unittest.mock import patch
 from fastapi import HTTPException
@@ -27,6 +28,16 @@ class PrivateRepositoryTests(unittest.TestCase):
         self.assertEqual(github.call_args_list[0].args[2],'github-user-token')
         self.assertEqual(github.call_args_list[1].args[2],'app-jwt')
         archive.assert_called_once_with('owner/private','a'*40,'installation-token')
+
+    def test_http_diagnostic_reports_only_stage_and_status(self):
+        error=urllib.error.HTTPError('https://private.invalid/secret',404,'sensitive-token',{},None)
+        with patch.object(main.GITHUB_USER_AUTHORIZATIONS,'get',return_value=self.entry), \
+                patch.object(main,'github_api_request',side_effect=error), \
+                patch.object(main,'log_server_issue') as log:
+            with self.assertRaises(HTTPException) as caught:
+                main.download_private_repository(self.access,'https://github.com/owner/private')
+        self.assertEqual(caught.exception.status_code,403)
+        self.assertEqual(log.call_args.args,('Private repository HTTP failure stage=user_repository status=404',))
 
     def test_cross_account_removed_permission_and_free_plan_fail_before_download(self):
         with patch.object(main.GITHUB_USER_AUTHORIZATIONS,'get',return_value=None), patch.object(main,'download_github_archive') as archive:
