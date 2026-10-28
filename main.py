@@ -301,7 +301,7 @@ GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 # Interactive repository audits retain the existing, separately metered limits.
 GITHUB_PR_SCANS_ENABLED = False
 
-SCANNER_VERSION = 51
+SCANNER_VERSION = 52
 AUDIT_SCORE_HIGH_RISK_MAX = 65
 AUDIT_SCORE_REVIEW_MAX = 90
 
@@ -2991,7 +2991,13 @@ def analyze_python_ast(code: str, intent: str = "") -> list[dict]:
             self.generic_visit(node)
 
     SecurityVisitor().visit(tree)
+    from shell_literal_review import literal_shell_calls
+    for line in literal_shell_calls(tree):
+        ast_flags.append(make_flag(line=line, flag_type="shell_invocation", pattern="truthy_shell_literal",
+            message="A truthy shell option enables shell parsing", severity=10,
+            explanation="Nonempty strings and collections or nonzero numbers enable shell parsing, even a string spelled False. Review command inputs; shell invocation alone does not prove exploitability."))
     ast_flags.extend(analyze_python_web_dataflow(tree, intent_lower))
+    return ast_flags
     return ast_flags
 
 
