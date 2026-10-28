@@ -74,6 +74,7 @@ rules:
       - pattern-either:
           - pattern: pickle.load(...)
           - pattern: pickle.loads(...)
+          - pattern: pickle.Unpickler(...).load(...)
           - pattern: marshal.load(...)
           - pattern: marshal.loads(...)
           - pattern: dill.load(...)
@@ -86,8 +87,12 @@ rules:
     metadata:
       confidence: high
       explanation: Prefer yaml.safe_load for data that is not completely trusted.
-    patterns:
+    pattern-either:
       - pattern: yaml.load($DATA)
+      - pattern: yaml.load($DATA, Loader=yaml.Loader)
+      - pattern: yaml.load($DATA, yaml.Loader)
+      - pattern: yaml.load($DATA, Loader=yaml.UnsafeLoader)
+      - pattern: yaml.load($DATA, yaml.UnsafeLoader)
 
   - id: javascript.dynamic-eval
     languages: [javascript, typescript]
