@@ -301,7 +301,7 @@ GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 # Interactive repository audits retain the existing, separately metered limits.
 GITHUB_PR_SCANS_ENABLED = False
 
-SCANNER_VERSION = 47
+SCANNER_VERSION = 48
 AUDIT_SCORE_HIGH_RISK_MAX = 65
 AUDIT_SCORE_REVIEW_MAX = 90
 
@@ -8054,6 +8054,9 @@ def scan_repo_work(req,access,request,private_archive=None):
     cross_file_omissions = 0
 
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        archive_files = [item.filename for item in zf.infolist() if not item.is_dir()]
+        if len(archive_files) != len(set(archive_files)):
+            return private_json({"error": "The repository archive contains duplicate file paths and cannot be analyzed reliably. No scan allowance was used."}, status_code=422)
         dependency_scan = analyze_dependency_manifests(zf)
         dependency_findings = dependency_scan["dependency_findings"]
         dependency_risk_points = float(dependency_scan["dependency_risk_points"])

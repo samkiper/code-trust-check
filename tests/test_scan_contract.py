@@ -72,6 +72,22 @@ class ScanContractTests(unittest.TestCase):
         self.assertNotIn('private code',str(output.call_args))
 
 class RepositoryCoverageTests(unittest.TestCase):
+    def test_duplicate_archive_paths_are_rejected_without_a_result(self):
+        import io, zipfile, warnings
+        from starlette.requests import Request
+        archive=io.BytesIO()
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', UserWarning)
+            with zipfile.ZipFile(archive,'w') as z:
+                z.writestr('repo-main/app.py','value=input()\neval(value)')
+                z.writestr('repo-main/app.py','value=1')
+        access={'plan':'free','limits':main.get_plan_limits('free')}
+        request=Request({'type':'http','method':'POST','path':'/scan-repo','headers':[],'scheme':'https','server':('test',443)})
+        with patch.object(main,'download_repo_zip',return_value=archive.getvalue()):
+            response=main.scan_repo_work(main.RepoScanRequest(intent='Review code',repo_url='https://github.com/example/repo'),access,request)
+        self.assertEqual(response.status_code,422)
+        self.assertIn('No scan allowance was used',json.loads(response.body)['error'])
+
     def test_repository_empty_malformed_and_mixed_coverage(self):
         import io, zipfile
         from starlette.requests import Request

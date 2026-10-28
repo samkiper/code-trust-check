@@ -3,6 +3,7 @@ import io
 import json
 import unittest
 import urllib.error
+import warnings
 import zipfile
 from unittest.mock import patch
 from fastapi import HTTPException
@@ -127,6 +128,24 @@ class PrivateRepositoryTests(unittest.TestCase):
         self.assertEqual(usage.call_args_list[1].args[1],'settle')
         self.assertTrue(usage.call_args_list[1].args[4])
         self.assertNotIn('github-user-token',response.body.decode())
+
+    def test_duplicate_private_archive_returns_allowance(self):
+        archive=io.BytesIO()
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore',UserWarning)
+            with zipfile.ZipFile(archive,'w') as z:
+                z.writestr('owner-repo/app.py','eval(input())')
+                z.writestr('owner-repo/app.py','x=1')
+        request=Request({'type':'http','method':'POST','path':'/scan-repo','headers':[],'client':('127.0.0.1',1),'scheme':'https','server':('localhost',443)})
+        req=main.RepoScanRequest(intent='Review',repo_url='https://github.com/owner/private',private_repo=True)
+        with patch.object(main,'get_request_access_context',return_value=self.access), \
+                patch.object(main,'enrich_access_with_admin_metadata',side_effect=lambda value:value), \
+                patch.object(main,'enforce_rate_limit'), \
+                patch.object(main,'monthly_usage',return_value={'allowed':True}) as usage, \
+                patch.object(main,'download_private_repository',return_value=archive.getvalue()):
+            response=main.scan_repo(req,request)
+        self.assertEqual(response.status_code,422)
+        self.assertFalse(usage.call_args_list[-1].args[4])
 
     def test_api_token_cannot_be_sent_to_an_untrusted_origin(self):
         for url in ['http://api.github.com/user','https://api.github.com.attacker.example/user','https://user@api.github.com/user','https://api.github.com:444/user']:
