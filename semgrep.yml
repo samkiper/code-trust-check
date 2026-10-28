@@ -10,13 +10,19 @@ rules:
     pattern-sources:
       - pattern: new URLSearchParams(location.search).get(...)
       - pattern: new URLSearchParams(window.location.search).get(...)
+      - pattern: new URLSearchParams(document.location.search).get(...)
     pattern-sinks:
       - patterns:
           - pattern-either:
               - pattern: location.href = $VALUE
               - pattern: window.location.href = $VALUE
+              - pattern: document.location.href = $VALUE
               - pattern: location.assign($VALUE)
               - pattern: window.location.assign($VALUE)
+              - pattern: document.location.assign($VALUE)
+              - pattern: location.replace($VALUE)
+              - pattern: window.location.replace($VALUE)
+              - pattern: document.location.replace($VALUE)
           - focus-metavariable: $VALUE
 
   - id: python.dynamic-eval
