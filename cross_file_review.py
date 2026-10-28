@@ -108,11 +108,12 @@ def analyze(files: dict[str,str]) -> dict:
         raise ValueError('Supply at most 500 selected source files.')
     if sum(len(v.encode('utf-8')) for v in files.values())>25_000_000:
         raise ValueError('Selected source exceeds 25 MB.')
-    modules={};ambiguous=set();failed=[]
+    modules={};ambiguous=set();failed=[];seen=set()
     for path,code in files.items():
         name=module_name(path)
         if not name:continue
-        if name in modules:ambiguous.add(name);continue
+        if name in seen:ambiguous.add(name);continue
+        seen.add(name)
         try:tree=ast.parse(code)
         except (SyntaxError,ValueError,RecursionError):failed.append(path);continue
         modules[name]=(path,tree,getter_exports(tree))

