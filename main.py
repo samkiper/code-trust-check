@@ -301,7 +301,7 @@ GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 # Interactive repository audits retain the existing, separately metered limits.
 GITHUB_PR_SCANS_ENABLED = False
 
-SCANNER_VERSION = 48
+SCANNER_VERSION = 49
 AUDIT_SCORE_HIGH_RISK_MAX = 65
 AUDIT_SCORE_REVIEW_MAX = 90
 
@@ -3424,6 +3424,13 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
             and (call_name == "os.system" or call_name.startswith("subprocess."))
             and unsafe_argument
         ):
+            shell_keyword = next((kw.value for kw in call.keywords if kw.arg == "shell"), None)
+            argv_without_shell = (
+                call_name.startswith("subprocess.") and call.args
+                and isinstance(call.args[0], (ast.List, ast.Tuple))
+                and not any(kw.arg is None for kw in call.keywords)
+                and (shell_keyword is None or isinstance(shell_keyword, ast.Constant) and shell_keyword.value is False)
+            )
             findings.append(make_flag(
                 line=call.lineno,
                 flag_type="command_injection",
@@ -3431,8 +3438,12 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
                 message="Request-controlled data reaches a system command",
                 severity=38,
                 explanation=(
-                    "Shell metacharacters in external input can change the command. Use a fixed executable and a list of "
-                    "validated arguments, and avoid shell=True."
+                    "External input reaches process arguments. An argument list without a shell does not interpret shell "
+                    "metacharacters, but the invoked program may interpret untrusted values as options or other instructions. "
+                    "Review the executable and validate its arguments."
+                    if argv_without_shell else
+                    "Shell metacharacters in external input can change the command when passed through a shell. "
+                    "Use a fixed executable and a list of validated arguments, and avoid shell=True."
                 ),
             ))
         deserialization_sinks = {

