@@ -20,6 +20,7 @@ AUDIT_TIMEOUT_SECONDS = 120
 # RSS sums shared pages more than once: conservative by design.
 AUDIT_MEMORY_LIMIT_KIB = 1_450_000
 AUDIT_MEMORY_MESSAGE = 'The audit exceeded its safe memory limit and was stopped. No scan allowance was used. Try a smaller or less complex input.'
+AUDIT_MONITOR_MESSAGE = 'The scanner could not verify its safe memory limit and stopped. No scan allowance was used. Please retry later.'
 TIMEOUT_MESSAGE = 'The audit exceeded its maximum runtime and was stopped. No scan allowance was used. Try a smaller snippet or repository.'
 
 
@@ -65,7 +66,7 @@ def _process_tree_rss_kib(child_pid):
             continue  # Processes may exit while /proc is being read.
     roots = {pid for pid, (parent, _, local) in entries.items() if parent == parent_pid and local == child_pid}
     if not roots:
-        return 0
+        return None
     family = roots.copy()
     while True:
         extra = {pid for pid, (parent, _, _) in entries.items() if parent in family} - family
@@ -81,18 +82,31 @@ def run_process(command, payload, timeout):
                              env=scanner_environment())
     stop = threading.Event()
     memory_exceeded = threading.Event()
+    monitor_unavailable = threading.Event()
     def watch_memory():
+        missing = 0
         while not stop.wait(.1):
             if process.poll() is not None:
                 return
             try:
-                if _process_tree_rss_kib(process.pid) <= AUDIT_MEMORY_LIMIT_KIB:
-                    continue
+                rss = _process_tree_rss_kib(process.pid)
             except (OSError, ValueError):
-                # On a Linux service an unreadable process tree cannot be
-                # safely treated as evidence of spare memory.
-                pass
-            memory_exceeded.set()
+                rss = None
+            if rss is None:
+                # A /proc entry can vanish as the worker exits. If it is
+                # still running across several samples, fail closed instead
+                # of treating an unobservable worker as zero memory.
+                if process.poll() is not None:
+                    return
+                missing += 1
+                if missing < 3:
+                    continue
+                monitor_unavailable.set()
+            elif rss <= AUDIT_MEMORY_LIMIT_KIB:
+                missing = 0
+                continue
+            else:
+                memory_exceeded.set()
             try: os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError: pass
             return
@@ -100,6 +114,8 @@ def run_process(command, payload, timeout):
     watcher.start()
     try:
         output,_=process.communicate(json.dumps(payload).encode(),timeout=timeout)
+        if monitor_unavailable.is_set():
+            raise HTTPException(503, AUDIT_MONITOR_MESSAGE)
         if memory_exceeded.is_set():
             raise HTTPException(503, AUDIT_MEMORY_MESSAGE)
         if process.returncode:

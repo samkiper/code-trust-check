@@ -48,6 +48,14 @@ class AuditRuntimeTests(unittest.TestCase):
             self.assertEqual(run_process([sys.executable,'-c',script],{},2).strip(),b'42')
             time.sleep(.8);self.assertFalse(marker.exists())
 
+    def test_unobservable_worker_fails_closed_without_usage(self):
+        with patch('audit_runtime._process_tree_rss_kib', return_value=None):
+            with self.assertRaises(HTTPException) as cm:
+                run_process([sys.executable, '-c', 'import time;time.sleep(5)'], {}, 3)
+        self.assertEqual(cm.exception.status_code, 503)
+        self.assertIn('could not verify', cm.exception.detail)
+        self.assertIn('No scan allowance was used', cm.exception.detail)
+
     @unittest.skipUnless(Path('/proc/self/status').exists(), 'Linux process monitoring required')
     def test_memory_guard_stops_worker_and_descendant_without_charging(self):
         child = "import time; x=bytearray(40_000_000); time.sleep(5)"
@@ -112,6 +120,29 @@ class AuditRuntimeTests(unittest.TestCase):
             first=q.submit('one',lambda:heavy(req,request)); second=q.submit('two',normal)
             limit=time.monotonic()+4
             while q.get('two',second['id'])['status']!='completed' and time.monotonic()<limit:time.sleep(.01)
+            self.assertEqual(q.get('one',first['id'])['http_status'],503)
+            self.assertEqual(q.get('two',second['id'])['result'],{'recovered':True})
+        self.assertEqual(settlements,[False])
+
+    def test_monitor_failure_refunds_receipt_and_releases_next_job(self):
+        access={'authenticated':True,'user_id':'test','plan':'free','limits':main.get_plan_limits('free')}
+        req=main.ScanRequest(intent='Review',code='print(123)',language='Python')
+        request=Request({'type':'http','method':'POST','path':'/scan','headers':[]})
+        settlements=[]
+        def usage(a,action='status',receipt=None,kind='code',charge=False):
+            if action=='settle': settlements.append(charge)
+            return {'allowed':True}
+        @limit_scan_capacity
+        @main.metered_scan('code')
+        def unobserved(req,request):
+            run_process([sys.executable,'-c','import time;time.sleep(5)'],{},4)
+        @limit_scan_capacity
+        def normal(): return {'recovered':True}
+        q=ScanJobs()
+        with patch('audit_runtime._process_tree_rss_kib',return_value=None), patch.object(main,'get_request_access_context',return_value=access), patch.object(main,'monthly_usage',side_effect=usage):
+            first=q.submit('one',lambda:unobserved(req,request));second=q.submit('two',normal)
+            deadline=time.monotonic()+4
+            while q.get('two',second['id'])['status']!='completed' and time.monotonic()<deadline: time.sleep(.01)
             self.assertEqual(q.get('one',first['id'])['http_status'],503)
             self.assertEqual(q.get('two',second['id'])['result'],{'recovered':True})
         self.assertEqual(settlements,[False])
