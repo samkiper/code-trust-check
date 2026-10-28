@@ -5,7 +5,7 @@ class LaunchRegressions(unittest.TestCase):
     def test_argument_vector_does_not_claim_shell_metacharacters_are_interpreted(self):
         for shell in ['', ', shell=False']:
             result=self.scan('import subprocess\nsubprocess.run(["echo", input()]'+shell+')')
-            finding=next(f for f in result['flags'] if f.get('pattern')=='subprocess' and f.get('severity')==38)
+            finding=next(f for f in result['flags'] if f.get('pattern')=='subprocess' and f.get('severity')==10)
             self.assertIn('does not interpret shell metacharacters', finding['explanation'])
             self.assertIn('program may interpret', finding['explanation'])
         result=self.scan('import subprocess\nsubprocess.run(input(), shell=True)')

@@ -10,7 +10,7 @@ class IntentBehaviorPairs(unittest.TestCase):
         notes=' '.join(result['intent_mismatches'])
         self.assertNotIn('not clearly mentioned', notes)
         self.assertIn('confirm that the executable and its inputs', notes)
-        self.assertTrue(any(f.get('pattern')=='subprocess' and f.get('severity',0)>=18 for f in result['flags']))
+        self.assertTrue(any(f.get('pattern')=='subprocess' and f.get('severity',0)==10 for f in result['flags']))
 
     def test_selected_network_and_dynamic_execution_pairs(self):
         cases = [

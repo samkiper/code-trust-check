@@ -301,7 +301,7 @@ GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 # Interactive repository audits retain the existing, separately metered limits.
 GITHUB_PR_SCANS_ENABLED = False
 
-SCANNER_VERSION = 55
+SCANNER_VERSION = 56
 AUDIT_SCORE_HIGH_RISK_MAX = 65
 AUDIT_SCORE_REVIEW_MAX = 90
 
@@ -3439,12 +3439,18 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
                 and not any(kw.arg is None for kw in call.keywords)
                 and (shell_keyword is None or isinstance(shell_keyword, ast.Constant) and shell_keyword.value is False)
             )
+            fixed_echo_argument = bool(
+                argv_without_shell and len(call.args[0].elts) == 2
+                and isinstance(call.args[0].elts[0], ast.Constant)
+                and call.args[0].elts[0].value in {"echo", "/bin/echo", "/usr/bin/echo"}
+                and not any(kw.arg == "executable" for kw in call.keywords)
+            )
             findings.append(make_flag(
                 line=call.lineno,
                 flag_type="command_injection",
                 pattern="subprocess" if call_name.startswith("subprocess.") else "os.system",
-                message="Request-controlled data reaches a system command",
-                severity=38,
+                message="Untrusted argument passed to a fixed echo command" if fixed_echo_argument else "Request-controlled data reaches a system command",
+                severity=10 if fixed_echo_argument else 38,
                 explanation=(
                     "External input reaches process arguments. An argument list without a shell does not interpret shell "
                     "metacharacters, but the invoked program may interpret untrusted values as options or other instructions. "
