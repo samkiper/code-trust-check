@@ -8052,11 +8052,13 @@ def scan_repo_work(req,access,request,private_archive=None):
             if file_name.lower().endswith('.py'):
                 relative_path = file_name.split('/', 1)[-1]
                 source_bytes = len(code_text.encode('utf-8'))
-                if (source_coverage.get('meaningful_coverage') and len(cross_file_sources) < 500
-                        and cross_file_bytes + source_bytes <= 25_000_000 and relative_path not in cross_file_sources):
+                if (len(cross_file_sources) < 500 and cross_file_bytes + source_bytes <= 25_000_000
+                        and relative_path not in cross_file_sources):
                     cross_file_sources[relative_path] = code_text
                     cross_file_paths[relative_path] = file_name
                     cross_file_bytes += source_bytes
+                    if not source_coverage.get('meaningful_coverage'):
+                        cross_file_omissions += 1
                 else:
                     cross_file_omissions += 1
             weight = file_weight_for_repo(file_name)

