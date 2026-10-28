@@ -301,7 +301,7 @@ GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 # Interactive repository audits retain the existing, separately metered limits.
 GITHUB_PR_SCANS_ENABLED = False
 
-SCANNER_VERSION = 53
+SCANNER_VERSION = 54
 AUDIT_SCORE_HIGH_RISK_MAX = 65
 AUDIT_SCORE_REVIEW_MAX = 90
 
@@ -3016,6 +3016,8 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
     cmd_context = True
     code_context = True
     deserialization_context = True
+    from yaml_loader_review import safe_yaml_calls
+    safe_yaml_locations = safe_yaml_calls(tree)
     web_sanitizer_names = {
         "escape",
         "escape_for_html",
@@ -3455,7 +3457,7 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
         deserialization_sinks = {
             "pickle.loads", "pickle.load", "marshal.loads", "marshal.load", "dill.loads", "yaml.load"
         }
-        if deserialization_context and call_name in deserialization_sinks and unsafe_argument:
+        if deserialization_context and call_name in deserialization_sinks and unsafe_argument and not (call_name == "yaml.load" and (call.lineno, call.col_offset) in safe_yaml_locations):
             findings.append(make_flag(
                 line=call.lineno,
                 flag_type="unsafe_deserialization",
@@ -5358,7 +5360,7 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
     if meaningful_intent and "deserialization" in touches and not intent_mentions_any(
         intent_lower, ["pickle", "yaml", "deserialize", "serialization", "load saved model", "cache"]
     ):
-        mismatch_flags.append("Code deserializes data in a way that is not clearly mentioned in the intent.")
+        mismatch_flags.append("Code deserializes data; confirm that the format, loader and input trust match the stated intent.")
         risk_points += 2.0
 
     if meaningful_intent and "telemetry" in touches and not intent_mentions_any(
