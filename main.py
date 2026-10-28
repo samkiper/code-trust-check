@@ -8209,9 +8209,10 @@ def scan_repo_work(req,access,request,private_archive=None):
         repo_intent_mismatches,
     )
     score_explanation_lines = build_score_explanation_lines(score_explanation, "repo")
+    meaningful_files = sum(bool(f["coverage"]["meaningful_coverage"]) for f in files_scanned)
     scan_confidence = build_scan_confidence(
         "repo",
-        files_scanned_count=len(files_scanned),
+        files_scanned_count=meaningful_files,
         files_total=files_available_count,
         dependency_summary={
             "dependencies_queried": dependency_scan["dependencies_queried"],
@@ -8229,7 +8230,6 @@ def scan_repo_work(req,access,request,private_archive=None):
         dependency_summary=dependency_scan,
     )
 
-    meaningful_files = sum(bool(f["coverage"]["meaningful_coverage"]) for f in files_scanned)
     incomplete = coverage_partial or cross_status != 'complete' or bool(dependency_scan.get("dependency_scan_error")) or bool(dependency_scan.get("dependencies_skipped"))
     repo_status = "not-rated" if not meaningful_files else "partial" if incomplete else "complete"
     repo_verdict = build_action_verdict(overall_risk, trust_score, insufficient=repo_status=="not-rated")

