@@ -301,7 +301,7 @@ GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 # Interactive repository audits retain the existing, separately metered limits.
 GITHUB_PR_SCANS_ENABLED = False
 
-SCANNER_VERSION = 54
+SCANNER_VERSION = 55
 AUDIT_SCORE_HIGH_RISK_MAX = 65
 AUDIT_SCORE_REVIEW_MAX = 90
 
@@ -5222,13 +5222,15 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
 
     try:
         ast_flags = analyze_python_ast(analysis_code, intent)
-    except Exception:
-        ast_flags = []
+    except Exception as exc:
+        log_server_issue("Behavior syntax analysis failed", exc)
+        raise RuntimeError("Behavior analysis could not complete.") from None
 
     try:
         heuristic_flags = add_multi_signal_heuristics(scannable_lines, python_tree)
-    except Exception:
-        heuristic_flags = []
+    except Exception as exc:
+        log_server_issue("Behavior heuristic analysis failed", exc)
+        raise RuntimeError("Behavior analysis could not complete.") from None
 
     try:
         secret_flow_flags = add_secret_flow_heuristics(
@@ -5236,8 +5238,9 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
             secret_variables,
             authentication_expected=secret_access_expected,
         )
-    except Exception:
-        secret_flow_flags = []
+    except Exception as exc:
+        log_server_issue("Behavior credential analysis failed", exc)
+        raise RuntimeError("Behavior analysis could not complete.") from None
 
     if python_source_parses:
         from credential_flow import credential_flows
