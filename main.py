@@ -301,7 +301,7 @@ GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 # Interactive repository audits retain the existing, separately metered limits.
 GITHUB_PR_SCANS_ENABLED = False
 
-SCANNER_VERSION = 46
+SCANNER_VERSION = 47
 AUDIT_SCORE_HIGH_RISK_MAX = 65
 AUDIT_SCORE_REVIEW_MAX = 90
 
@@ -4777,6 +4777,51 @@ def validation_timeout_enabled(code: str) -> bool:
             and hmac.compare_digest(digest, hashlib.sha256(code.encode()).hexdigest()))
 
 
+def guarded_fixed_redirect_locations(code: str) -> set[tuple[int, int]]:
+    """Recognize only a complete, two-statement JS strict fixed-path guard.
+
+    On ambiguity, retain the finding. This is not general path analysis.
+    """
+    if len(code.encode('utf-8')) > 50_000:
+        return set()
+    try:
+        from tree_sitter import Language, Parser
+        import tree_sitter_javascript
+        source = code.encode('utf-8')
+        root = Parser(Language(tree_sitter_javascript.language())).parse(source).root_node
+        nodes = [n for n in root.named_children if n.type != 'comment']
+        if root.has_error or len(nodes) != 2:
+            return set()
+        decl, guard = nodes
+        if decl.type != 'lexical_declaration' or not decl.child_by_field_name('kind') or source[decl.child_by_field_name('kind').start_byte:decl.child_by_field_name('kind').end_byte] != b'const':
+            return set()
+        declarations = [n for n in decl.named_children if n.type == 'variable_declarator']
+        if len(declarations) != 1 or guard.type != 'if_statement' or guard.child_by_field_name('alternative'):
+            return set()
+        name = declarations[0].child_by_field_name('name')
+        condition = guard.child_by_field_name('condition')
+        body = guard.child_by_field_name('consequence')
+        if not name or name.type != 'identifier' or not condition or len(condition.named_children) != 1 or not body or body.type != 'statement_block':
+            return set()
+        expr = condition.named_children[0]
+        if expr.type != 'binary_expression': return set()
+        left, right, op = (expr.child_by_field_name(k) for k in ('left','right','operator'))
+        if not left or not right or not op or left.type != 'identifier' or right.type != 'string': return set()
+        if source[op.start_byte:op.end_byte] != b'===' or source[left.start_byte:left.end_byte] != source[name.start_byte:name.end_byte]: return set()
+        literal = source[right.start_byte:right.end_byte]
+        if not re.fullmatch(rb'''["']/[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*["']''', literal) or literal[:1] != literal[-1:]: return set()
+        statements = [n for n in body.named_children if n.type != 'comment']
+        if len(statements) != 1 or statements[0].type != 'expression_statement' or len(statements[0].named_children) != 1: return set()
+        assignment = statements[0].named_children[0]
+        if assignment.type != 'assignment_expression': return set()
+        target, value = assignment.child_by_field_name('left'), assignment.child_by_field_name('right')
+        if not target or not value or value.type != 'identifier': return set()
+        if source[target.start_byte:target.end_byte] != b'location.href' or source[value.start_byte:value.end_byte] != source[name.start_byte:name.end_byte]: return set()
+        return {(value.start_point.row + 1, value.start_point.column + 1)}
+    except Exception:
+        return set()
+
+
 def run_semgrep_scan(code: str, filename: str | None = None) -> dict:
     """Run the local, pinned Semgrep rules without sending code over the network."""
     started = time.monotonic()
@@ -4848,7 +4893,10 @@ def run_semgrep_scan(code: str, filename: str | None = None) -> dict:
         payload = json.loads(completed.stdout or "{}")
         findings = []
         inert_locations = literal_eval_locations(code) if safe_name.endswith(".py") else set()
+        guarded_redirects = guarded_fixed_redirect_locations(code) if safe_name.endswith(".js") else set()
         for item in payload.get("results") or []:
+            if item.get('check_id') == 'javascript.query-redirect' and ((item.get('start') or {}).get('line'), (item.get('start') or {}).get('col')) in guarded_redirects:
+                continue
             extra = item.get("extra") or {}
             metadata = extra.get("metadata") or {}
             raw_severity = str(extra.get("severity") or "WARNING").upper()

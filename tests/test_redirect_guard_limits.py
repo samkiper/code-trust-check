@@ -5,6 +5,34 @@ from main import analyze_code_product
 
 
 class RedirectGuardLimits(unittest.TestCase):
+    def test_narrow_strict_guard_and_adversarial_controls(self):
+        source='new URLSearchParams(location.search).get("next")'
+        cases=[
+            (f'const next = {source};\nif (next === "/dashboard") {{ location.href = next; }}',False),
+            (f'const next = {source};\nif (next === "//evil.example") {{ location.href = next; }}',True),
+            (f'const next = {source};\nif (next === "https://evil.example") {{ location.href = next; }}',True),
+            (f'const next = {source};\nif (next.startsWith("/")) {{ location.href = next; }}',True),
+            (f'let next = {source};\nif (next === "/dashboard") {{ next = {source}; location.href = next; }}',True),
+            (f'const next = {source};\nif (next === "/dashboard") {{ location.href = next; }}\nlocation.href = next;',True),
+            (f'const next = {source};\nif (next === "/dashboard") {{ location.href = next; }} else {{ location.href = next; }}',True),
+        ]
+        for code,expected in cases:
+            with self.subTest(code=code):
+                result=analyze_code_product('Navigate only to /dashboard.',code,language='JavaScript')
+                self.assertTrue(all(e['status']=='complete' for e in result['analysis_engines']))
+                self.assertEqual(any(f.get('rule_id')=='javascript.query-redirect' for f in result['engine_findings']),expected)
+
+    def test_typescript_query_redirect_and_fixed_control(self):
+        cases = [
+            ('const dest = new URLSearchParams(location.search).get("next");\nwindow.location.assign(dest);', True),
+            ('const dest: string = "/home";\nwindow.location.assign(dest);', False),
+        ]
+        for code, expected in cases:
+            with self.subTest(expected=expected):
+                result = analyze_code_product('Review source behavior.', code, language='TypeScript')
+                self.assertTrue(all(e['status'] == 'complete' for e in result['analysis_engines']))
+                self.assertEqual(any(f.get('rule_id') == 'javascript.query-redirect' for f in result['engine_findings']), expected)
+
     def test_replace_and_document_location_safe_and_dangerous_pairs(self):
         sinks = ['location.replace', 'window.location.replace', 'document.location.replace', 'document.location.assign']
         for sink in sinks + ['document.location.href']:
