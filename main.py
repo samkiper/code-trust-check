@@ -2351,9 +2351,6 @@ def add_multi_signal_heuristics(
 
 
 def analyze_python_ast(code: str, intent: str = "") -> list[dict]:
-    from audit_runtime import validation_behavior_error_enabled
-    if validation_behavior_error_enabled(code):
-        raise RuntimeError("Scoped behavior validation fault")
     ast_flags: list[dict] = []
     intent_lower = str(intent or "").lower()
     # These sinks are explicit enough to analyze without relying on the user

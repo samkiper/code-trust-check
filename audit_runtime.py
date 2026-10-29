@@ -35,16 +35,6 @@ def validation_stall_enabled(payload):
             and hmac.compare_digest(digest,hashlib.sha256(code.encode()).hexdigest()))
 
 
-def validation_behavior_error_enabled(code):
-    digest = os.getenv('AUDIT_BEHAVIOR_VALIDATION_SHA256', '')
-    try:
-        remaining = float(os.getenv('AUDIT_BEHAVIOR_VALIDATION_EXPIRES', '0')) - time.time()
-    except ValueError:
-        return False
-    return (isinstance(code, str) and 0 < remaining <= 900 and len(digest) == 64
-            and hmac.compare_digest(digest, hashlib.sha256(code.encode()).hexdigest()))
-
-
 def scanner_environment():
     # Only runtime and scanner configuration belong in parsing workers. Payment,
     # Auth, GitHub and AI secrets remain in the web process.
@@ -56,7 +46,6 @@ def scanner_environment():
         'SEMGREP_FIRST_ATTEMPT_SECONDS', 'SEMGREP_NATIVE_CLI',
         'SCAN_TIMEOUT_VALIDATION_SHA256', 'SCAN_TIMEOUT_VALIDATION_EXPIRES',
         'AUDIT_DEADLINE_VALIDATION_SHA256', 'AUDIT_DEADLINE_VALIDATION_EXPIRES',
-        'AUDIT_BEHAVIOR_VALIDATION_SHA256', 'AUDIT_BEHAVIOR_VALIDATION_EXPIRES',
     }
     return {**{key: value for key, value in os.environ.items() if key in allowed},
             'AUDIT_ISOLATED_WORKER': '1', 'SEMGREP_SEND_METRICS': 'off'}
