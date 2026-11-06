@@ -6191,7 +6191,7 @@ async def reconcile_stripe_subscription(request: Request):
     return JSONResponse(
         {
             "restored": True,
-            "plan": "pro",
+            "plan": restored_plan,
             "subscription_status": status,
             "access": refreshed_access,
         },
