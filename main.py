@@ -5923,6 +5923,7 @@ async def create_stripe_checkout_session(request: Request):
 
     checkout_kwargs = {
         "mode": "subscription",
+        "automatic_tax": {"enabled": True},
         "line_items": [{"price": selected_price, "quantity": 1}],
         "success_url": f"{get_billing_return_url(request)}/account/billing?checkout=success&session_id={{CHECKOUT_SESSION_ID}}",
         "cancel_url": f"{get_billing_return_url(request)}/account/billing?checkout=cancel",
@@ -5942,6 +5943,8 @@ async def create_stripe_checkout_session(request: Request):
 
     if existing_customer_id:
         checkout_kwargs["customer"] = existing_customer_id
+        checkout_kwargs["billing_address_collection"] = "required"
+        checkout_kwargs["customer_update"] = {"address": "auto"}
     else:
         checkout_kwargs["customer_email"] = str(access["email"])
 
