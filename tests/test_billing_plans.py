@@ -42,8 +42,8 @@ class PriceEntitlementTests(unittest.TestCase):
             self.assertEqual(subscription_update(event,{'app_metadata':{}},'cus_test','price_serious',main.plan_from_subscription_status,paid_plan='serious')['plan'],'serious')
     def test_signed_subscription_webhook_uses_price_not_claimed_plan(self):
         for price,expected in [('price_serious','serious'),('price_pro','pro'),('unknown','free')]:
-            event={'type':'customer.subscription.updated','data':{'object':{**self.sub(price),'id':'sub_test','customer':'cus_test','metadata':{'user_id':'test','plan':'serious'}}}}
-            with patch.dict(os.environ,{'STRIPE_SERIOUS_PRICE_ID':'price_serious'}),patch.object(main,'STRIPE_PRICE_ID','price_pro'),patch.object(main,'STRIPE_SECRET_KEY','test'),patch.object(main,'STRIPE_WEBHOOK_SECRET','test'),patch.object(main.stripe.Webhook,'construct_event',return_value=event),patch.object(main,'sync_user_plan_from_subscription',return_value=True) as save:
+            event={'type':'customer.subscription.updated','data':{'object':{**self.sub('stale_price'),'id':'sub_test','customer':'cus_test','metadata':{'user_id':'test','plan':'serious'}}}}
+            with patch.dict(os.environ,{'STRIPE_SERIOUS_PRICE_ID':'price_serious'}),patch.object(main,'STRIPE_PRICE_ID','price_pro'),patch.object(main,'STRIPE_SECRET_KEY','test'),patch.object(main,'STRIPE_WEBHOOK_SECRET','test'),patch.object(main.stripe.Webhook,'construct_event',return_value=event),patch.object(main,'get_supabase_admin_user',return_value={'id':'test'}),patch.object(main.stripe.Subscription,'retrieve',return_value=self.sub(price)),patch.object(main,'sync_user_plan_from_subscription',return_value=True) as save:
                 self.assertEqual(TestClient(main.app).post('/stripe/webhook',content=b'{}').status_code,200)
                 self.assertEqual(save.call_args.kwargs['plan'],expected)
     def test_serious_checkout_selects_only_server_price(self):

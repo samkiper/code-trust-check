@@ -27,7 +27,7 @@ class BillingMigrationTests(unittest.TestCase):
     self.assertEqual(main.get_billing_return_url(req(origin)),'https://code-trust-check.onrender.com')
  def webhook(self,payment='paid',failure=False):
   event={'type':'checkout.session.completed','data':{'object':{'payment_status':payment,'subscription':'sub_existing','customer':'cus_existing','metadata':{'user_id':'user'}}}}
-  with patch.object(main,'STRIPE_SECRET_KEY','test'),patch.object(main,'STRIPE_WEBHOOK_SECRET','test'),patch.object(main.stripe.Webhook,'construct_event',return_value=event),patch.object(main,'resolve_supabase_user_id_for_stripe_event',return_value='user'),patch.object(main.stripe.Subscription,'retrieve',side_effect=RuntimeError('offline') if failure else None,return_value={'status':'active'}),patch.object(main,'sync_user_plan_from_subscription',return_value=True) as sync:
+  with patch.object(main,'STRIPE_SECRET_KEY','test'),patch.object(main,'STRIPE_WEBHOOK_SECRET','test'),patch.object(main.stripe.Webhook,'construct_event',return_value=event),patch.object(main,'get_supabase_admin_user',return_value={'id':'user'}),patch.object(main,'resolve_supabase_user_id_for_stripe_event',return_value='user'),patch.object(main.stripe.Subscription,'retrieve',side_effect=RuntimeError('offline') if failure else None,return_value={'status':'active'}),patch.object(main,'sync_user_plan_from_subscription',return_value=True) as sync:
    result=TestClient(main.app).post('/stripe/webhook',content=b'{}')
    return result,sync.call_count
  def test_unpaid_checkout_does_not_grant_access(self):
@@ -65,7 +65,7 @@ class WebhookPersistenceTests(unittest.TestCase):
  def deliver(self,event_type,*,sync_ok=True,lookup_error=False):
   obj={'id':'sub_test','customer':'cus_test','subscription':'sub_test','payment_status':'paid','status':'active','metadata':{'user_id':'test_user'}}
   event={'type':event_type,'data':{'object':obj}}
-  with patch.object(main,'STRIPE_SECRET_KEY','test'),patch.object(main,'STRIPE_WEBHOOK_SECRET','test'),patch.object(main.stripe.Webhook,'construct_event',return_value=event),patch.object(main,'resolve_supabase_user_id_for_stripe_event',return_value='test_user'),patch.object(main.stripe.Subscription,'retrieve',side_effect=RuntimeError('offline') if lookup_error else None,return_value={'status':'active'}),patch.object(main,'sync_user_plan_from_subscription',return_value=sync_ok):
+  with patch.object(main,'STRIPE_SECRET_KEY','test'),patch.object(main,'STRIPE_WEBHOOK_SECRET','test'),patch.object(main.stripe.Webhook,'construct_event',return_value=event),patch.object(main,'get_supabase_admin_user',return_value={'id':'user'}),patch.object(main,'resolve_supabase_user_id_for_stripe_event',return_value='test_user'),patch.object(main.stripe.Subscription,'retrieve',side_effect=RuntimeError('offline') if lookup_error else None,return_value={'status':'active'}),patch.object(main,'sync_user_plan_from_subscription',return_value=sync_ok):
    return TestClient(main.app).post('/stripe/webhook',content=b'{}')
  def test_failed_persistence_retries_all_entitlement_event_types(self):
   for kind in ['checkout.session.completed','checkout.session.async_payment_succeeded','customer.subscription.created','customer.subscription.updated','customer.subscription.deleted','invoice.payment_failed','invoice.paid','invoice.payment_succeeded']:
