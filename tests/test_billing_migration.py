@@ -106,6 +106,16 @@ class NormalBillingRouteTests(unittest.TestCase):
    self.assertEqual(args['success_url'],'https://aicodeaudit.org/account/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}')
    self.assertEqual(args['cancel_url'],'https://aicodeaudit.org/account/billing?checkout=cancel')
    self.assertEqual(args['client_reference_id'],'customer_user')
+   self.assertEqual(args['automatic_tax'],{'enabled':True})
+   self.assertEqual(args['billing_address_collection'],'required')
+   self.assertEqual(args['customer_update'],{'address':'auto'})
+ def test_new_customer_checkout_enables_tax(self):
+  from types import SimpleNamespace
+  with patch.object(main,'get_supabase_admin_user',return_value={'app_metadata':{}}),patch.object(main.stripe.checkout.Session,'create',return_value=SimpleNamespace(url='https://checkout.stripe.com/test',id='cs_test_example')) as create:
+   response=self.client.post('/stripe/create-checkout-session',headers=self.headers)
+   self.assertEqual(response.status_code,200)
+   self.assertEqual(create.call_args.kwargs['automatic_tax'],{'enabled':True})
+   self.assertEqual(create.call_args.kwargs['customer_email'],'customer@example.com')
  def test_portal_returns_to_billing_page(self):
   from types import SimpleNamespace
   with patch.object(main.stripe.billing_portal.Session,'create',return_value=SimpleNamespace(url='https://billing.stripe.com/test')) as create:
