@@ -5714,6 +5714,8 @@ def plan_from_subscription_status(
 
 def plan_for_stripe_subscription(subscription):
     prices={STRIPE_PRICE_ID:'pro'}
+    annual_pro=os.getenv('STRIPE_PRO_ANNUAL_PRICE_ID','').strip()
+    if annual_pro:prices[annual_pro]='pro'
     for key in ('STRIPE_SERIOUS_PRICE_ID','STRIPE_SERIOUS_ANNUAL_PRICE_ID'):
         price_id=os.getenv(key,'').strip()
         if price_id and price_id not in prices:prices[price_id]='serious'
@@ -5724,7 +5726,7 @@ def checkout_offers(access):
     if not access.get('authenticated') or access.get('plan','free') != 'free' or access.get('role') == 'admin':return []
     controlled=controlled_checkout_allowed(access)
     if not PURCHASES_ENABLED and not controlled:return []
-    choices=[('pro','month',1900,STRIPE_PRICE_ID),('serious','month',6900,os.getenv('STRIPE_SERIOUS_PRICE_ID','')),('serious','year',69000,os.getenv('STRIPE_SERIOUS_ANNUAL_PRICE_ID',''))]
+    choices=[('pro','month',1900,STRIPE_PRICE_ID),('pro','year',19000,os.getenv('STRIPE_PRO_ANNUAL_PRICE_ID','')),('serious','month',6900,os.getenv('STRIPE_SERIOUS_PRICE_ID','')),('serious','year',69000,os.getenv('STRIPE_SERIOUS_ANNUAL_PRICE_ID',''))]
     allowed_plan=os.getenv('CONTROLLED_CHECKOUT_PLAN','pro')
     return [{'plan':plan,'interval':interval,'amount':amount,'controlled':not PURCHASES_ENABLED}
             for plan,interval,amount,price in choices if price and (PURCHASES_ENABLED or plan==allowed_plan and interval=='month')]
@@ -5910,13 +5912,13 @@ async def create_stripe_checkout_session(request: Request):
         raise HTTPException(400,'Choose a valid subscription plan.')
     if not isinstance(selection,dict):raise HTTPException(400,'Choose a valid subscription plan.')
     selected_plan=selection.get('plan','pro');interval=selection.get('interval','month')
-    if selected_plan not in {'pro','serious'} or interval not in {'month','year'} or selected_plan=='pro' and interval!='month':
+    if selected_plan not in {'pro','serious'} or interval not in {'month','year'}:
         raise HTTPException(400,'Choose an available subscription plan.')
-    selected_price=STRIPE_PRICE_ID if selected_plan=='pro' else os.getenv('STRIPE_SERIOUS_ANNUAL_PRICE_ID' if interval=='year' else 'STRIPE_SERIOUS_PRICE_ID','').strip()
+    selected_price=(os.getenv('STRIPE_PRO_ANNUAL_PRICE_ID','').strip() if interval=='year' else STRIPE_PRICE_ID) if selected_plan=='pro' else os.getenv('STRIPE_SERIOUS_ANNUAL_PRICE_ID' if interval=='year' else 'STRIPE_SERIOUS_PRICE_ID','').strip()
     if not selected_price:raise HTTPException(503,'This subscription plan is not available yet.')
     if not PURCHASES_ENABLED and (selected_plan!=os.getenv('CONTROLLED_CHECKOUT_PLAN','pro') or interval!='month'):
         raise HTTPException(503,'This plan is not enabled for the controlled checkout.')
-    expected_amount=1900 if selected_plan=='pro' else 69000 if interval=='year' else 6900
+    expected_amount=(19000 if interval=='year' else 1900) if selected_plan=='pro' else 69000 if interval=='year' else 6900
     current_user = get_supabase_admin_user(str(access["user_id"])) or {}
     existing_app_metadata = current_user.get("app_metadata") or {}
     existing_customer_id = str(existing_app_metadata.get("stripe_customer_id") or "").strip() or None
