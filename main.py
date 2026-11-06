@@ -9,7 +9,7 @@ from github_authorization import AuthorizationCache
 import cross_file_review
 from scanner_process import run_scanner
 from audit_runtime import run_audit_process
-from billing_plans import subscription_plan, subscription_period_end
+from billing_plans import subscription_plan, subscription_period_end, subscription_cancellation
 from functools import wraps
 import uuid
 from flow_review import supplemental_flows, literal_eval_locations
@@ -6035,8 +6035,7 @@ async def stripe_checkout_session_status(request: Request, session_id: str):
         try:
             subscription = stripe.Subscription.retrieve(subscription_id)
             subscription_status = str(stripe_object_value(subscription, "status") or "")
-            cancel_at_period_end = bool(stripe_object_value(subscription, "cancel_at_period_end", False) or False)
-            current_period_end = subscription_period_end(subscription)
+            cancel_at_period_end, current_period_end = subscription_cancellation(subscription)
             plan = plan_for_stripe_subscription(subscription)
         except Exception as exc:
             log_server_issue("Could not retrieve subscription during checkout verification", exc)
@@ -6055,8 +6054,7 @@ async def stripe_checkout_session_status(request: Request, session_id: str):
         try:
             subscription = stripe.Subscription.retrieve(subscription_id)
             subscription_status = str(stripe_object_value(subscription, "status") or "")
-            cancel_at_period_end = bool(stripe_object_value(subscription, "cancel_at_period_end", False) or False)
-            current_period_end = subscription_period_end(subscription)
+            cancel_at_period_end, current_period_end = subscription_cancellation(subscription)
             plan = plan_for_stripe_subscription(subscription)
         except Exception as exc:
             log_server_issue("Could not retrieve subscription while reporting checkout status", exc)
@@ -6161,10 +6159,7 @@ async def reconcile_stripe_subscription(request: Request):
     try:
         subscription = stripe.Subscription.retrieve(subscription_id)
         status = str(stripe_object_value(subscription, "status") or "").lower()
-        cancel_at_period_end = bool(
-            stripe_object_value(subscription, "cancel_at_period_end", False) or False
-        )
-        current_period_end = subscription_period_end(subscription)
+        cancel_at_period_end, current_period_end = subscription_cancellation(subscription)
     except Exception as exc:
         log_server_issue("Could not verify subscription during paid Checkout Session recovery", exc)
         raise HTTPException(status_code=503, detail="Subscription verification is temporarily unavailable. Retry shortly.") from exc
@@ -6273,8 +6268,7 @@ async def stripe_webhook(request: Request):
                 if subscription_id:
                     subscription = stripe.Subscription.retrieve(subscription_id)
                     subscription_status = str(stripe_object_value(subscription, "status") or "")
-                    cancel_at_period_end = bool(stripe_object_value(subscription, "cancel_at_period_end", False) or False)
-                    current_period_end = subscription_period_end(subscription)
+                    cancel_at_period_end, current_period_end = subscription_cancellation(subscription)
             except Exception as exc:
                 log_server_issue("Failed to retrieve subscription after checkout completion", exc)
                 return JSONResponse({"received": False, "error": "Subscription lookup unavailable; retry."}, status_code=503)
@@ -6302,8 +6296,7 @@ async def stripe_webhook(request: Request):
         )
         if user_id:
             status = str(stripe_object_value(event_object, "status") or "")
-            cancel_at_period_end = bool(stripe_object_value(event_object, "cancel_at_period_end", False) or False)
-            current_period_end = subscription_period_end(event_object)
+            cancel_at_period_end, current_period_end = subscription_cancellation(event_object)
             synced = sync_user_plan_from_subscription(
                 user_id,
                 plan=plan_for_stripe_subscription(event_object),
@@ -6327,8 +6320,7 @@ async def stripe_webhook(request: Request):
             try:
                 subscription = stripe.Subscription.retrieve(subscription_id)
                 status = str(stripe_object_value(subscription, "status") or "")
-                cancel_at_period_end = bool(stripe_object_value(subscription, "cancel_at_period_end", False) or False)
-                current_period_end = subscription_period_end(subscription)
+                cancel_at_period_end, current_period_end = subscription_cancellation(subscription)
                 synced = sync_user_plan_from_subscription(
                     user_id,
                     plan=plan_for_stripe_subscription(subscription),
