@@ -14,6 +14,14 @@ def subscription_period_end(subscription):
     return direct or (value(items[0],'current_period_end') if len(items)==1 else None)
 
 
+def subscription_cancellation(subscription):
+    # Stripe can schedule cancellation through cancel_at even when the legacy
+    # cancel_at_period_end flag is false. An explicit date is the end of access.
+    cancel_at = value(subscription, 'cancel_at')
+    scheduled = bool(value(subscription, 'cancel_at_period_end', False) or cancel_at)
+    return scheduled, (cancel_at or subscription_period_end(subscription))
+
+
 def subscription_plan(subscription,price_map):
     if value(subscription,'status') not in {'active','trialing','past_due'}:return 'free'
     items=subscription_items(subscription)
