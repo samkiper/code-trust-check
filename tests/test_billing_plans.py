@@ -54,3 +54,15 @@ class PriceEntitlementTests(unittest.TestCase):
                 r=client.post('/stripe/create-checkout-session',json={'plan':'serious','interval':interval,'price':'attacker_price','amount':1})
                 self.assertEqual(r.status_code,200);self.assertEqual(create.call_args.kwargs['line_items'],[{'price':price,'quantity':1}])
             self.assertEqual(client.post('/stripe/create-checkout-session',json={'plan':'admin'}).status_code,400)
+
+
+class ScheduledCancellationTests(unittest.TestCase):
+    def test_explicit_cancel_date_takes_precedence(self):
+        from billing_plans import subscription_cancellation
+        subscription = {'cancel_at_period_end': False, 'cancel_at': 250, 'items': {'data': [{'current_period_end': 300}]}}
+        self.assertEqual(subscription_cancellation(subscription), (True, 250))
+
+    def test_period_end_and_uncanceled_subscription(self):
+        from billing_plans import subscription_cancellation
+        self.assertEqual(subscription_cancellation({'cancel_at_period_end': True, 'current_period_end': 300}), (True, 300))
+        self.assertEqual(subscription_cancellation({'cancel_at': None, 'current_period_end': 300}), (False, 300))
