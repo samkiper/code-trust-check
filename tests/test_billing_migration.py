@@ -118,6 +118,13 @@ class NormalBillingRouteTests(unittest.TestCase):
    response=self.client.post('/stripe/reconcile-subscription',headers=self.headers)
    self.assertEqual(response.status_code,503)
    sync.assert_not_called()
+ def test_recovery_reports_the_actual_restored_plan(self):
+  session={'status':'complete','payment_status':'paid','subscription':'sub_old','customer':'cus_existing','metadata':{'user_id':'customer_user'}}
+  with patch.object(main.stripe.checkout.Session,'list',return_value={'data':[session]}),patch.object(main.stripe.Subscription,'retrieve',return_value={'status':'active'}),patch.object(main,'plan_for_stripe_subscription',return_value='serious'),patch.object(main,'sync_user_plan_from_subscription',return_value=True) as sync,patch.object(main,'build_authenticated_access_payload_for_user',return_value={'plan':'serious'}):
+   response=self.client.post('/stripe/reconcile-subscription',headers=self.headers)
+   self.assertEqual(response.status_code,200)
+   self.assertEqual(response.json()['plan'],'serious')
+   self.assertEqual(sync.call_args.kwargs['plan'],'serious')
 
 class ControlledCheckoutTests(NormalBillingRouteTests):
  def setUp(self):
