@@ -22,6 +22,17 @@ class PriceEntitlementTests(unittest.TestCase):
                 self.assertEqual(subscription_plan(self.sub(price,status),{'price_pro':'pro','price_serious':'serious'}),'free')
     def test_flexible_billing_item_period_is_read(self):
         self.assertEqual(subscription_period_end(self.sub('price_serious')),2000000000)
+    def test_annual_pro_maps_to_pro_and_is_offered(self):
+        access={'authenticated':True,'user_id':'test','email':'test@example.com','plan':'free','role':'user'}
+        with patch.object(main,'STRIPE_PRICE_ID','price_pro'),patch.object(main,'PURCHASES_ENABLED',True),patch.dict(os.environ,{'STRIPE_PRO_ANNUAL_PRICE_ID':'price_pro_year'}):
+            self.assertEqual(main.plan_for_stripe_subscription(self.sub('price_pro_year')),'pro')
+            self.assertIn({'plan':'pro','interval':'year','amount':19000,'controlled':False},main.checkout_offers(access))
+    def test_pro_annual_checkout_uses_server_price(self):
+        access={'authenticated':True,'user_id':'test','email':'test@example.com','plan':'free','role':'user'}
+        with patch.dict(os.environ,{'STRIPE_PRO_ANNUAL_PRICE_ID':'price_pro_year'}),patch.object(main,'PURCHASES_ENABLED',True),patch.object(main,'STRIPE_SECRET_KEY','test'),patch.object(main,'get_request_access_context',return_value=access),patch.object(main,'enrich_access_with_admin_metadata',side_effect=lambda x:x),patch.object(main,'enforce_rate_limit'),patch.object(main,'get_supabase_admin_user',return_value={}),patch.object(main.stripe.checkout.Session,'create',return_value=type('Session',(),{'url':'https://checkout.stripe.com/c/test','id':'cs_test_reference'})()) as create:
+            response=TestClient(main.app).post('/stripe/create-checkout-session',json={'plan':'pro','interval':'year','price':'attacker_price'})
+            self.assertEqual(response.status_code,200)
+            self.assertEqual(create.call_args.kwargs['line_items'],[{'price':'price_pro_year','quantity':1}])
     def test_production_and_sandbox_share_serious_mapping(self):
         with patch.object(main,'STRIPE_PRICE_ID','price_pro'),patch.dict(os.environ,{'STRIPE_SERIOUS_PRICE_ID':'price_serious','STRIPE_SERIOUS_ANNUAL_PRICE_ID':'price_annual'}):
             for price in ['price_serious','price_annual']:
