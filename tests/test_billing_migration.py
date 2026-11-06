@@ -132,7 +132,7 @@ class NormalBillingRouteTests(unittest.TestCase):
 class ControlledCheckoutTests(NormalBillingRouteTests):
  def setUp(self):
   super().setUp()
-  self.stack.enter_context(patch.dict(os.environ,{'CONTROLLED_CHECKOUT_PLAN':'pro'}))
+  self.stack.enter_context(patch.dict(os.environ,{'CONTROLLED_CHECKOUT_PLAN':'pro','CONTROLLED_CHECKOUT_INTERVAL':'month'}))
   self.stack.enter_context(patch.object(main,'PURCHASES_ENABLED',False))
   self.stack.enter_context(patch.object(main,'CONTROLLED_CHECKOUT_USER_ID','customer_user'))
   self.stack.enter_context(patch.object(main,'CONTROLLED_CHECKOUT_EXPIRES_AT','9999999999'))
