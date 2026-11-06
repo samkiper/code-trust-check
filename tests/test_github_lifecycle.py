@@ -21,6 +21,17 @@ class GitHubLifecycleTests(unittest.TestCase):
         with patch.object(main,"GITHUB_ENFORCE_PRO",False), patch.object(main,"supabase_rest_request",return_value=[]):
             self.assertFalse(main.github_installation_entitlement(123)["allowed"])
 
+    def test_scheduled_cancellation_expires_both_github_entitlement_paths(self):
+        user = {"app_metadata": {"plan": "serious", "stripe_cancel_at_period_end": True,
+                                 "stripe_current_period_end": 1000}}
+        with patch.object(main, "get_supabase_admin_user", return_value=user), \
+             patch.object(main, "supabase_rest_request", return_value=[{"user_id":"customer"}]), \
+             patch.object(main, "github_installation_still_authorized", return_value=True):
+            for timestamp, expected in [(999, True), (1000, False)]:
+                with patch.object(main.time, "time", return_value=timestamp):
+                    self.assertEqual(main.github_user_has_pro("customer"), expected)
+                    self.assertEqual(main.github_installation_entitlement(123)["allowed"], expected)
+
     def test_signed_delete_and_suspend_only_touch_exact_installation(self):
         for action, status in [("deleted","deleted"),("suspend","suspended")]:
             with self.subTest(action=action), patch.object(main,"GITHUB_WEBHOOK_SECRET","test-secret"), patch.object(main,"supabase_rest_request",return_value=[{"installation_id":123}]) as db:
