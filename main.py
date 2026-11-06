@@ -6396,9 +6396,7 @@ def github_installation_entitlement(installation_id: int) -> dict:
     user_id = str(rows[0].get("user_id") or "")
     user = get_supabase_admin_user(user_id) or {}
     metadata = user.get("app_metadata") or {}
-    role = str(metadata.get("role") or "user").lower()
-    plan = str(metadata.get("plan") or ("admin" if role == "admin" else "free")).lower()
-    if role != "admin" and plan not in {"pro", "serious"}:
+    if current_account_plan(metadata) not in {"admin", "pro", "serious"}:
         return {"allowed": False, "reason": "pro_required", "user_id": user_id}
     if not github_installation_still_authorized(user_id, int(installation_id)):
         return {"allowed": False, "reason": "github_reauthorization_required", "user_id": user_id}
@@ -6661,9 +6659,7 @@ def download_private_repository(access: dict, repo_url: str) -> bytes:
 def github_user_has_pro(user_id: str) -> bool:
     user = get_supabase_admin_user(str(user_id)) or {}
     metadata = user.get("app_metadata") or {}
-    role = str(metadata.get("role") or "user").lower()
-    plan = str(metadata.get("plan") or ("admin" if role == "admin" else "free")).lower()
-    return role == "admin" or plan in {"pro", "serious"}
+    return current_account_plan(metadata) in {"admin", "pro", "serious"}
 
 
 def save_github_installation_link(user_id: str, installation: dict) -> dict:

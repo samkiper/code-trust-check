@@ -1,7 +1,7 @@
 annotated-doc==0.0.4
 annotated-types==0.7.0
-anyio==4.12.1
-certifi==2026.2.25
+anyio==4.14.2
+certifi==2026.10.23
 charset-normalizer==3.4.5
 click==8.4.2
 fastapi==0.141.1
@@ -13,12 +13,12 @@ requests==2.34.2
 starlette==1.6.0
 typing-inspection==0.4.2
 typing_extensions==4.15.0
-urllib3==2.7.0
+urllib3==2.8.0
 uvicorn==0.41.0
 python-dotenv
 stripe==15.6.1
-PyJWT[crypto]==2.13.0
-semgrep==1.176.1
+PyJWT[crypto]==2.15.0
+semgrep==1.184.0
 tree-sitter==0.26.0
 tree-sitter-javascript==0.25.0
 tree-sitter-typescript==0.23.2
