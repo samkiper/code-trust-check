@@ -142,6 +142,16 @@ class ControlledCheckoutTests(NormalBillingRouteTests):
    with patch.object(main,name,value),patch.object(main.stripe.checkout.Session,'create') as create:
     self.assertEqual(self.client.post('/stripe/create-checkout-session',headers=self.headers).status_code,503)
     create.assert_not_called()
+ def test_controlled_annual_pro_requires_annual_interval_and_exact_price(self):
+  from types import SimpleNamespace
+  price={'active':True,'livemode':True,'unit_amount':19000,'currency':'usd','recurring':{'interval':'year','interval_count':1}}
+  with patch.dict(os.environ,{'CONTROLLED_CHECKOUT_PLAN':'pro','CONTROLLED_CHECKOUT_INTERVAL':'year','STRIPE_PRO_ANNUAL_PRICE_ID':'price_pro_year'}),patch.object(main.stripe.Price,'retrieve',return_value=price),patch.object(main.stripe.checkout.Session,'create',return_value=SimpleNamespace(url='https://checkout.stripe.com/test',id='cs_test_annual')) as create:
+   response=self.client.post('/stripe/create-checkout-session',json={'plan':'pro','interval':'year'},headers=self.headers)
+   self.assertEqual(response.status_code,200)
+   self.assertEqual(create.call_args.kwargs['line_items'],[{'price':'price_pro_year','quantity':1}])
+   create.reset_mock()
+   self.assertEqual(self.client.post('/stripe/create-checkout-session',json={'plan':'pro','interval':'month'},headers=self.headers).status_code,503)
+   create.assert_not_called()
  def test_wrong_price_never_creates_checkout(self):
   with patch.object(main.stripe.Price,'retrieve',return_value={'unit_amount':6900}),patch.object(main.stripe.checkout.Session,'create') as create:
    self.assertEqual(self.client.post('/stripe/create-checkout-session',headers=self.headers).status_code,503)
