@@ -5728,8 +5728,9 @@ def checkout_offers(access):
     if not PURCHASES_ENABLED and not controlled:return []
     choices=[('pro','month',1900,STRIPE_PRICE_ID),('pro','year',19000,os.getenv('STRIPE_PRO_ANNUAL_PRICE_ID','')),('serious','month',6900,os.getenv('STRIPE_SERIOUS_PRICE_ID','')),('serious','year',69000,os.getenv('STRIPE_SERIOUS_ANNUAL_PRICE_ID',''))]
     allowed_plan=os.getenv('CONTROLLED_CHECKOUT_PLAN','pro')
+    allowed_interval=os.getenv('CONTROLLED_CHECKOUT_INTERVAL','month')
     return [{'plan':plan,'interval':interval,'amount':amount,'controlled':not PURCHASES_ENABLED}
-            for plan,interval,amount,price in choices if price and (PURCHASES_ENABLED or plan==allowed_plan and interval=='month')]
+            for plan,interval,amount,price in choices if price and (PURCHASES_ENABLED or plan==allowed_plan and interval==allowed_interval)]
 
 
 def get_supabase_admin_user_by_metadata_field(field_name: str, field_value: str) -> dict | None:
@@ -5916,7 +5917,7 @@ async def create_stripe_checkout_session(request: Request):
         raise HTTPException(400,'Choose an available subscription plan.')
     selected_price=(os.getenv('STRIPE_PRO_ANNUAL_PRICE_ID','').strip() if interval=='year' else STRIPE_PRICE_ID) if selected_plan=='pro' else os.getenv('STRIPE_SERIOUS_ANNUAL_PRICE_ID' if interval=='year' else 'STRIPE_SERIOUS_PRICE_ID','').strip()
     if not selected_price:raise HTTPException(503,'This subscription plan is not available yet.')
-    if not PURCHASES_ENABLED and (selected_plan!=os.getenv('CONTROLLED_CHECKOUT_PLAN','pro') or interval!='month'):
+    if not PURCHASES_ENABLED and (selected_plan!=os.getenv('CONTROLLED_CHECKOUT_PLAN','pro') or interval!=os.getenv('CONTROLLED_CHECKOUT_INTERVAL','month')):
         raise HTTPException(503,'This plan is not enabled for the controlled checkout.')
     expected_amount=(19000 if interval=='year' else 1900) if selected_plan=='pro' else 69000 if interval=='year' else 6900
     current_user = get_supabase_admin_user(str(access["user_id"])) or {}
@@ -5956,9 +5957,9 @@ async def create_stripe_checkout_session(request: Request):
         except Exception as exc:
             raise HTTPException(503, "Could not verify the controlled checkout price.") from exc
         recurring = stripe_object_value(price, "recurring", {}) or {}
-        if not (stripe_object_value(price, "active") and stripe_object_value(price, "livemode") and stripe_object_value(price, "unit_amount") == expected_amount and stripe_object_value(price, "currency") == "usd" and stripe_object_value(recurring, "interval") == "month" and stripe_object_value(recurring, "interval_count") == 1):
-            raise HTTPException(503, "Controlled checkout requires the approved monthly live price.")
-        checkout_kwargs["idempotency_key"] = f"controlled-{access['user_id']}-{selected_plan}-{CONTROLLED_CHECKOUT_EXPIRES_AT}"
+        if not (stripe_object_value(price, "active") and stripe_object_value(price, "livemode") and stripe_object_value(price, "unit_amount") == expected_amount and stripe_object_value(price, "currency") == "usd" and stripe_object_value(recurring, "interval") == interval and stripe_object_value(recurring, "interval_count") == 1):
+            raise HTTPException(503, "Controlled checkout requires the approved live price and billing interval.")
+        checkout_kwargs["idempotency_key"] = f"controlled-{access['user_id']}-{selected_plan}-{interval}-{CONTROLLED_CHECKOUT_EXPIRES_AT}"
 
     try:
         session = stripe.checkout.Session.create(**checkout_kwargs)
