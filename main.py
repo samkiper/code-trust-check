@@ -322,6 +322,15 @@ def log_server_issue(context: str, exc: Exception | None = None):
     print(message)
 
 
+def current_account_plan(metadata, fallback="free"):
+    if metadata.get("role") == "admin":
+        return "admin"
+    if metadata.get("stripe_cancel_at_period_end") and metadata.get("stripe_current_period_end"):
+        if int(metadata["stripe_current_period_end"]) <= time.time():
+            return "free"
+    return str(metadata.get("plan") or fallback).lower()
+
+
 def enrich_access_with_admin_metadata(access: dict) -> dict:
     if not access.get("authenticated") or not access.get("user_id"):
         return access
@@ -329,7 +338,7 @@ def enrich_access_with_admin_metadata(access: dict) -> dict:
     current_user = get_supabase_admin_user(str(access["user_id"])) or {}
     app_metadata = current_user.get("app_metadata") or {}
     role = str(app_metadata.get("role") or access.get("role") or "user").lower()
-    plan = str(app_metadata.get("plan") or ("admin" if role == "admin" else access.get("plan") or "free")).lower()
+    plan = current_account_plan(app_metadata, access.get("plan") or "free")
 
     enriched = dict(access)
     enriched["role"] = role
@@ -773,7 +782,7 @@ def get_request_access_context(request: Request, access_token: str | None = None
     access["debug"]["user_fetch_succeeded"] = bool(verified_with_supabase)
     app_metadata = user.get("app_metadata") or {}
     role = str(app_metadata.get("role") or "user").lower()
-    plan = str(app_metadata.get("plan") or ("admin" if role == "admin" else "free")).lower()
+    plan = current_account_plan(app_metadata)
 
     access.update({
         "authenticated": True,
@@ -5779,29 +5788,37 @@ def resolve_supabase_user_id_for_stripe_event(
     return None
 
 
-def sync_user_plan_from_subscription(
-    user_id: str,
-    *,
-    plan: str,
-    stripe_customer_id: str | None = None,
-    stripe_subscription_id: str | None = None,
-    subscription_status: str | None = None,
-    cancel_at_period_end: bool | None = None,
-    current_period_end = None,
-) -> bool:
-    metadata_updates = {"plan": str(plan or "free").lower()}
-    if stripe_customer_id is not None:
-        metadata_updates["stripe_customer_id"] = stripe_customer_id
-    if stripe_subscription_id is not None:
-        metadata_updates["stripe_subscription_id"] = stripe_subscription_id
-    if subscription_status is not None:
-        metadata_updates["stripe_subscription_status"] = subscription_status
-    if cancel_at_period_end is not None:
-        metadata_updates["stripe_cancel_at_period_end"] = bool(cancel_at_period_end)
-    if current_period_end is not None:
-        metadata_updates["stripe_current_period_end"] = int(current_period_end) if str(current_period_end).strip() else None
-        metadata_updates["stripe_current_period_end_iso"] = unix_to_iso8601(current_period_end)
-    return update_supabase_user_app_metadata(user_id, metadata_updates)
+def subscription_snapshot(user_id, subscription_id):
+    # Read the version BEFORE contacting Stripe. If another handler commits
+    # while this request is in flight, Postgres rejects this snapshot on write.
+    user = get_supabase_admin_user(str(user_id))
+    if not user:
+        raise RuntimeError("Billing account lookup unavailable")
+    metadata = user.get("app_metadata") or {}
+    prior_id = metadata.get("stripe_subscription_id")
+    prior_end = None
+    if prior_id and prior_id != subscription_id:
+        previous = stripe.Subscription.retrieve(prior_id)
+        prior_end = stripe_object_value(previous, "ended_at")
+    return stripe.Subscription.retrieve(subscription_id), metadata.get("billing_revision", 0), prior_end
+
+
+def sync_user_plan_from_subscription(user_id, *, subscription, revision, prior_end, plan):
+    scheduled, end = subscription_cancellation(subscription)
+    result = supabase_rest_request("POST", "rpc/aca_sync_subscription", payload={
+        "p_user": str(user_id),
+        "p_revision": revision,
+        "p_subscription": stripe_reference_id(stripe_object_value(subscription, "id")),
+        "p_customer": stripe_reference_id(stripe_object_value(subscription, "customer")),
+        "p_created": stripe_object_value(subscription, "created"),
+        "p_start": stripe_object_value(subscription, "start_date"),
+        "p_plan": plan,
+        "p_status": stripe_object_value(subscription, "status"),
+        "p_scheduled": scheduled,
+        "p_prior_ended": prior_end,
+        "p_end": end,
+    })
+    return isinstance(result, dict) and result.get("ok") is True
 
 
 def build_authenticated_access_payload_for_user(user_id: str, request: Request | None = None) -> dict | None:
@@ -5811,7 +5828,7 @@ def build_authenticated_access_payload_for_user(user_id: str, request: Request |
 
     app_metadata = current_user.get("app_metadata") or {}
     role = str(app_metadata.get("role") or "user").lower()
-    plan = str(app_metadata.get("plan") or ("admin" if role == "admin" else "free")).lower()
+    plan = current_account_plan(app_metadata)
     effective_plan = "admin" if role == "admin" else plan
 
     access = {
@@ -6033,7 +6050,7 @@ async def stripe_checkout_session_status(request: Request, session_id: str):
     if subscription_id and checkout_completed and payment_completed:
         subscription_status = ""
         try:
-            subscription = stripe.Subscription.retrieve(subscription_id)
+            subscription, revision, prior_end = subscription_snapshot(user_id, subscription_id)
             subscription_status = str(stripe_object_value(subscription, "status") or "")
             cancel_at_period_end, current_period_end = subscription_cancellation(subscription)
             plan = plan_for_stripe_subscription(subscription)
@@ -6042,14 +6059,9 @@ async def stripe_checkout_session_status(request: Request, session_id: str):
             raise HTTPException(status_code=503, detail="Subscription verification is temporarily unavailable. Retry shortly.") from exc
 
         synced = sync_user_plan_from_subscription(
-            user_id,
-            plan=plan,
-            stripe_customer_id=str(customer_id) if customer_id else None,
-            stripe_subscription_id=str(subscription_id) if subscription_id else None,
-            subscription_status=subscription_status,
-            cancel_at_period_end=cancel_at_period_end,
-            current_period_end=current_period_end,
-        )
+            user_id, subscription=subscription, revision=revision, prior_end=prior_end, plan=plan)
+        if not synced:
+            raise HTTPException(503, "Subscription update is pending. Retry shortly.")
     elif subscription_id:
         try:
             subscription = stripe.Subscription.retrieve(subscription_id)
@@ -6157,7 +6169,7 @@ async def reconcile_stripe_subscription(request: Request):
     current_period_end = None
     request.state.operation_stage = "reading the Stripe subscription"
     try:
-        subscription = stripe.Subscription.retrieve(subscription_id)
+        subscription, revision, prior_end = subscription_snapshot(access["user_id"], subscription_id)
         status = str(stripe_object_value(subscription, "status") or "").lower()
         cancel_at_period_end, current_period_end = subscription_cancellation(subscription)
     except Exception as exc:
@@ -6173,14 +6185,7 @@ async def reconcile_stripe_subscription(request: Request):
 
     request.state.operation_stage = "updating the Supabase subscription access"
     synced = sync_user_plan_from_subscription(
-        str(access["user_id"]),
-        plan=restored_plan,
-        stripe_customer_id=customer_id or None,
-        stripe_subscription_id=subscription_id,
-        subscription_status=status,
-        cancel_at_period_end=cancel_at_period_end,
-        current_period_end=current_period_end,
-    )
+        access["user_id"], subscription=subscription, revision=revision, prior_end=prior_end, plan=restored_plan)
     if not synced:
         raise HTTPException(
             status_code=503,
@@ -6192,7 +6197,7 @@ async def reconcile_stripe_subscription(request: Request):
     return JSONResponse(
         {
             "restored": True,
-            "plan": "pro",
+            "plan": (refreshed_access or {}).get("plan", restored_plan),
             "subscription_status": status,
             "access": refreshed_access,
         },
@@ -6245,97 +6250,40 @@ async def stripe_webhook(request: Request):
     event_data = stripe_object_value(event, "data", {}) or {}
     event_object = stripe_object_value(event_data, "object", {}) or {}
 
+    metadata = stripe_object_value(event_object, "metadata", {}) or {}
+    owner = stripe_object_value(metadata, "user_id")
+    customer_id = stripe_reference_id(stripe_object_value(event_object, "customer"))
     if event_type in {"checkout.session.completed", "checkout.session.async_payment_succeeded"}:
         if stripe_object_value(event_object, "payment_status") not in {"paid", "no_payment_required"}:
             return {"received": True, "pending_payment": True}
-        metadata = stripe_object_value(event_object, "metadata", {}) or {}
-        subscription_id = stripe_reference_id(stripe_object_value(event_object, "subscription")) or None
-        customer_id = stripe_reference_id(stripe_object_value(event_object, "customer")) or None
-        user_id = resolve_supabase_user_id_for_stripe_event(
-            explicit_user_id=(
-                stripe_object_value(metadata, "user_id")
-                or stripe_object_value(event_object, "client_reference_id")
-            ),
-            stripe_customer_id=str(customer_id) if customer_id else None,
-            stripe_subscription_id=str(subscription_id) if subscription_id else None,
-        )
-        if user_id:
-            subscription = None
-            subscription_status = ""
-            cancel_at_period_end = False
-            current_period_end = None
-            try:
-                if subscription_id:
-                    subscription = stripe.Subscription.retrieve(subscription_id)
-                    subscription_status = str(stripe_object_value(subscription, "status") or "")
-                    cancel_at_period_end, current_period_end = subscription_cancellation(subscription)
-            except Exception as exc:
-                log_server_issue("Failed to retrieve subscription after checkout completion", exc)
-                return JSONResponse({"received": False, "error": "Subscription lookup unavailable; retry."}, status_code=503)
-
-            synced = sync_user_plan_from_subscription(
-                user_id,
-                plan=plan_for_stripe_subscription(subscription),
-                stripe_customer_id=str(customer_id) if customer_id else None,
-                stripe_subscription_id=str(subscription_id) if subscription_id else None,
-                subscription_status=subscription_status,
-                cancel_at_period_end=cancel_at_period_end,
-                current_period_end=current_period_end,
-            )
-            if not synced:
-                return JSONResponse({"received": False, "error": "Account update unavailable; retry."}, status_code=503)
-
+        owner = owner or stripe_object_value(event_object, "client_reference_id")
+        subscription_id = stripe_reference_id(stripe_object_value(event_object, "subscription"))
     elif event_type in {"customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted"}:
-        metadata = stripe_object_value(event_object, "metadata", {}) or {}
-        customer_id = stripe_reference_id(stripe_object_value(event_object, "customer")) or None
-        subscription_id = stripe_reference_id(stripe_object_value(event_object, "id")) or None
-        user_id = resolve_supabase_user_id_for_stripe_event(
-            explicit_user_id=stripe_object_value(metadata, "user_id"),
-            stripe_customer_id=customer_id,
-            stripe_subscription_id=subscription_id,
-        )
-        if user_id:
-            status = str(stripe_object_value(event_object, "status") or "")
-            cancel_at_period_end, current_period_end = subscription_cancellation(event_object)
-            synced = sync_user_plan_from_subscription(
-                user_id,
-                plan=plan_for_stripe_subscription(event_object),
-                stripe_customer_id=customer_id,
-                stripe_subscription_id=subscription_id,
-                subscription_status=status,
-                cancel_at_period_end=cancel_at_period_end,
-                current_period_end=current_period_end,
-            )
-            if not synced:
-                return JSONResponse({"received": False, "error": "Account update unavailable; retry."}, status_code=503)
-
+        subscription_id = stripe_reference_id(stripe_object_value(event_object, "id"))
     elif event_type in {"invoice.payment_failed", "invoice.paid", "invoice.payment_succeeded"}:
-        customer_id = stripe_reference_id(stripe_object_value(event_object, "customer")) or None
-        subscription_id = stripe_invoice_subscription_id(event_object) or None
+        subscription_id = stripe_invoice_subscription_id(event_object)
+    else:
+        return {"received": True}
+    if not subscription_id:
+        return {"received": True}  # Includes one-off invoices.
+    try:
+        if not owner:
+            # Invoices may precede checkout completion. Our subscriptions carry
+            # their owner from checkout creation, independently of event order.
+            sub = stripe.Subscription.retrieve(subscription_id)
+            owner = stripe_object_value(stripe_object_value(sub, "metadata", {}) or {}, "user_id")
         user_id = resolve_supabase_user_id_for_stripe_event(
-            stripe_customer_id=customer_id,
-            stripe_subscription_id=subscription_id,
-        )
-        if user_id and subscription_id:
-            try:
-                subscription = stripe.Subscription.retrieve(subscription_id)
-                status = str(stripe_object_value(subscription, "status") or "")
-                cancel_at_period_end, current_period_end = subscription_cancellation(subscription)
-                synced = sync_user_plan_from_subscription(
-                    user_id,
-                    plan=plan_for_stripe_subscription(subscription),
-                    stripe_customer_id=customer_id,
-                    stripe_subscription_id=subscription_id,
-                    subscription_status=status,
-                    cancel_at_period_end=cancel_at_period_end,
-                    current_period_end=current_period_end,
-                )
-                if not synced:
-                    return JSONResponse({"received": False, "error": "Account update unavailable; retry."}, status_code=503)
-            except Exception as exc:
-                log_server_issue("Failed to sync invoice event subscription state", exc)
-                return JSONResponse({"received": False, "error": "Subscription sync unavailable; retry."}, status_code=503)
-
+            explicit_user_id=owner, stripe_customer_id=customer_id, stripe_subscription_id=subscription_id)
+        if not user_id:
+            raise RuntimeError("Unresolved billing account")
+        subscription, revision, prior_end = subscription_snapshot(user_id, subscription_id)
+        synced = sync_user_plan_from_subscription(
+            user_id, subscription=subscription, revision=revision, prior_end=prior_end, plan=plan_for_stripe_subscription(subscription))
+    except Exception as exc:
+        log_server_issue("Stripe billing synchronization unavailable", exc)
+        synced = False
+    if not synced:
+        return JSONResponse({"received": False, "error": "Subscription update pending; retry."}, status_code=503)
     return {"received": True}
 
 
