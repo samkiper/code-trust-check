@@ -4,6 +4,7 @@ Run with the installed Semgrep environment. The labels concern whether a
 high-severity finding is warranted in these snippets, not whether arbitrary
 software is safe. This small, authored set is not a statistical estimate.
 """
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -29,8 +30,8 @@ def assess(case, report):
             'rule_matched_expectation': rule_match, 'passed': passed}
 
 
-def evaluate():
-    cases = json.loads((ROOT / 'tests/evaluation/scanner_cases.json').read_text())
+def evaluate(cases_path=None):
+    cases = json.loads((cases_path or ROOT / 'tests/evaluation/scanner_cases.json').read_text())
     results = []
     for case in cases:
         report = analyze_code_product(case['intent'], case['code'], language=case['language'])
@@ -40,6 +41,9 @@ def evaluate():
 
 
 if __name__ == '__main__':
-    report = evaluate()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--cases', type=Path, help='Separate authored challenge set')
+    args = parser.parse_args()
+    report = evaluate(args.cases)
     print(json.dumps(report, indent=2))
     sys.exit(0 if report['cases'] and all(case['passed'] for case in report['cases']) else 1)
