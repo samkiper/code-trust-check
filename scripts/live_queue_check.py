@@ -163,13 +163,18 @@ def run(args, *, accounts=None, key=None):
                 any(k.lower() == "x-scan-rejection" and v == "capacity" for k, v in rejected[0][1][1].items()),
                 "Capacity pattern not observed; this run cannot pass live saturation.")
         checks.append("one_active_five_waiting_capacity_rejection")
-        _, duplicate = submit(0)
-        require(duplicate[0] == 409, "Duplicate active submission was not rejected.")
+        # The first short scan may finish while the burst traverses real HTTP/Auth.
+        # Target the tail of the queue, which is also the later cancellation target.
+        cancelled_owner, cancelled_job = max(accepted, key=lambda pair: pair[1].get("position", 0))
+        code, _, queued_state = api(cancelled_owner, "/scan-jobs/" + cancelled_job["id"])
+        require(code == 200 and queued_state["status"] == "queued",
+                "Queue drained before duplicate check; saturation timing is inconclusive.")
+        _, duplicate = submit(cancelled_owner)
+        require(duplicate[0] == 409, "Duplicate queued submission was not rejected.")
         for method in ("GET", "DELETE"):
             require(api(1, "/scan-jobs/" + first_id, method)[0] == 404, "Cross-account job isolation failed.")
         require(api(None, "/scan-jobs/" + first_id)[0] == 401, "Unauthenticated job read was not denied.")
         checks.append("duplicate_and_account_isolation")
-        cancelled_owner, cancelled_job = max(accepted, key=lambda pair: pair[1].get("position", 0))
         code, _, cancelled = api(cancelled_owner, "/scan-jobs/" + cancelled_job["id"], "DELETE")
         require(code == 200 and cancelled["status"] == "cancelled", "Queued cancellation raced with processing; check ledger.")
         retry_owner = rejected[0][0]
