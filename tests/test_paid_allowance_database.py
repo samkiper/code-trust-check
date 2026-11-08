@@ -62,6 +62,20 @@ class PaidAllowanceDatabaseTests(unittest.TestCase):
         for name in ('monthly_anniversary','paid_allowance_cycles'):
             self.sql((ROOT/'tests/sql'/f'{name}.sql').read_text())
 
+    def test_account_deletion_cleanup(self):
+        # The integration database already has real report/usage tables. Minimal
+        # unrelated tables keep this fixture independent of other feature suites.
+        self.sql('''create table if not exists public.repository_security_policies
+          (user_id uuid, repository text, enforcement_mode text, block_at text);
+          create table if not exists public.finding_suppressions
+          (user_id uuid, repository text, finding_id text, disposition text, reason text);
+          create table if not exists public.scan_usage_daily
+          (actor_key text, usage_date date, scan_count integer, plan text);
+          create table if not exists public.rate_limit_buckets
+          (bucket_key text, request_count integer);''')
+        self.sql(next((ROOT/'supabase/migrations').glob('*_account_deletion_cleanup.sql')).read_text())
+        self.sql((ROOT/'tests/sql/account_deletion.sql').read_text())
+
     def test_competing_reservations_and_delivery_versions(self):
         u = self.account()
         def reserve(_):

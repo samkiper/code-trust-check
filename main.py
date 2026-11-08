@@ -65,6 +65,17 @@ if os.getenv("AUDIT_ISOLATED_WORKER") != "1":
 
 app = FastAPI()
 
+from operations_alerts import Monitor
+OPERATIONS_MONITOR = Monitor()
+
+@app.on_event('startup')
+def start_operations_monitor():
+    OPERATIONS_MONITOR.start(lambda: supabase_rest_request('POST', 'rpc/aca_owner_monitoring_summary', payload={}))
+
+@app.on_event('shutdown')
+def stop_operations_monitor():
+    OPERATIONS_MONITOR.close()
+
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
@@ -776,7 +787,7 @@ def get_request_access_context(request: Request, access_token: str | None = None
 
     user, verified_with_supabase = fetch_supabase_user(access_token)
 
-    if not user:
+    if not user or (user.get('app_metadata') or {}).get('deletion_requested_at'):
         return access
 
     access["debug"]["user_fetch_succeeded"] = bool(verified_with_supabase)
@@ -5899,7 +5910,7 @@ async def create_billing_portal_session(request: Request):
 
     if not stripe_customer_id and stripe_subscription_id:
         try:
-            subscription = stripe.Subscription.retrieve(stripe_subscription_id)
+            subscription = stripe.Subscription.retrieve(stripe_subscription_id, expand=['latest_invoice'])
             stripe_customer_id = stripe_reference_id(stripe_object_value(subscription, "customer")) or None
         except Exception as exc:
             log_server_issue("Failed to resolve Stripe customer from subscription for billing portal", exc)
@@ -5908,9 +5919,21 @@ async def create_billing_portal_session(request: Request):
         raise HTTPException(status_code=400, detail="No active Stripe customer record was found for this account yet.")
 
     try:
+        from billing_portal import select_configuration, validate_configuration
+        portal_options = {}
+        if stripe_subscription_id:
+            subscription = stripe.Subscription.retrieve(stripe_subscription_id, expand=['latest_invoice'])
+            selected = select_configuration(subscription, stripe_customer_id, configured_checkout_prices(),
+                os.getenv('STRIPE_PORTAL_CONFIGURATIONS', '{}'))
+            if selected:
+                configuration_id, allowed_prices = selected
+                portal_options['configuration'] = validate_configuration(
+                    stripe.billing_portal.Configuration.retrieve(configuration_id,
+                        expand=['features.subscription_update.products']), allowed_prices)
         session = stripe.billing_portal.Session.create(
             customer=stripe_customer_id,
             return_url=f"{get_billing_return_url(request)}/account/billing",
+            **portal_options,
         )
     except Exception as exc:
         log_server_issue("Could not start Stripe billing portal", exc)
@@ -5986,6 +6009,7 @@ async def create_stripe_checkout_session(request: Request):
         "billing_address_collection": "required",
         "tax_id_collection": {"enabled": purchase_use == "business"},
         "allow_promotion_codes": False,
+        "custom_text": {"submit": {"message": "Your subscription renews automatically until canceled. Cancel in Account > Billing. By subscribing, you agree to our [terms and refund policy](https://aicodeaudit.org/terms) and acknowledge our [privacy notice](https://aicodeaudit.org/privacy)."}},
     }
 
     if existing_customer_id:
@@ -6323,6 +6347,7 @@ async def stripe_webhook(request: Request):
         log_server_issue("Stripe billing synchronization unavailable", exc)
         synced = False
     if not synced:
+        OPERATIONS_MONITOR.billing_failed()
         return JSONResponse({"received": False, "error": "Subscription update pending; retry."}, status_code=503)
     return {"received": True}
 
