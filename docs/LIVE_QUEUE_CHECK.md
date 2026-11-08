@@ -45,3 +45,29 @@ or printed. A failed run can still have consumed successful test scans.
 This check does not establish browser/Site-proxy behavior, queue durability
 across a server restart, or a load-capacity SLA. Keep those evidence scopes
 separate. No live pass should be claimed from local unit tests of this runner.
+
+## Disposable server-side fixtures
+
+When an authorized operator can use the service shell, the companion
+`scripts/live_queue_fixture.py` uses the existing `SUPABASE_URL` and
+`SUPABASE_SECRET_KEY` without exporting them. `RENDER_EXTERNAL_URL` selects the
+backend, or pass `--backend` explicitly. After approval for creation and permanent
+cleanup of seven disposable accounts, run:
+
+```sh
+python scripts/live_queue_fixture.py --run-live --delete-fixtures
+```
+
+It provisions seven empty, confirmed Free users under the reserved
+`example.invalid` domain through the Supabase Auth admin API. Passwords are
+random and remain in server memory. The inner test obtains ordinary user
+tokens with password sign-in; it does not impersonate users or bypass backend
+authentication. No invitation, confirmation, or other email is sent.
+
+Cleanup requires the exact returned UUID, generated email, unique app-metadata
+run marker, ordinary role, and Free plan. It removes only those fixtures' scan
+receipts and Auth accounts. It refuses cleanup while a reservation remains.
+An interrupted creation request can leave an untracked fixture: inspect the
+printed run marker before retrying. A killed process can also skip cleanup;
+independently verify the database after every run. This wrapper must never run
+as a web endpoint, startup hook, scheduled job, or normal deployment step.

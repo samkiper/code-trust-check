@@ -4,9 +4,21 @@ from pathlib import Path
 import tempfile
 import unittest
 from scripts.live_queue_check import CheckFailed, check_usage, load_accounts, validate_origin
+from scripts.live_queue_fixture import owns_fixture
 
 
 class LiveQueueCheckSafetyTests(unittest.TestCase):
+    def test_fixture_cleanup_requires_all_ownership_guards(self):
+        account = {"id": "test-uuid", "email": "test@example.invalid",
+                   "app_metadata": {"plan": "free", "aca_live_queue_run": "unique-run"}}
+        self.assertTrue(owns_fixture(account, "test-uuid", "test@example.invalid", "unique-run"))
+        for edited in ({**account, "id": "other"}, {**account, "email": "real@example.com"},
+                       {**account, "app_metadata": {"plan": "free"}},
+                       {**account, "app_metadata": {**account["app_metadata"], "plan": "pro"}},
+                       {**account, "app_metadata": {**account["app_metadata"], "role": "admin"}}):
+            with self.subTest(account=edited):
+                self.assertFalse(owns_fixture(edited, "test-uuid", "test@example.invalid", "unique-run"))
+
     def test_rejects_credential_redirect_destinations(self):
         for value in ("http://x.supabase.co", "https://x.supabase.co.evil.test",
                       "https://name@x.supabase.co", "https://x.supabase.co/path",

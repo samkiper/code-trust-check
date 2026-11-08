@@ -86,11 +86,12 @@ def check_usage(before, after, expected):
     require(after["pending"] == 0, "An allowance reservation is still pending.")
 
 
-def run(args):
+def run(args, *, accounts=None, key=None):
     backend = validate_origin(args.backend, ".onrender.com")
     auth = validate_origin(args.supabase, ".supabase.co")
-    accounts = load_accounts(args.credentials_file)
-    key = os.environ.get("ACA_TEST_PUBLISHABLE_KEY", "").strip()
+    if accounts is None:
+        accounts = load_accounts(args.credentials_file)
+    key = key or os.environ.get("ACA_TEST_PUBLISHABLE_KEY", "").strip()
     require(key, "Set ACA_TEST_PUBLISHABLE_KEY to the project's public client key.")
     tokens, identities, before, jobs, checks = [], set(), [], [], []
 
