@@ -41,7 +41,7 @@ class LiveQueueCheckSafetyTests(unittest.TestCase):
                 if owner in jobs and jobs[owner]["status"] in {"queued", "running"}:
                     duplicate_owners.append(owner)
                     return 409, {}, {}
-                if owner == 6 and jobs[5]["status"] != "cancelled":
+                if owner == 6 and jobs.get(5, {}).get("status") != "cancelled":
                     return 429, {"X-Scan-Rejection": "capacity"}, {}
                 if owner == 6: draining = True
                 # Real HTTP/auth delays allow the initial scan to finish before
@@ -59,7 +59,11 @@ class LiveQueueCheckSafetyTests(unittest.TestCase):
 
         args = argparse.Namespace(backend="https://test.onrender.com", supabase="https://test.supabase.co")
         accounts = [{"email": str(i), "password": "unused"} for i in range(7)]
-        with patch("scripts.live_queue_check.request", side_effect=response):
+        with patch("scripts.live_queue_check.request", side_effect=response), \
+                patch("scripts.live_queue_check.ThreadPoolExecutor") as executor:
+            # Force the rejecting customer to arrive before account 5 exists.
+            executor.return_value.__enter__.return_value.map.side_effect = (
+                lambda fn, items: [fn(i) for i in reversed(list(items))])
             result = run(args, accounts=accounts, key="unused-test-key")
         self.assertEqual(result["status"], "passed")
         self.assertEqual(duplicate_owners, [5])
