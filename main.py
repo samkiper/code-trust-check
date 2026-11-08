@@ -13,6 +13,7 @@ from billing_plans import subscription_plan, subscription_period_end, subscripti
 from functools import wraps
 import uuid
 from flow_review import supplemental_flows, literal_eval_locations
+from finding_context import fixed_cat_operand, annotate_operation_evidence
 import re
 import os
 import io
@@ -312,7 +313,7 @@ GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 # Interactive repository audits retain the existing, separately metered limits.
 GITHUB_PR_SCANS_ENABLED = False
 
-SCANNER_VERSION = 57
+SCANNER_VERSION = 58
 AUDIT_SCORE_HIGH_RISK_MAX = 65
 AUDIT_SCORE_REVIEW_MAX = 90
 
@@ -1253,7 +1254,7 @@ def build_action_verdict(risk: str, trust_score: int, insufficient: bool = False
         return {
             "id": "review_first",
             "label": "Review before running",
-            "action": "Confirm each flagged behavior is expected and apply the relevant fixes.",
+            "action": "Review the reported behavior in context. Make changes only where the evidence supports them.",
             "tone": "warning",
         }
     return {
@@ -1614,6 +1615,13 @@ def explain_flag(pattern: str, flag_type: str) -> str:
 
 
 def build_finding_guidance(pattern: str) -> dict:
+    if pattern == "dynamic_sql_execute":
+        return {
+            "why_risky": "Input inserted into SQL text can change query structure instead of remaining a data value.",
+            "what_to_check": "Trace the query construction and verify that values are bound separately.",
+            "when_legitimate": "Fixed SQL syntax with values passed through the database driver's parameter API.",
+            "suggested_fix": "Replace concatenated values with parameter placeholders and pass the values separately to execute().",
+        }
     if pattern in {"eval(", "exec(", "obfuscated_execution"}:
         return {
             "why_risky": "Executing generated or decoded code can let hidden behavior run immediately. If any part of that input is untrusted, this may become arbitrary code execution.",
@@ -3442,7 +3450,7 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
                 line=call.lineno,
                 flag_type="code_injection",
                 pattern=pattern,
-                message=f"Request-controlled data reaches {short_name}()",
+                message=f"User-controlled data reaches {short_name}()",
                 severity=38,
                 explanation=(
                     f"{short_name}() executes Python source. Parse the expected data format instead, "
@@ -3467,13 +3475,18 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
                 and call.args[0].elts[0].value in {"echo", "/bin/echo", "/usr/bin/echo"}
                 and not any(kw.arg == "executable" for kw in call.keywords)
             )
+            protected_filename = fixed_cat_operand(call, call_name)
             findings.append(make_flag(
                 line=call.lineno,
-                flag_type="command_injection",
+                flag_type="process_file_access" if protected_filename else "command_injection",
                 pattern="subprocess" if call_name.startswith("subprocess.") else "os.system",
-                message="Untrusted argument passed to a fixed echo command" if fixed_echo_argument else "Request-controlled data reaches a system command",
-                severity=10 if fixed_echo_argument else 38,
+                message="User-selected filename passed to cat without a shell" if protected_filename else "Untrusted argument passed to a fixed echo command" if fixed_echo_argument else "User-controlled data reaches a system command",
+                severity=5 if protected_filename else 10 if fixed_echo_argument else 38,
                 explanation=(
+                    "The fixed cat executable receives one filename after --, with shell interpretation disabled. "
+                    "Shell metacharacters are not executed and the filename is not parsed as an option. "
+                    "Review file-access permissions and executable resolution for the intended environment; this is not evidence of command injection."
+                    if protected_filename else
                     "External input reaches process arguments. An argument list without a shell does not interpret shell "
                     "metacharacters, but the invoked program may interpret untrusted values as options or other instructions. "
                     "Review the executable and validate its arguments."
@@ -3482,6 +3495,13 @@ def analyze_python_web_dataflow(tree: ast.AST, intent_lower: str) -> list[dict]:
                     "Use a fixed executable and a list of validated arguments, and avoid shell=True."
                 ),
             ))
+            if protected_filename:
+                findings[-1].update(
+                    why_risky="The selected file is read with the process's permissions; this does not establish unauthorized access.",
+                    what_to_check="Confirm the user may read the selected file and the expected cat executable is resolved.",
+                    when_legitimate="An interactive tool intentionally displaying a file chosen by its authorized user.",
+                    suggested_fix="Keep shell=False and the -- separator. Constrain permitted paths if this tool serves users with different file-access rights.",
+                )
         deserialization_sinks = {
             "pickle.loads", "pickle.load", "marshal.loads", "marshal.load", "dill.loads", "yaml.load"
         }
@@ -5453,7 +5473,7 @@ def analyze_code(intent: str, code: str, plan: str = "free") -> dict:
         behavior_summary.append("May decode hidden content and then execute it.")
 
     if mismatch_flags:
-        behavior_summary.append("Includes behavior that may not match the stated request.")
+        behavior_summary.append("Context questions remain; review the notes below. They do not establish an intent mismatch.")
 
     if not behavior_summary:
         behavior_summary.append("No obvious risky behavior was detected in this scan.")
@@ -5494,6 +5514,8 @@ def analyze_code_product(intent: str, code: str, plan: str = "free", filename: s
         finding["finding_id"] = hashlib.sha256(
             f"semgrep\0{finding.get('rule_id')}\0{finding.get('line')}\0{finding.get('message')}".encode("utf-8")
         ).hexdigest()[:20]
+    if filename.endswith(".py"):
+        annotate_operation_evidence(code, result.get("flags") or [], semgrep_findings)
     result["engine_findings"] = semgrep_findings
     result["analysis_engines"] = [
         {"name": "behavior", "status": "complete", "findings": len(result.get("flags") or [])},
@@ -8572,4 +8594,5 @@ async def ai_compare_review(request: Request):
     if not blocks: return private_json({'ok':True,'review':{'state':'not_rated','verdict':'unchanged','summary':'No source changes detected. No AI request or allowance was used.','changes':[],'limitations':[]}})
     if await request.is_disconnected(): raise HTTPException(499,'Comparison cancelled before submission.')
     return await run_in_threadpool(perform_ai_review,access,receipt,payload,blocks)
+
 

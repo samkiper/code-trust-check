@@ -84,7 +84,7 @@ def finalize_snippet(result, code, filename, semgrep):
     if high:
         result["risk"] = "red"
         if result["trust_score"] is not None: result["trust_score"] = min(result["trust_score"], 65)
-        result["verdict"] = {"id":"do_not_run", "label":"Do not run this yet", "action":"Fix the high-risk findings first, then scan the revised code again. Incomplete coverage may hide additional issues.", "tone":"danger"}
+        result["verdict"] = {"id":"do_not_run", "label":"Do not run this yet", "action":"Fix the high-risk findings first, then scan the revised code again. " + ("Incomplete checks may hide additional issues." if status != "complete" else "Completed checks do not prove safety."), "tone":"danger"}
     elif medium:
         result["risk"] = "yellow"
         if result["trust_score"] is not None: result["trust_score"] = min(result["trust_score"], 90)
@@ -100,3 +100,4 @@ def finalize_snippet(result, code, filename, semgrep):
     if status != "complete": result["trust_score"] = None
     result["trust_badge"] = {"label":result["verdict"]["label"], "message":result["verdict"]["action"], "color":"red" if high else "gray" if status != "complete" else "yellow" if medium else "green"}
     return result
+
