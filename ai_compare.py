@@ -53,6 +53,16 @@ Security impacts must be grounded in source, data flow and destination evidence.
 variable reads, comments, expected network calls and fixed commands with shell=False are not
 by themselves vulnerabilities. eval executes code expressions, not necessarily OS commands.
 Identify removed authentication/authorization checks and credential exfiltration where supported.
+Evaluate scope/correctness separately from security. An unrelated edit, changed arithmetic,
+wrong label, ordinary bug, or missing caller does not by itself demonstrate a security issue.
+Use none_observed when no concrete security-relevant change is evidenced; this is not a
+safe-code certification. Do not use uncertain merely because full application context is
+missing. Use uncertain only when an identified security-sensitive flow or control changed
+but its security effect cannot be determined from the supplied source, and explain why.
+For possible_regression or possible_improvement, explain the specific affected security
+control or untrusted-input-to-sensitive-operation flow. Arithmetic and business logic CAN
+be security relevant when the source connects them to authorization, payment enforcement,
+resource limits, or another concrete security boundary; do not dismiss those changes.
 Select before_evidence and after_evidence using an exact evidence ID from that change's
 provided before_evidence_options and after_evidence_options (empty string only for an empty
 side). These fields contain IDs, never retyped code. Choose the excerpt that supports your

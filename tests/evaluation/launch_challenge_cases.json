@@ -1,0 +1,86 @@
+[
+  {
+    "id": "arithmetic-not-security",
+    "language": "Python",
+    "intent": "Calculate a shopping subtotal.",
+    "code": "def subtotal(price, quantity):\n    return price + quantity",
+    "dangerous": false
+  },
+  {
+    "id": "off-by-one-not-security",
+    "language": "Python",
+    "intent": "Return a sequence.",
+    "code": "def sequence(n):\n    return list(range(n+1))",
+    "dangerous": false
+  },
+  {
+    "id": "sql-concatenation",
+    "language": "Python",
+    "intent": "Find the account by a user-supplied name.",
+    "code": "from flask import request\nname = request.args[\"name\"]\ncursor.execute(\"SELECT * FROM accounts WHERE name = '\" + name + \"'\")",
+    "dangerous": true
+  },
+  {
+    "id": "sql-parameters",
+    "language": "Python",
+    "intent": "Find the account by a user-supplied name.",
+    "code": "from flask import request\nname = request.args[\"name\"]\ncursor.execute(\"SELECT * FROM accounts WHERE name = ?\", (name,))",
+    "dangerous": false
+  },
+  {
+    "id": "shell-from-request",
+    "language": "Python",
+    "intent": "Look up a user-supplied hostname.",
+    "code": "import subprocess\nfrom flask import request\nsubprocess.run(\"nslookup \" + request.args[\"host\"], shell=True)",
+    "dangerous": true
+  },
+  {
+    "id": "fixed-argv",
+    "language": "Python",
+    "intent": "Show the current directory.",
+    "code": "import subprocess\nsubprocess.run([\"pwd\"], shell=False, check=True)",
+    "dangerous": false
+  },
+  {
+    "id": "eval-user-input",
+    "language": "Python",
+    "intent": "Calculate a user-entered expression.",
+    "code": "expression = input(\"Expression: \")\nprint(eval(expression))",
+    "dangerous": true
+  },
+  {
+    "id": "eval-comment-only",
+    "language": "Python",
+    "intent": "Print a fixed greeting.",
+    "code": "# Never use eval(input()) here.\nprint(\"Welcome\")",
+    "dangerous": false
+  },
+  {
+    "id": "javascript-text",
+    "language": "JavaScript",
+    "intent": "Display a query parameter.",
+    "code": "const query = new URLSearchParams(window.location.search).get(\"message\");\ndocument.getElementById(\"output\").textContent = query;",
+    "dangerous": false
+  },
+  {
+    "id": "javascript-html",
+    "language": "JavaScript",
+    "intent": "Display a query parameter.",
+    "code": "const query = new URLSearchParams(window.location.search).get(\"message\");\ndocument.getElementById(\"output\").innerHTML = query;",
+    "dangerous": true
+  },
+  {
+    "id": "public-status-post",
+    "language": "Python",
+    "intent": "Post a public status without secrets.",
+    "code": "import requests\nrequests.post(\"https://example.org/status\", json={\"status\":\"ready\"}, timeout=3)",
+    "dangerous": false
+  },
+  {
+    "id": "secret-status-post",
+    "language": "Python",
+    "intent": "Post a public status without secrets.",
+    "code": "import os, requests\nrequests.post(\"https://example.org/status\", json={\"status\":os.getenv(\"API_KEY\")}, timeout=3)",
+    "dangerous": true
+  }
+]
