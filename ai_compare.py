@@ -63,6 +63,11 @@ For possible_regression or possible_improvement, explain the specific affected s
 control or untrusted-input-to-sensitive-operation flow. Arithmetic and business logic CAN
 be security relevant when the source connects them to authorization, payment enforcement,
 resource limits, or another concrete security boundary; do not dismiss those changes.
+Routine reliability improvements (for example, adding a timeout to a fixed public health
+check) are not security improvements without evidence connecting them to a security threat.
+Describe their reliability benefit in the explanation and use none_observed. Before assigning
+any non-none security label, check that the explanation actually states the security reason;
+if it only describes the edit or ordinary behavior, use none_observed instead.
 Select before_evidence and after_evidence using an exact evidence ID from that change's
 provided before_evidence_options and after_evidence_options (empty string only for an empty
 side). These fields contain IDs, never retyped code. Choose the excerpt that supports your
