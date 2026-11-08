@@ -3,11 +3,22 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 from scripts.live_queue_check import CheckFailed, check_usage, load_accounts, validate_origin
-from scripts.live_queue_fixture import owns_fixture
+from scripts.live_queue_fixture import owns_fixture, fixture_password
 
 
 class LiveQueueCheckSafetyTests(unittest.TestCase):
+    def test_password_policy_holds_even_when_random_part_has_one_character_class(self):
+        with patch("scripts.live_queue_fixture.secrets.token_urlsafe", return_value="x" * 43) as random_token:
+            password = fixture_password()
+        random_token.assert_called_once_with(32)
+        self.assertGreaterEqual(len(password), 32)
+        self.assertTrue(any(c.islower() for c in password))
+        self.assertTrue(any(c.isupper() for c in password))
+        self.assertTrue(any(c.isdigit() for c in password))
+        self.assertIn("!", password)
+
     def test_fixture_cleanup_requires_all_ownership_guards(self):
         account = {"id": "test-uuid", "email": "test@example.invalid",
                    "app_metadata": {"plan": "free", "aca_live_queue_run": "unique-run"}}

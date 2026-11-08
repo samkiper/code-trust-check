@@ -18,6 +18,11 @@ except ModuleNotFoundError:
     from live_queue_check import CheckFailed, request, require, run, validate_origin
 
 
+def fixture_password():
+    # Preserve 256 random bits while guaranteeing every configured character class.
+    return secrets.token_urlsafe(32) + "aA1!"
+
+
 def owns_fixture(user, uid, email, marker):
     return (user.get("id") == uid and user.get("email") == email and
             user.get("app_metadata", {}).get("aca_live_queue_run") == marker and
@@ -42,7 +47,7 @@ def execute(args):
         require(request(backend, "/health")[0] == 200, "Backend health preflight failed.")
         for index in range(7):
             email = f"queue-{marker}-{index}@example.invalid"
-            password = secrets.token_urlsafe(32)
+            password = fixture_password()
             code, _, user = admin("/auth/v1/admin/users", "POST", {
                 "email": email, "password": password, "email_confirm": True,
                 "app_metadata": {"plan": "free", "aca_live_queue_run": marker},
