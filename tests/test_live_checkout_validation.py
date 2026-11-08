@@ -1,4 +1,5 @@
 import unittest
+import stripe
 from unittest.mock import Mock
 from scripts.live_checkout_validation import expire_pending, verify_session
 
@@ -22,6 +23,7 @@ class LiveCheckoutValidationTests(unittest.TestCase):
                    'tax_id_collection':{'enabled':True},'metadata':{'purchase_use':'business'},
                    'line_items':{'data':[{'quantity':1,'price':{'id':'price_test'}}]}}
         verify_session(session,'cus_test','price_test','business')
+        verify_session(stripe.StripeObject.construct_from(session, None),'cus_test','price_test','business')
         for changed in ({'status':'complete'}, {'subscription':'sub_unexpected'}, {'customer':'cus_wrong'}, {'automatic_tax':{'enabled':False}}):
             with self.assertRaises(AssertionError):
                 verify_session({**session,**changed},'cus_test','price_test','business')
@@ -34,6 +36,7 @@ class LiveCheckoutValidationTests(unittest.TestCase):
                    'metadata':{'purchase_use':'personal'},
                    'line_items':{'data':[{'quantity':1,'price':{'id':'price_test'}}]}}
         for collection in ({}, {'tax_id_collection':None}, {'tax_id_collection':{'enabled':False}}):
-            verify_session({**session, **collection},'cus_test','price_test','personal')
-            with self.assertRaises(AssertionError):
-                verify_session({**session, **collection, 'metadata':{'purchase_use':'business'}},'cus_test','price_test','business')
+            for convert in (lambda value: value, lambda value: stripe.StripeObject.construct_from(value, None)):
+                verify_session(convert({**session, **collection}),'cus_test','price_test','personal')
+                with self.assertRaises(AssertionError):
+                    verify_session(convert({**session, **collection, 'metadata':{'purchase_use':'business'}}),'cus_test','price_test','business')
