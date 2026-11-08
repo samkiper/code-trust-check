@@ -27,3 +27,13 @@ class LiveCheckoutValidationTests(unittest.TestCase):
                 verify_session({**session,**changed},'cus_test','price_test','business')
         with self.assertRaises(AssertionError):
             verify_session(session,'cus_test','wrong','business')
+
+    def test_omitted_tax_id_collection_is_valid_only_for_personal_use(self):
+        session = {'livemode':True,'status':'open','mode':'subscription','subscription':None,
+                   'customer':'cus_test','automatic_tax':{'enabled':True},'billing_address_collection':'required',
+                   'metadata':{'purchase_use':'personal'},
+                   'line_items':{'data':[{'quantity':1,'price':{'id':'price_test'}}]}}
+        for collection in ({}, {'tax_id_collection':None}, {'tax_id_collection':{'enabled':False}}):
+            verify_session({**session, **collection},'cus_test','price_test','personal')
+            with self.assertRaises(AssertionError):
+                verify_session({**session, **collection, 'metadata':{'purchase_use':'business'}},'cus_test','price_test','business')

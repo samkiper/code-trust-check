@@ -22,7 +22,8 @@ def verify_session(session, customer, price, use):
     assert session['customer'] == customer
     assert session['automatic_tax']['enabled'] is True
     assert session['billing_address_collection'] == 'required'
-    assert session['tax_id_collection']['enabled'] == (use == 'business')
+    # Stripe omits tax_id_collection when collection is disabled.
+    assert (session.get('tax_id_collection') or {}).get('enabled', False) == (use == 'business')
     assert session['metadata']['purchase_use'] == use
     lines = session['line_items']['data']
     assert len(lines) == 1 and lines[0]['quantity'] == 1
