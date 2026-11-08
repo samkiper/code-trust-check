@@ -5992,6 +5992,8 @@ async def create_stripe_checkout_session(request: Request):
         checkout_kwargs["customer"] = existing_customer_id
         checkout_kwargs["billing_address_collection"] = "required"
         checkout_kwargs["customer_update"] = {"address": "auto"}
+        if purchase_use == "business":
+            checkout_kwargs["customer_update"]["name"] = "auto"
     else:
         checkout_kwargs["customer_email"] = str(access["email"])
 
