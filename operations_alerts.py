@@ -54,7 +54,9 @@ def send_alert(kind, now=None):
     body = json.dumps({'from': sender, 'to': [recipient], 'subject': f'AI Code Audit: {kind}',
         'text': MESSAGES[kind]+'\n\nReview: https://dashboard.render.com/ and https://platform.openai.com/usage\nNo code, credentials or customer identifiers are included in this alert.'}).encode()
     request = urllib.request.Request('https://api.resend.com/emails', data=body, method='POST',
-        headers={'Authorization': 'Bearer '+api_key, 'Content-Type': 'application/json', 'Idempotency-Key': key})
+        # Required by Resend's direct HTTP API; identify our application honestly.
+        headers={'Authorization': 'Bearer '+api_key, 'Content-Type': 'application/json',
+                 'User-Agent': 'AI-Code-Audit/1.0', 'Idempotency-Key': key})
     with urllib.request.urlopen(request, timeout=15) as response:
         result = json.load(response)
     if not result.get('id'):
