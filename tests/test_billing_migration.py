@@ -95,12 +95,13 @@ class NormalBillingRouteTests(unittest.TestCase):
   self.stack.enter_context(patch.object(main,'STRIPE_SECRET_KEY','test'))
   self.stack.enter_context(patch.object(main,'STRIPE_PRICE_ID','price_test'))
   self.stack.enter_context(patch.object(main,'PURCHASES_ENABLED',True))
+  self.stack.enter_context(patch.object(main.stripe.Price,'retrieve',return_value={'active':True,'livemode':True,'tax_behavior':'exclusive','product':{'active':True,'tax_code':'txcd_10103000'},'unit_amount':1900,'currency':'usd','recurring':{'interval':'month','interval_count':1}}))
   self.client=TestClient(main.app)
   self.headers={'X-Audit-Return-Origin':'https://aicodeaudit.org'}
  def test_checkout_returns_to_billing_verification_page(self):
   from types import SimpleNamespace
   with patch.object(main.stripe.checkout.Session,'create',return_value=SimpleNamespace(url='https://checkout.stripe.com/test',id='cs_test_example')) as create:
-   response=self.client.post('/stripe/create-checkout-session',headers=self.headers)
+   response=self.client.post('/stripe/create-checkout-session',json={'use':'personal'},headers=self.headers)
    self.assertEqual(response.status_code,200)
    args=create.call_args.kwargs
    self.assertEqual(args['success_url'],'https://aicodeaudit.org/account/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}')
@@ -112,7 +113,7 @@ class NormalBillingRouteTests(unittest.TestCase):
  def test_new_customer_checkout_enables_tax(self):
   from types import SimpleNamespace
   with patch.object(main,'get_supabase_admin_user',return_value={'app_metadata':{}}),patch.object(main.stripe.checkout.Session,'create',return_value=SimpleNamespace(url='https://checkout.stripe.com/test',id='cs_test_example')) as create:
-   response=self.client.post('/stripe/create-checkout-session',headers=self.headers)
+   response=self.client.post('/stripe/create-checkout-session',json={'use':'personal'},headers=self.headers)
    self.assertEqual(response.status_code,200)
    self.assertEqual(create.call_args.kwargs['automatic_tax'],{'enabled':True})
    self.assertEqual(create.call_args.kwargs['customer_email'],'customer@example.com')
@@ -136,39 +137,39 @@ class ControlledCheckoutTests(NormalBillingRouteTests):
   self.stack.enter_context(patch.object(main,'PURCHASES_ENABLED',False))
   self.stack.enter_context(patch.object(main,'CONTROLLED_CHECKOUT_USER_ID','customer_user'))
   self.stack.enter_context(patch.object(main,'CONTROLLED_CHECKOUT_EXPIRES_AT','9999999999'))
-  self.stack.enter_context(patch.object(main.stripe.Price,'retrieve',return_value={'active':True,'livemode':True,'unit_amount':1900,'currency':'usd','recurring':{'interval':'month','interval_count':1}}))
+  self.stack.enter_context(patch.object(main.stripe.Price,'retrieve',return_value={'active':True,'livemode':True,'tax_behavior':'exclusive','product':{'active':True,'tax_code':'txcd_10103000'},'unit_amount':1900,'currency':'usd','recurring':{'interval':'month','interval_count':1}}))
  def test_unlisted_and_expired_users_cannot_create_session(self):
   for name,value in [('CONTROLLED_CHECKOUT_USER_ID','other_user'),('CONTROLLED_CHECKOUT_EXPIRES_AT','0'),('CONTROLLED_CHECKOUT_EXPIRES_AT','invalid')]:
    with patch.object(main,name,value),patch.object(main.stripe.checkout.Session,'create') as create:
-    self.assertEqual(self.client.post('/stripe/create-checkout-session',headers=self.headers).status_code,503)
+    self.assertEqual(self.client.post('/stripe/create-checkout-session',json={'use':'personal'},headers=self.headers).status_code,503)
     create.assert_not_called()
  def test_controlled_annual_pro_requires_annual_interval_and_exact_price(self):
   from types import SimpleNamespace
-  price={'active':True,'livemode':True,'unit_amount':19000,'currency':'usd','recurring':{'interval':'year','interval_count':1}}
+  price={'active':True,'livemode':True,'tax_behavior':'exclusive','product':{'active':True,'tax_code':'txcd_10103000'},'unit_amount':19000,'currency':'usd','recurring':{'interval':'year','interval_count':1}}
   with patch.dict(os.environ,{'CONTROLLED_CHECKOUT_PLAN':'pro','CONTROLLED_CHECKOUT_INTERVAL':'year','STRIPE_PRO_ANNUAL_PRICE_ID':'price_pro_year'}),patch.object(main.stripe.Price,'retrieve',return_value=price),patch.object(main.stripe.checkout.Session,'create',return_value=SimpleNamespace(url='https://checkout.stripe.com/test',id='cs_test_annual')) as create:
-   response=self.client.post('/stripe/create-checkout-session',json={'plan':'pro','interval':'year'},headers=self.headers)
+   response=self.client.post('/stripe/create-checkout-session',json={'use':'personal','plan':'pro','interval':'year'},headers=self.headers)
    self.assertEqual(response.status_code,200)
    self.assertEqual(create.call_args.kwargs['line_items'],[{'price':'price_pro_year','quantity':1}])
    create.reset_mock()
-   self.assertEqual(self.client.post('/stripe/create-checkout-session',json={'plan':'pro','interval':'month'},headers=self.headers).status_code,503)
+   self.assertEqual(self.client.post('/stripe/create-checkout-session',json={'use':'personal','plan':'pro','interval':'month'},headers=self.headers).status_code,503)
    create.assert_not_called()
  def test_wrong_price_never_creates_checkout(self):
   with patch.object(main.stripe.Price,'retrieve',return_value={'unit_amount':6900}),patch.object(main.stripe.checkout.Session,'create') as create:
-   self.assertEqual(self.client.post('/stripe/create-checkout-session',headers=self.headers).status_code,503)
+   self.assertEqual(self.client.post('/stripe/create-checkout-session',json={'use':'personal'},headers=self.headers).status_code,503)
    create.assert_not_called()
  def test_retries_use_same_idempotency_key(self):
   from types import SimpleNamespace
   with patch.object(main.stripe.checkout.Session,'create',return_value=SimpleNamespace(url='https://checkout.stripe.com/test',id='cs_test_example')) as create:
-   for _ in range(2):self.assertEqual(self.client.post('/stripe/create-checkout-session',headers=self.headers).status_code,200)
+   for _ in range(2):self.assertEqual(self.client.post('/stripe/create-checkout-session',json={'use':'personal'},headers=self.headers).status_code,200)
    self.assertEqual(create.call_args_list[0].kwargs['idempotency_key'],create.call_args_list[1].kwargs['idempotency_key'])
  def test_controlled_serious_accepts_only_approved_monthly_price(self):
   from types import SimpleNamespace
-  price={'active':True,'livemode':True,'unit_amount':6900,'currency':'usd','recurring':{'interval':'month','interval_count':1}}
+  price={'active':True,'livemode':True,'tax_behavior':'exclusive','product':{'active':True,'tax_code':'txcd_10103000'},'unit_amount':6900,'currency':'usd','recurring':{'interval':'month','interval_count':1}}
   with patch.dict(os.environ,{'CONTROLLED_CHECKOUT_PLAN':'serious','STRIPE_SERIOUS_PRICE_ID':'price_serious','STRIPE_SERIOUS_ANNUAL_PRICE_ID':'price_annual'}),patch.object(main.stripe.Price,'retrieve',return_value=price),patch.object(main.stripe.checkout.Session,'create',return_value=SimpleNamespace(url='https://checkout.stripe.com/test',id='cs_test_serious')) as create:
-   response=self.client.post('/stripe/create-checkout-session',json={'plan':'serious','interval':'month'},headers=self.headers)
+   response=self.client.post('/stripe/create-checkout-session',json={'use':'personal','plan':'serious','interval':'month'},headers=self.headers)
    self.assertEqual(response.status_code,200)
    self.assertEqual(create.call_args.kwargs['line_items'],[{'price':'price_serious','quantity':1}])
    create.reset_mock()
    for selection in [{'plan':'pro'},{'plan':'serious','interval':'year'}]:
-    self.assertEqual(self.client.post('/stripe/create-checkout-session',json=selection,headers=self.headers).status_code,503)
+    self.assertEqual(self.client.post('/stripe/create-checkout-session',json={**selection,'use':'personal'},headers=self.headers).status_code,503)
    create.assert_not_called()

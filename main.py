@@ -5721,13 +5721,31 @@ def plan_from_subscription_status(
     return "free"
 
 
+CHECKOUT_TAX_CODES = {'personal': 'txcd_10103000', 'business': 'txcd_10103001'}
+
+
+def configured_checkout_prices():
+    personal = [('pro','month',1900,STRIPE_PRICE_ID),
+        ('pro','year',19000,os.getenv('STRIPE_PRO_ANNUAL_PRICE_ID','')),
+        ('serious','month',6900,os.getenv('STRIPE_SERIOUS_PRICE_ID','')),
+        ('serious','year',69000,os.getenv('STRIPE_SERIOUS_ANNUAL_PRICE_ID',''))]
+    choices=[]
+    for plan,interval,amount,price in personal:
+        choices.append((plan,interval,amount,'personal',price.strip()))
+        suffix='ANNUAL_PRICE_ID' if interval=='year' else 'PRICE_ID'
+        business=os.getenv(f'STRIPE_{plan.upper()}_BUSINESS_{suffix}','').strip()
+        choices.append((plan,interval,amount,'business',business))
+    return choices
+
+
 def plan_for_stripe_subscription(subscription):
-    prices={STRIPE_PRICE_ID:'pro'}
-    annual_pro=os.getenv('STRIPE_PRO_ANNUAL_PRICE_ID','').strip()
-    if annual_pro:prices[annual_pro]='pro'
-    for key in ('STRIPE_SERIOUS_PRICE_ID','STRIPE_SERIOUS_ANNUAL_PRICE_ID'):
-        price_id=os.getenv(key,'').strip()
-        if price_id and price_id not in prices:prices[price_id]='serious'
+    prices={}
+    conflicts=set()
+    for plan,interval,amount,use,price in configured_checkout_prices():
+        if not price:continue
+        if price in prices and prices[price]!=plan:conflicts.add(price)
+        prices[price]=plan
+    for price in conflicts:prices.pop(price,None)
     return subscription_plan(subscription,prices)
 
 
@@ -5735,11 +5753,12 @@ def checkout_offers(access):
     if not access.get('authenticated') or access.get('plan','free') != 'free' or access.get('role') == 'admin':return []
     controlled=controlled_checkout_allowed(access)
     if not PURCHASES_ENABLED and not controlled:return []
-    choices=[('pro','month',1900,STRIPE_PRICE_ID),('pro','year',19000,os.getenv('STRIPE_PRO_ANNUAL_PRICE_ID','')),('serious','month',6900,os.getenv('STRIPE_SERIOUS_PRICE_ID','')),('serious','year',69000,os.getenv('STRIPE_SERIOUS_ANNUAL_PRICE_ID',''))]
     allowed_plan=os.getenv('CONTROLLED_CHECKOUT_PLAN','pro')
     allowed_interval=os.getenv('CONTROLLED_CHECKOUT_INTERVAL','month')
-    return [{'plan':plan,'interval':interval,'amount':amount,'controlled':not PURCHASES_ENABLED}
-            for plan,interval,amount,price in choices if price and (PURCHASES_ENABLED or plan==allowed_plan and interval==allowed_interval)]
+    allowed_use=os.getenv('CONTROLLED_CHECKOUT_USE','personal')
+    return [{'plan':plan,'interval':interval,'amount':amount,'use':use,'controlled':not PURCHASES_ENABLED}
+            for plan,interval,amount,use,price in configured_checkout_prices()
+            if price and (PURCHASES_ENABLED or (plan,interval,use)==(allowed_plan,allowed_interval,allowed_use))]
 
 
 def get_supabase_admin_user_by_metadata_field(field_name: str, field_value: str) -> dict | None:
@@ -5930,11 +5949,15 @@ async def create_stripe_checkout_session(request: Request):
         raise HTTPException(400,'Choose a valid subscription plan.')
     if not isinstance(selection,dict):raise HTTPException(400,'Choose a valid subscription plan.')
     selected_plan=selection.get('plan','pro');interval=selection.get('interval','month')
-    if selected_plan not in {'pro','serious'} or interval not in {'month','year'}:
+    if not isinstance(selected_plan,str) or not isinstance(interval,str) or selected_plan not in {'pro','serious'} or interval not in {'month','year'}:
         raise HTTPException(400,'Choose an available subscription plan.')
-    selected_price=(os.getenv('STRIPE_PRO_ANNUAL_PRICE_ID','').strip() if interval=='year' else STRIPE_PRICE_ID) if selected_plan=='pro' else os.getenv('STRIPE_SERIOUS_ANNUAL_PRICE_ID' if interval=='year' else 'STRIPE_SERIOUS_PRICE_ID','').strip()
-    if not selected_price:raise HTTPException(503,'This subscription plan is not available yet.')
-    if not PURCHASES_ENABLED and (selected_plan!=os.getenv('CONTROLLED_CHECKOUT_PLAN','pro') or interval!=os.getenv('CONTROLLED_CHECKOUT_INTERVAL','month')):
+    purchase_use=selection.get('use')
+    if not isinstance(purchase_use,str) or purchase_use not in CHECKOUT_TAX_CODES:
+        raise HTTPException(400,'Choose personal projects or business/work projects before checkout.')
+    selected_price=next((price for plan,term,amount,use,price in configured_checkout_prices()
+                         if (plan,term,use)==(selected_plan,interval,purchase_use)), '')
+    if not selected_price:raise HTTPException(503,'This subscription option is not available yet.')
+    if not PURCHASES_ENABLED and (selected_plan,interval,purchase_use)!=(os.getenv('CONTROLLED_CHECKOUT_PLAN','pro'),os.getenv('CONTROLLED_CHECKOUT_INTERVAL','month'),os.getenv('CONTROLLED_CHECKOUT_USE','personal')):
         raise HTTPException(503,'This plan is not enabled for the controlled checkout.')
     expected_amount=(19000 if interval=='year' else 1900) if selected_plan=='pro' else 69000 if interval=='year' else 6900
     current_user = get_supabase_admin_user(str(access["user_id"])) or {}
@@ -5951,13 +5974,17 @@ async def create_stripe_checkout_session(request: Request):
         "metadata": {
             "user_id": str(access["user_id"]),
             "user_email": str(access["email"]),
+            "purchase_use": purchase_use,
         },
         "subscription_data": {
             "metadata": {
                 "user_id": str(access["user_id"]),
                 "user_email": str(access["email"]),
+                "purchase_use": purchase_use,
             }
         },
+        "billing_address_collection": "required",
+        "tax_id_collection": {"enabled": purchase_use == "business"},
         "allow_promotion_codes": False,
     }
 
@@ -5968,15 +5995,26 @@ async def create_stripe_checkout_session(request: Request):
     else:
         checkout_kwargs["customer_email"] = str(access["email"])
 
+    # Validate all checkout paths; an incorrect environment ID must fail closed.
+    try:
+        price = stripe.Price.retrieve(selected_price, expand=['product'])
+    except Exception as exc:
+        raise HTTPException(503, "Could not verify the subscription price and tax category.") from exc
+    recurring = stripe_object_value(price, "recurring", {}) or {}
+    product = stripe_object_value(price, "product", {}) or {}
+    tax_code = stripe_object_value(product, "tax_code")
+    if not isinstance(tax_code,str):tax_code=stripe_object_value(tax_code,'id')
+    if not (stripe_object_value(price,"active") and stripe_object_value(price,"livemode")
+            and stripe_object_value(price,"unit_amount")==expected_amount
+            and stripe_object_value(price,"currency")=="usd"
+            and stripe_object_value(price,"tax_behavior")=="exclusive"
+            and stripe_object_value(recurring,"interval")==interval
+            and stripe_object_value(recurring,"interval_count")==1
+            and stripe_object_value(product,"active")
+            and tax_code==CHECKOUT_TAX_CODES[purchase_use]):
+        raise HTTPException(503,"The subscription price or tax category needs verification. Contact support.")
     if not PURCHASES_ENABLED:
-        try:
-            price = stripe.Price.retrieve(selected_price)
-        except Exception as exc:
-            raise HTTPException(503, "Could not verify the controlled checkout price.") from exc
-        recurring = stripe_object_value(price, "recurring", {}) or {}
-        if not (stripe_object_value(price, "active") and stripe_object_value(price, "livemode") and stripe_object_value(price, "unit_amount") == expected_amount and stripe_object_value(price, "currency") == "usd" and stripe_object_value(recurring, "interval") == interval and stripe_object_value(recurring, "interval_count") == 1):
-            raise HTTPException(503, "Controlled checkout requires the approved live price and billing interval.")
-        checkout_kwargs["idempotency_key"] = f"controlled-{access['user_id']}-{selected_plan}-{interval}-{CONTROLLED_CHECKOUT_EXPIRES_AT}"
+        checkout_kwargs["idempotency_key"] = f"controlled-{access['user_id']}-{selected_plan}-{interval}-{purchase_use}-{CONTROLLED_CHECKOUT_EXPIRES_AT}"
 
     try:
         session = stripe.checkout.Session.create(**checkout_kwargs)
