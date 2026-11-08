@@ -1,11 +1,32 @@
 # Monthly allowances and queue
 
-Free: 20 total / 2 repository scans; 2,000 pasted lines; 20 repository files.
-Pro: 300 total / 20 repository scans; 10,000 pasted lines; 50 repository files.
-UTC calendar months, not rolling windows or subscription billing periods.
-Admin remains exempt. Plans come only from server-verified app metadata.
+Current limits come from `plan_catalog.json` and are independently enforced by
+the service-only database reservation functions.
 
-Prerequisite: apply supabase/monthly_usage.sql before deploying main.py.
+| Plan | Monthly scans | Repository scans (included in total) | AI reviews | Pasted lines | Repository files |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Free | 5 | 1 | 0 | 2,000 | 20 |
+| Pro | 75 | 10 | 25 | 20,000 | 100 |
+| Serious | 300 | 40 | 100 | 200,000 | 500 |
+
+Free cycles follow account creation. Upgrading from Free starts a new monthly
+allowance cycle at the verified paid subscription start. Annual subscriptions
+still receive monthly allowances. Continuous paid-tier changes preserve the
+cycle anchor and usage while applying the new tier limits. Canceling renewal
+preserves paid access through the paid period end; a new paid subscription
+after access ends starts a new cycle. Month-end boundaries clamp to the last
+valid day and remain anchored to the original date, using UTC.
+
+Plans and anchors come from server-verified billing metadata. Billing changes
+and reservations share the account transaction lock. Duplicate/out-of-order
+Stripe deliveries reconcile current subscription state; displaced contracts
+cannot regain control. Existing paid accounts retain applicable usage during
+anchor backfill. A request belongs to the entitlement generation at reservation.
+
+Apply the ordered `supabase/migrations/` history, including
+`20261106225631_paid_allowance_cycles.sql`; the legacy monthly SQL file alone
+is not the current schema. Admin remains exempt.
+
 Monthly usage is an atomic, service-only Postgres RPC. Reservations count while
 analysis is running, then settle idempotently. Failed, unrated, invalid, rejected,
 and queued-cancelled requests do not consume scans. Complete/useful partial
