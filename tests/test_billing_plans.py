@@ -142,3 +142,21 @@ class PurchaseUseTests(unittest.TestCase):
             with self.subTest(price=bad),patch.object(main.stripe.Price,'retrieve',return_value=bad):
                 self.assertEqual(client.post('/stripe/create-checkout-session',json={'use':'business'}).status_code,503)
         create.assert_not_called()
+
+
+class ReturningBusinessCustomerTests(unittest.TestCase):
+    setUp = PriceEntitlementTests.setUp
+    checkout_context = PurchaseUseTests.checkout_context
+    def test_existing_customer_collects_business_name_only_for_business_use(self):
+        client,create,_=self.checkout_context()
+        with patch.object(main,'get_supabase_admin_user',return_value={'app_metadata':{'stripe_customer_id':'cus_returning'}}):
+            for use in ('personal','business'):
+                response=client.post('/stripe/create-checkout-session',json={'use':use})
+                self.assertEqual(response.status_code,200)
+                args=create.call_args.kwargs
+                self.assertEqual(args['customer'],'cus_returning')
+                self.assertNotIn('customer_email',args)
+                self.assertEqual(args['tax_id_collection'],{'enabled':use=='business'})
+                expected={'address':'auto'}
+                if use=='business':expected['name']='auto'
+                self.assertEqual(args['customer_update'],expected)
