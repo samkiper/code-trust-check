@@ -17,6 +17,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 def verify_session(session, customer, price, use):
+    if not isinstance(session, dict):
+        session = session.to_dict()
     assert session['livemode'] and session['status'] == 'open'
     assert session['mode'] == 'subscription' and session['subscription'] is None
     assert session['customer'] == customer
