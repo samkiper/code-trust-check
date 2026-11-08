@@ -5636,8 +5636,10 @@ def supabase_admin_is_valid() -> bool:
         return False
 
 
-def supabase_auth_admin_request(method: str, path: str, payload: dict | None = None) -> dict:
+def supabase_auth_admin_request(method: str, path: str, payload: dict | None = None, *, raise_errors: bool = False) -> dict:
     if not SUPABASE_URL or not SUPABASE_SECRET_KEY:
+        if raise_errors:
+            raise RuntimeError("Supabase admin configuration is missing")
         return {}
 
     url = f"{SUPABASE_URL}/auth/v1/admin/{path.lstrip('/')}"
@@ -5655,6 +5657,8 @@ def supabase_auth_admin_request(method: str, path: str, payload: dict | None = N
             raw = response.read().decode("utf-8", errors="ignore")
             return json.loads(raw) if raw.strip() else {}
     except Exception as exc:
+        if raise_errors:
+            raise
         log_server_issue(f"Supabase admin request failed ({method.upper()} {path})", exc)
         return {}
 
@@ -8568,3 +8572,4 @@ async def ai_compare_review(request: Request):
     if not blocks: return private_json({'ok':True,'review':{'state':'not_rated','verdict':'unchanged','summary':'No source changes detected. No AI request or allowance was used.','changes':[],'limitations':[]}})
     if await request.is_disconnected(): raise HTTPException(499,'Comparison cancelled before submission.')
     return await run_in_threadpool(perform_ai_review,access,receipt,payload,blocks)
+

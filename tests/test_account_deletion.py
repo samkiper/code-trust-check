@@ -1,5 +1,7 @@
 import datetime as dt
 import unittest
+import io
+import urllib.error
 from unittest.mock import patch, MagicMock
 from starlette.requests import Request
 from scripts import account_deletion as deletion
@@ -40,12 +42,66 @@ class AccountDeletionTests(unittest.TestCase):
             mutate.assert_not_called()
             with self.assertRaisesRegex(RuntimeError, 'not confirmed'):
                 deletion.perform(self.uid, 'finalize', self.uid, self.now+dt.timedelta(hours=8))
-            mutate.return_value = {'id': self.uid}
+            mutate.side_effect = [{}, self.not_found()]
             self.assertEqual(deletion.perform(self.uid, 'finalize', self.uid,
                 self.now+dt.timedelta(hours=8))['action'], 'deleted')
+
+    def not_found(self, body=b'{"error_code":"user_not_found"}'):
+        return urllib.error.HTTPError('https://example.invalid/auth/v1/admin/users/test',
+                                      404, 'Not Found', {}, io.BytesIO(body))
+
+    def test_success_requires_delete_http_success_and_explicit_not_found(self):
+        user = {'id': self.uid, 'banned_until': '2126-01-01T00:00:00+00:00',
+                'app_metadata': {'deletion_requested_at': self.now.isoformat()}}
+        scenarios = [
+            ([{}, self.not_found()], None),
+            ([{}, {'id': self.uid}], RuntimeError),
+            ([{}, {}], RuntimeError),
+            ([{}, self.not_found(b'{}')], RuntimeError),
+            ([{}, self.not_found(b'not json')], RuntimeError),
+            ([{}, self.not_found(b'[]')], RuntimeError),
+            ([{}, urllib.error.HTTPError('https://example.invalid', 401, 'Unauthorized', {}, None)], urllib.error.HTTPError),
+            ([{}, urllib.error.HTTPError('https://example.invalid', 503, 'Unavailable', {}, None)], urllib.error.HTTPError),
+            ([{}, TimeoutError('verification timeout')], TimeoutError),
+            ([TimeoutError('delete timeout')], TimeoutError),
+        ]
+        for responses, error_type in scenarios:
+            with self.subTest(responses=responses), \
+                 patch.object(main, 'get_supabase_admin_user', return_value=user), \
+                 patch.object(main, 'supabase_auth_admin_request', side_effect=responses) as request:
+                if error_type:
+                    with self.assertRaises(error_type):
+                        deletion.perform(self.uid, 'finalize', self.uid, self.now+dt.timedelta(hours=8))
+                else:
+                    self.assertEqual(deletion.perform(self.uid, 'finalize', self.uid,
+                        self.now+dt.timedelta(hours=8))['action'], 'deleted')
+                self.assertEqual(request.call_args_list[0].args, ('DELETE', f'users/{self.uid}'))
+                self.assertTrue(all(c.kwargs.get('raise_errors') for c in request.call_args_list))
+                self.assertEqual(sum(c.args[0] == 'DELETE' for c in request.call_args_list), 1)
+
+    def test_absence_check_never_retries_deletion(self):
+        with patch.object(main, 'supabase_auth_admin_request', side_effect=self.not_found()) as request:
+            deletion.verify_account_absent(self.uid)
+            request.assert_called_once_with('GET', f'users/{self.uid}', raise_errors=True)
+
+    def test_strict_admin_http_distinguishes_empty_success_from_failure(self):
+        with patch.object(main, 'SUPABASE_URL', 'https://example.invalid'), \
+             patch.object(main, 'SUPABASE_SECRET_KEY', 'synthetic-test-key'), \
+             patch.object(main.urllib.request, 'urlopen') as open_url, \
+             patch.object(main, 'log_server_issue'):
+            open_url.return_value.__enter__.return_value.read.return_value = b'{}'
+            self.assertEqual(main.supabase_auth_admin_request('DELETE', 'users/test', raise_errors=True), {})
+            open_url.side_effect = TimeoutError('network unavailable')
+            with self.assertRaises(TimeoutError):
+                main.supabase_auth_admin_request('DELETE', 'users/test', raise_errors=True)
+            self.assertEqual(main.supabase_auth_admin_request('GET', 'users/test'), {})
+        with patch.object(main, 'SUPABASE_SECRET_KEY', ''):
+            with self.assertRaisesRegex(RuntimeError, 'configuration'):
+                main.supabase_auth_admin_request('DELETE', 'users/test', raise_errors=True)
 
     def test_quarantined_account_cannot_use_existing_token(self):
         with patch.object(main, 'fetch_supabase_user', return_value=({'id': self.uid,
                 'app_metadata': {'deletion_requested_at': self.now.isoformat(), 'plan': 'serious'}}, True)):
             access = main.get_request_access_context(Request({'type': 'http', 'headers': []}), 'old-token')
             self.assertFalse(access['authenticated'])
+

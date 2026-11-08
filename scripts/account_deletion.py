@@ -8,6 +8,7 @@ import datetime as dt
 import json
 import sys
 import uuid
+import urllib.error
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import main
@@ -63,10 +64,31 @@ def perform(user_id, action='inspect', confirmed_user=None, now=None):
         raise RuntimeError('Account ban is not active')
     # Auth admin deletion removes refresh sessions; every application request
     # revalidates with Auth. The private DB trigger cleans non-cascading rows.
-    response = main.supabase_auth_admin_request('DELETE', f"users/{user['id']}")
-    if response.get('id') != user['id']:
-        raise RuntimeError('Auth deletion was not confirmed; inspect before retrying')
+    # Auth returns an empty object on successful deletion. The legacy request
+    # helper also returns {} on errors, so require strict HTTP handling and an
+    # independent, explicit user_not_found response before reporting success.
+    path = f"users/{user['id']}"
+    main.supabase_auth_admin_request('DELETE', path, raise_errors=True)
+    verify_account_absent(user['id'])
     return {'action': 'deleted', 'retained': 'Stripe billing records and provider logs/backups follow their retention policies'}
+
+
+def verify_account_absent(user_id):
+    """Read-only verification; never treat a network/API failure as absence."""
+    user_id = str(uuid.UUID(user_id))
+    try:
+        main.supabase_auth_admin_request('GET', f'users/{user_id}', raise_errors=True)
+    except urllib.error.HTTPError as exc:
+        if exc.code != 404:
+            raise
+        try:
+            error = json.loads(exc.read())
+        except (ValueError, UnicodeError):
+            raise RuntimeError('Auth deletion was not confirmed; inspect before retrying') from exc
+        if isinstance(error, dict) and error.get('error_code') == 'user_not_found':
+            return
+        raise RuntimeError('Auth deletion was not confirmed; inspect before retrying') from exc
+    raise RuntimeError('Auth deletion was not confirmed; inspect before retrying')
 
 
 if __name__ == '__main__':
@@ -76,3 +98,4 @@ if __name__ == '__main__':
     parser.add_argument('--confirm-user')
     args = parser.parse_args()
     print(json.dumps(perform(args.user_id, args.action, args.confirm_user)))
+
