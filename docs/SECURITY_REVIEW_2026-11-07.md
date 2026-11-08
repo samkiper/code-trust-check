@@ -48,8 +48,8 @@ policies, profile GraphQL schema discoverability, and disabled leaked-password
 protection. The profile table has RLS enabled: SELECT and UPDATE use
 `auth.uid() = id`, and INSERT checks the same ownership predicate. Schema
 discoverability does not by itself establish access to another account's rows.
-Leaked-password protection remains a launch follow-up; no claim that it was
-enabled is made here.
+This paragraph records the initial inspection only. Current provider settings
+and subsequent verification are maintained in the private launch-status record.
 
 ## Queue evidence and limits
 
@@ -66,12 +66,12 @@ It does **not** replace a live multi-account Render/Supabase saturation test.
 
 ## Backup/recovery launch gate
 
-The production Supabase organization is still Free with no project backups.
-The owner dashboard quoted $25 due today and $25/month estimated for Pro,
-including daily backups retained for seven days and one Micro compute credit.
-No upgrade was confirmed. Restoring over production is not a launch test.
+Current backup arrangements and recovery-test results are maintained in the
+private launch-status record. The checklist below remains the recovery
+procedure; it is not a statement of current provider configuration. Restoring
+over production is not a launch test.
 
-After the backup arrangement is approved and enabled:
+Recovery verification checklist:
 
 1. Verify a completed backup and record its timestamp and retention window.
 2. Restore into an isolated destination; do not point its backend at live
